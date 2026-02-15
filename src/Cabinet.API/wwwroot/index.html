@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cabinet - Log Intelligence</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79c0ff;
+            --success: #3fb950;
+            --warning: #d29922;
+            --error: #f85149;
+            --border: #30363d;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+        header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        header h1 { font-size: 20px; font-weight: 600; }
+        header h1 span { color: var(--accent); }
+        .status { font-size: 12px; color: var(--text-secondary); }
+        .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+        .status .dot.ok { background: var(--success); }
+        .status .dot.err { background: var(--error); }
+        main { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        .search-bar {
+            display: flex; gap: 8px; margin-bottom: 24px;
+        }
+        .search-bar input {
+            flex: 1; padding: 10px 16px; font-size: 14px; font-family: 'SF Mono', 'Fira Code', monospace;
+            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-primary); outline: none;
+        }
+        .search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+        .search-bar button {
+            padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer;
+            background: var(--accent); color: #fff; border: none; border-radius: 6px;
+        }
+        .search-bar button:hover { background: var(--accent-hover); }
+        .search-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .card {
+            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+            padding: 16px;
+        }
+        .card .label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+        .card .value.accent { color: var(--accent); }
+        .results {
+            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+            overflow: hidden;
+        }
+        .results-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; border-bottom: 1px solid var(--border);
+            font-size: 13px; color: var(--text-secondary);
+        }
+        .results table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .results th {
+            text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+            color: var(--text-secondary); font-weight: 500; position: sticky; top: 0;
+            background: var(--bg-secondary);
+        }
+        .results td {
+            padding: 6px 12px; border-bottom: 1px solid var(--border);
+            max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+        }
+        .results tr:hover { background: var(--bg-tertiary); }
+        .severity-0 { color: var(--text-secondary); }
+        .severity-1 { color: var(--text-secondary); }
+        .severity-2 { color: var(--accent); }
+        .severity-3 { color: var(--warning); }
+        .severity-4 { color: var(--error); }
+        .severity-5 { color: #ff7b72; font-weight: 600; }
+        .results-scroll { max-height: 600px; overflow-y: auto; }
+        .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+        .tab {
+            padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0;
+            background: var(--bg-secondary); border: 1px solid var(--border); border-bottom: none;
+            color: var(--text-secondary);
+        }
+        .tab.active { background: var(--bg-tertiary); color: var(--text-primary); border-color: var(--accent); }
+        .error-msg {
+            background: rgba(248,81,73,0.1); border: 1px solid var(--error); border-radius: 6px;
+            padding: 12px 16px; color: var(--error); margin-bottom: 16px; display: none;
+        }
+        .spinner { display: none; width: 16px; height: 16px; border: 2px solid var(--border);
+            border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        footer { text-align: center; padding: 24px; color: var(--text-secondary); font-size: 12px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><span>Cabinet</span> Log Intelligence</h1>
+        <div class="status" id="status"><span class="dot" id="statusDot"></span><span id="statusText">Connecting...</span></div>
+    </header>
+    <main>
+        <div class="search-bar">
+            <input type="text" id="queryInput" placeholder="Enter BQL query (e.g., find errors from last 24h | stats count by host)"
+                   spellcheck="false" autocomplete="off">
+            <button id="searchBtn" onclick="executeQuery()">Search</button>
+            <div class="spinner" id="spinner"></div>
+        </div>
+        <div class="error-msg" id="errorMsg"></div>
+        <div class="cards" id="statsCards">
+            <div class="card"><div class="label">Total Events</div><div class="value accent" id="totalEvents">-</div></div>
+            <div class="card"><div class="label">Results</div><div class="value" id="resultCount">-</div></div>
+            <div class="card"><div class="label">Execution Time</div><div class="value" id="execTime">-</div></div>
+            <div class="card"><div class="label">Events Scanned</div><div class="value" id="scanned">-</div></div>
+        </div>
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('events')">Events</div>
+            <div class="tab" onclick="switchTab('raw')">Raw JSON</div>
+        </div>
+        <div class="results" id="resultsPanel">
+            <div class="results-header">
+                <span id="resultsInfo">Enter a query to search logs</span>
+            </div>
+            <div class="results-scroll" id="resultsScroll">
+                <table id="resultsTable"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
+            </div>
+            <pre id="rawJson" style="display:none; padding:16px; overflow:auto; max-height:600px; font-size:12px;"></pre>
+        </div>
+    </main>
+    <footer>Cabinet Log Intelligence System &mdash; <a href="/swagger" style="color:var(--accent)">API Docs</a></footer>
+
+    <script>
+    const API_KEY = localStorage.getItem('cabinet_api_key') || prompt('Enter your API key:', 'dev-enterprise-key') || 'dev-enterprise-key';
+    localStorage.setItem('cabinet_api_key', API_KEY);
+    let lastResults = null;
+
+    document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key === 'Enter') executeQuery(); });
+
+    async function executeQuery() {
+        const query = document.getElementById('queryInput').value.trim();
+        if (!query) return;
+        const btn = document.getElementById('searchBtn');
+        const spinner = document.getElementById('spinner');
+        const errorMsg = document.getElementById('errorMsg');
+        btn.disabled = true; spinner.style.display = 'inline-block'; errorMsg.style.display = 'none';
+
+        try {
+            const res = await fetch('/api/v1/query/execute', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                body: JSON.stringify({ query })
+            });
+            if (!res.ok) { const err = await res.json(); throw new Error(err.detail || `HTTP ${res.status}`); }
+            const data = await res.json();
+            lastResults = data;
+            renderResults(data);
+        } catch (e) {
+            errorMsg.textContent = e.message; errorMsg.style.display = 'block';
+        } finally {
+            btn.disabled = false; spinner.style.display = 'none';
+        }
+    }
+
+    function renderResults(data) {
+        document.getElementById('resultCount').textContent = data.count.toLocaleString();
+        document.getElementById('execTime').textContent = data.executionTimeMs + 'ms';
+        document.getElementById('resultsInfo').textContent = `${data.count.toLocaleString()} results in ${data.executionTimeMs}ms`;
+        document.getElementById('rawJson').textContent = JSON.stringify(data.results, null, 2);
+
+        const thead = document.getElementById('tableHead');
+        const tbody = document.getElementById('tableBody');
+        thead.innerHTML = ''; tbody.innerHTML = '';
+
+        if (!data.results || data.results.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:24px;color:var(--text-secondary)">No results</td></tr>';
+            return;
+        }
+        const cols = Object.keys(data.results[0]).filter(k => !k.startsWith('_'));
+        const headerRow = document.createElement('tr');
+        cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; headerRow.appendChild(th); });
+        thead.appendChild(headerRow);
+
+        const limit = Math.min(data.results.length, 500);
+        for (let i = 0; i < limit; i++) {
+            const row = document.createElement('tr');
+            cols.forEach(c => {
+                const td = document.createElement('td');
+                const val = data.results[i][c];
+                td.textContent = val != null ? String(val) : '';
+                td.title = td.textContent;
+                if (c === 'Severity' || c === 'severity') td.className = 'severity-' + (parseInt(val) || 0);
+                row.appendChild(td);
+            });
+            tbody.appendChild(row);
+        }
+        if (data.results.length > 500) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = cols.length;
+            td.style.textAlign = 'center';
+            td.style.color = 'var(--text-secondary)';
+            td.textContent = `Showing 500 of ${data.results.length} results`;
+            tr.appendChild(td); tbody.appendChild(tr);
+        }
+    }
+
+    function switchTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('resultsScroll').style.display = tab === 'events' ? '' : 'none';
+        document.getElementById('rawJson').style.display = tab === 'raw' ? '' : 'none';
+    }
+
+    async function checkHealth() {
+        try {
+            const res = await fetch('/health/live');
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            if (res.ok) { dot.className = 'dot ok'; text.textContent = 'Connected'; }
+            else { dot.className = 'dot err'; text.textContent = 'Degraded'; }
+        } catch {
+            document.getElementById('statusDot').className = 'dot err';
+            document.getElementById('statusText').textContent = 'Disconnected';
+        }
+    }
+
+    async function loadStats() {
+        try {
+            const res = await fetch('/api/v1/logs/stats', { headers: { 'X-API-Key': API_KEY } });
+            if (res.ok) {
+                const stats = await res.json();
+                document.getElementById('totalEvents').textContent = (stats.totalEvents || 0).toLocaleString();
+            }
+        } catch { /* ignore */ }
+    }
+
+    checkHealth(); loadStats();
+    setInterval(checkHealth, 30000);
+    </script>
+</body>
+</html>

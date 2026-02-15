@@ -1,0 +1,48 @@
+# Cabinet CLI Dockerfile
+FROM mcr.microsoft.com/dotnet/runtime:8.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy solution and ALL project files (solution-level restore needs every referenced project)
+COPY Cabinet.sln .
+COPY src/Cabinet.Core/Cabinet.Core.csproj src/Cabinet.Core/
+COPY src/Cabinet.Parsers/Cabinet.Parsers.csproj src/Cabinet.Parsers/
+COPY src/Cabinet.Storage/Cabinet.Storage.csproj src/Cabinet.Storage/
+COPY src/Cabinet.Query/Cabinet.Query.csproj src/Cabinet.Query/
+COPY src/Cabinet.Detection/Cabinet.Detection.csproj src/Cabinet.Detection/
+COPY src/Cabinet.Alerts/Cabinet.Alerts.csproj src/Cabinet.Alerts/
+COPY src/Cabinet.AWS/Cabinet.AWS.csproj src/Cabinet.AWS/
+COPY src/Cabinet.Database/Cabinet.Database.csproj src/Cabinet.Database/
+COPY src/Cabinet.API/Cabinet.API.csproj src/Cabinet.API/
+COPY src/Cabinet.CLI/Cabinet.CLI.csproj src/Cabinet.CLI/
+COPY src/Cabinet.Agent/Cabinet.Agent.csproj src/Cabinet.Agent/
+COPY tests/Cabinet.Tests/Cabinet.Tests.csproj tests/Cabinet.Tests/
+
+# Restore CLI project and its dependencies
+RUN dotnet restore src/Cabinet.CLI/Cabinet.CLI.csproj
+
+# Copy source code
+COPY src/ src/
+
+# Build CLI
+WORKDIR /src/src/Cabinet.CLI
+RUN dotnet build -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+
+# Create directories for logs and config
+RUN mkdir -p /app/logs /app/data /root/.cabinet
+
+# Set environment variables for remote mode (can be overridden)
+ENV CABINET_MODE=local
+ENV CABINET_API_URL=http://cabinet-api
+ENV CABINET_API_KEY=""
+
+ENTRYPOINT ["dotnet", "Cabinet.CLI.dll"]

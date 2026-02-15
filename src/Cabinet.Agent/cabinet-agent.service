@@ -1,0 +1,39 @@
+[Unit]
+Description=Cabinet Log Forwarding Agent
+Documentation=https://github.com/draxios/cabinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/opt/cabinet-agent/cabinet-agent
+WorkingDirectory=/opt/cabinet-agent
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security hardening
+User=cabinet-agent
+Group=cabinet-agent
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/opt/cabinet-agent /var/log
+
+# Environment
+Environment=DOTNET_ENVIRONMENT=Production
+EnvironmentFile=-/opt/cabinet-agent/.env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cabinet-agent
+
+[Install]
+WantedBy=multi-user.target

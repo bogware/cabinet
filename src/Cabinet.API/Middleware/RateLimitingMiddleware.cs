@@ -1,0 +1,83 @@
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+
+namespace Cabinet.API.Middleware;
+
+/// <summary>
+/// Rate limiting configuration
+/// </summary>
+public static class RateLimitingExtensions
+{
+    public static IServiceCollection AddCabinetRateLimiting(this IServiceCollection services)
+    {
+        services.AddRateLimiter(options =>
+        {
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            {
+                // Use the hashed API key from claims (set by auth handler) — never the raw key
+                var partitionKey = context.User?.FindFirst("ClientId")?.Value ?? "anonymous";
+                var tier = context.User?.FindFirst("Tier")?.Value ?? "Basic";
+
+                return GetRateLimiter(tier, partitionKey);
+            });
+
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+            options.OnRejected = async (context, cancellationToken) =>
+            {
+                context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                await context.HttpContext.Response.WriteAsJsonAsync(new
+                {
+                    error = "Rate limit exceeded",
+                    message = "Too many requests. Please retry later.",
+                    retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+                        ? retryAfter.TotalSeconds
+                        : 60
+                }, cancellationToken);
+            };
+        });
+
+        return services;
+    }
+
+    private static RateLimitPartition<string> GetRateLimiter(string tier, string apiKey)
+    {
+        return tier.ToUpper() switch
+        {
+            "ENTERPRISE" => RateLimitPartition.GetTokenBucketLimiter(
+                apiKey,
+                _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 10000,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 100,
+                    ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                    TokensPerPeriod = 10000,
+                    AutoReplenishment = true
+                }),
+
+            "PROFESSIONAL" => RateLimitPartition.GetTokenBucketLimiter(
+                apiKey,
+                _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 1000,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 50,
+                    ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                    TokensPerPeriod = 1000,
+                    AutoReplenishment = true
+                }),
+
+            _ => RateLimitPartition.GetSlidingWindowLimiter(
+                apiKey,
+                _ => new SlidingWindowRateLimiterOptions
+                {
+                    PermitLimit = 100,
+                    Window = TimeSpan.FromMinutes(1),
+                    SegmentsPerWindow = 6,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 10
+                })
+        };
+    }
+}

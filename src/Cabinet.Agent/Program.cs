@@ -1,0 +1,161 @@
+using Cabinet.Agent.Configuration;
+using Cabinet.Agent.Forwarding;
+using Cabinet.Agent.Monitoring;
+
+namespace Cabinet.Agent;
+
+public static class Program
+{
+    public static async Task<int> Main(string[] args)
+    {
+        // Handle --version flag
+        if (args.Length > 0 && args[0] is "--version" or "-v")
+        {
+            Console.WriteLine($"cabinet-agent {GetVersion()}");
+            return 0;
+        }
+
+        // Handle --validate flag (check config and exit)
+        var validate = args.Length > 0 && args[0] is "--validate";
+
+        var builder = Host.CreateApplicationBuilder(args);
+
+        // Bind configuration
+        var agentConfig = new AgentConfiguration();
+        builder.Configuration.GetSection("Agent").Bind(agentConfig);
+
+        // Validate configuration
+        var errors = ValidateConfiguration(agentConfig);
+        if (errors.Count > 0)
+        {
+            Console.Error.WriteLine("Configuration errors:");
+            foreach (var error in errors)
+            {
+                Console.Error.WriteLine($"  - {error}");
+            }
+
+            return 1;
+        }
+
+        if (validate)
+        {
+            Console.WriteLine("Configuration is valid.");
+            Console.WriteLine($"  Inputs: {agentConfig.Inputs.Count}");
+            var totalPaths = agentConfig.Inputs.Sum(i => i.Paths.Count);
+            Console.WriteLine($"  Path patterns: {totalPaths}");
+            Console.WriteLine($"  Output: {agentConfig.Output.ServerUrl}");
+            Console.WriteLine($"  Batch size: {agentConfig.Output.BatchSize}");
+            Console.WriteLine($"  Registry: {agentConfig.Registry.Path}");
+            return 0;
+        }
+
+        // Register services
+        builder.Services.AddSingleton(agentConfig);
+
+        // File state registry
+        builder.Services.AddSingleton(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<FileStateRegistry>>();
+            return new FileStateRegistry(
+                agentConfig.Registry.Path,
+                agentConfig.Registry.SaveIntervalSeconds,
+                logger);
+        });
+
+        // HTTP client for forwarding (with SSL verification toggle)
+        builder.Services.AddSingleton(sp =>
+        {
+            var handler = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            };
+
+            if (!agentConfig.Output.VerifySsl)
+            {
+                handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            }
+
+            return new HttpClient(handler);
+        });
+
+        // Log forwarder
+        builder.Services.AddSingleton(sp =>
+        {
+            var httpClient = sp.GetRequiredService<HttpClient>();
+            var logger = sp.GetRequiredService<ILogger<LogForwarder>>();
+            return new LogForwarder(agentConfig.Output, httpClient, logger);
+        });
+
+        // File monitor (background service)
+        builder.Services.AddHostedService(sp =>
+        {
+            var registry = sp.GetRequiredService<FileStateRegistry>();
+            var forwarder = sp.GetRequiredService<LogForwarder>();
+            var logger = sp.GetRequiredService<ILogger<FileMonitorService>>();
+            return new FileMonitorService(agentConfig, registry, forwarder, logger);
+        });
+
+        // Support systemd on Linux
+        builder.Services.AddSystemd();
+
+        var host = builder.Build();
+
+        var appLogger = host.Services.GetRequiredService<ILogger<FileMonitorService>>();
+        appLogger.LogInformation("Cabinet Agent {Version} starting", GetVersion());
+
+        await host.RunAsync();
+        return 0;
+    }
+
+    private static List<string> ValidateConfiguration(AgentConfiguration config)
+    {
+        var errors = new List<string>();
+
+        if (config.Inputs.Count == 0)
+        {
+            errors.Add("No inputs configured. Add at least one input with file paths to monitor.");
+        }
+
+        foreach (var input in config.Inputs)
+        {
+            if (input.Paths.Count == 0)
+            {
+                errors.Add("Input has no paths configured.");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(config.Output.ServerUrl))
+        {
+            errors.Add("Output.ServerUrl is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(config.Output.ApiKey))
+        {
+            errors.Add("Output.ApiKey is required. Set Agent:Output:ApiKey or Agent__Output__ApiKey environment variable.");
+        }
+
+        if (config.Output.BatchSize < 1 || config.Output.BatchSize > 10000)
+        {
+            errors.Add("Output.BatchSize must be between 1 and 10000.");
+        }
+
+        if (config.Output.FlushIntervalSeconds < 1 || config.Output.FlushIntervalSeconds > 300)
+        {
+            errors.Add("Output.FlushIntervalSeconds must be between 1 and 300.");
+        }
+
+        if (config.ScanIntervalSeconds < 1 || config.ScanIntervalSeconds > 3600)
+        {
+            errors.Add("ScanIntervalSeconds must be between 1 and 3600.");
+        }
+
+        return errors;
+    }
+
+    private static string GetVersion()
+    {
+        var assembly = typeof(Program).Assembly;
+        var version = assembly.GetName().Version;
+        return version?.ToString(3) ?? "0.0.1";
+    }
+}

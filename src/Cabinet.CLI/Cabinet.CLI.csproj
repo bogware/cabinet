@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>cabinet</AssemblyName>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageReference Include="System.CommandLine.Hosting" Version="0.4.0-alpha.22272.1" />
+    <PackageReference Include="Spectre.Console" Version="0.48.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="CsvHelper" Version="30.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cabinet.Core\Cabinet.Core.csproj" />
+    <ProjectReference Include="..\Cabinet.Parsers\Cabinet.Parsers.csproj" />
+    <ProjectReference Include="..\Cabinet.Storage\Cabinet.Storage.csproj" />
+    <ProjectReference Include="..\Cabinet.Query\Cabinet.Query.csproj" />
+    <ProjectReference Include="..\Cabinet.Detection\Cabinet.Detection.csproj" />
+    <ProjectReference Include="..\Cabinet.Alerts\Cabinet.Alerts.csproj" />
+    <ProjectReference Include="..\Cabinet.AWS\Cabinet.AWS.csproj" />
+    <ProjectReference Include="..\Cabinet.Database\Cabinet.Database.csproj" />
+  </ItemGroup>
+
+</Project>

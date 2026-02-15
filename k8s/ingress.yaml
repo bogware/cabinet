@@ -1,0 +1,76 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cabinet-api-ingress
+  namespace: cabinet
+  labels:
+    app: cabinet
+    component: api
+  annotations:
+    # TLS via cert-manager (uncomment if using cert-manager)
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Rate limiting at ingress level (defense in depth)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - cabinet.example.com
+    secretName: cabinet-tls
+  rules:
+  - host: cabinet.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: cabinet-api
+            port:
+              number: 80
+      - path: /services
+        pathType: Prefix
+        backend:
+          service:
+            name: cabinet-api
+            port:
+              number: 80
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: cabinet-api
+            port:
+              number: 80
+---
+# Internal ingress for metrics scraping (restrict to monitoring namespace via NetworkPolicy)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cabinet-metrics-ingress
+  namespace: cabinet
+  labels:
+    app: cabinet
+    component: metrics
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Restrict to internal monitoring only (no external access)
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: cabinet-metrics.internal
+    http:
+      paths:
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: cabinet-api
+            port:
+              number: 80

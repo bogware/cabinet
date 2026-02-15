@@ -1,0 +1,235 @@
+version: '3.8'
+
+services:
+  # Cabinet API Service
+  cabinet-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: cabinet-api
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - Storage__Type=PostgreSQL
+      - Storage__ConnectionString=Host=postgres;Port=5432;Database=cabinet;Username=cabinet;Password=${CABINET_DB_PASSWORD:-cabinet123}
+      - Storage__FallbackType=SQLite
+      - Storage__FallbackConnectionString=Data Source=/app/data/cabinet.db
+      - ApiKeys__Keys__0__Key=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
+      - ApiKeys__Keys__0__Tier=Enterprise
+      - ApiKeys__Keys__0__Name=Docker Enterprise Client
+      - Distributed__Enabled=true
+      - Distributed__RedisConnectionString=redis:6379
+      - Distributed__InstanceId=cabinet-docker-1
+    volumes:
+      - cabinet-data:/app/data
+      - cabinet-logs:/app/logs
+      - ./logs:/app/input:ro  # Mount host logs for analysis
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Cabinet CLI (configured for remote mode)
+  cabinet-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    container_name: cabinet-cli
+    environment:
+      - CABINET_MODE=remote
+      - CABINET_API_URL=http://cabinet-api
+      - CABINET_API_KEY=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
+    volumes:
+      - ./logs:/app/logs:ro  # Mount host logs directory for analysis
+      - cabinet-cli-config:/root/.cabinet
+    depends_on:
+      - cabinet-api
+    networks:
+      - cabinet-network
+    restart: "no"
+    stdin_open: true
+    tty: true
+    command: ["configure", "--test"]  # Test configuration on startup
+
+  # Cabinet Agent (log forwarding)
+  cabinet-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: cabinet-agent
+    environment:
+      - Agent__Output__ServerUrl=http://cabinet-api:8080
+      - Agent__Output__ApiKey=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
+      - Agent__Output__VerifySsl=false
+      - Agent__Registry__Path=/app/data/registry.json
+      - Agent__Output__SpillDirectory=/app/spool
+    volumes:
+      - cabinet-agent-data:/app/data
+      - ./logs:/var/log/host:ro  # Mount host logs for forwarding
+    depends_on:
+      - cabinet-api
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: cabinet-postgres
+    environment:
+      - POSTGRES_DB=cabinet
+      - POSTGRES_USER=cabinet
+      - POSTGRES_PASSWORD=${CABINET_DB_PASSWORD:-cabinet123}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cabinet"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL Database (optional - use profile 'with-mysql')
+  mysql:
+    image: mysql:8.0
+    container_name: cabinet-mysql
+    environment:
+      - MYSQL_DATABASE=cabinet
+      - MYSQL_USER=cabinet
+      - MYSQL_PASSWORD=${CABINET_DB_PASSWORD:-cabinet123}
+      - MYSQL_ROOT_PASSWORD=${CABINET_MYSQL_ROOT_PASSWORD:-root123}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    profiles:
+      - with-mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache (for rate limiting and caching)
+  redis:
+    image: redis:7-alpine
+    container_name: cabinet-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Grafana for Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cabinet-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${CABINET_GRAFANA_PASSWORD:-admin123}
+      - GF_INSTALL_PLUGINS=marcusolsson-json-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cabinet-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # LocalStack for AWS Services (Development)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: cabinet-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,dynamodb,sqs,sns
+      - DEBUG=0
+      - DATA_DIR=/tmp/localstack/data
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - localstack-data:/tmp/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - cabinet-network
+    restart: unless-stopped
+    profiles:
+      - development
+
+volumes:
+  cabinet-data:
+    driver: local
+  cabinet-logs:
+    driver: local
+  cabinet-agent-data:
+    driver: local
+  cabinet-cli-config:
+    driver: local
+  postgres-data:
+    driver: local
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  localstack-data:
+    driver: local
+
+networks:
+  cabinet-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

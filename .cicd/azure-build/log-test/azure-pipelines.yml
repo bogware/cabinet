@@ -1,0 +1,220 @@
+# Azure DevOps Pipeline for Cabinet
+# Builds, tests, and deploys Cabinet as either a standalone app or Docker container
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+    - release/*
+  paths:
+    exclude:
+    - '*.md'
+    - 'docs/*'
+
+pr:
+  branches:
+    include:
+    - main
+    - develop
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '8.0.x'
+  dockerRegistryServiceConnection: 'DockerHub' # Configure in Azure DevOps
+  imageRepository: 'cabinet'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build Cabinet'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+    # Setup .NET SDK
+    - task: UseDotNet@2
+      displayName: 'Setup .NET SDK'
+      inputs:
+        packageType: 'sdk'
+        version: $(dotnetVersion)
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+
+    # Restore dependencies
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore NuGet packages'
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+
+    # Build the solution
+    - task: DotNetCoreCLI@2
+      displayName: 'Build solution'
+      inputs:
+        command: 'build'
+        projects: 'Cabinet.sln'
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+
+    # Run unit tests
+    - task: DotNetCoreCLI@2
+      displayName: 'Run unit tests'
+      inputs:
+        command: 'test'
+        projects: '**/Cabinet.Tests.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory $(Agent.TempDirectory)'
+        publishTestResults: true
+
+    # Run end-to-end tests
+    - task: Bash@3
+      displayName: 'Run end-to-end tests'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tests/EndToEnd/run-tests.sh'
+      continueOnError: false
+
+    # Publish build artifacts
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish Cabinet'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        projects: 'src/Cabinet.CLI/Cabinet.CLI.csproj'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/standalone --self-contained false'
+        zipAfterPublish: true
+
+    # Publish artifacts
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish standalone artifacts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/standalone'
+        ArtifactName: 'cabinet-standalone'
+        publishLocation: 'Container'
+
+- stage: Docker
+  displayName: 'Build Docker Image'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - job: DockerJob
+    displayName: 'Build and Push Docker Image'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+    # Build Docker image
+    - task: Docker@2
+      displayName: 'Build Docker image'
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: '$(dockerfilePath)'
+        tags: |
+          $(tag)
+          latest
+
+    # Scan BEFORE push — fail the pipeline on critical/high vulnerabilities
+    - task: trivy@1
+      displayName: 'Scan Docker image for vulnerabilities'
+      inputs:
+        image: '$(imageRepository):$(tag)'
+        exitCode: 1
+        severity: 'CRITICAL,HIGH'
+
+    # Push Docker image (only runs if scan passed)
+    - task: Docker@2
+      displayName: 'Push Docker image'
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: |
+          $(tag)
+          latest
+
+- stage: Deploy_Dev
+  displayName: 'Deploy to Dev'
+  dependsOn: Docker
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployDev
+    displayName: 'Deploy to Dev Environment'
+    environment: 'dev'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # Deploy to Kubernetes
+          - task: KubernetesManifest@0
+            displayName: 'Deploy to Kubernetes'
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'k8s-dev'
+              namespace: 'cabinet-dev'
+              manifests: |
+                $(Pipeline.Workspace)/kubernetes/deployment.yaml
+                $(Pipeline.Workspace)/kubernetes/service.yaml
+              containers: '$(imageRepository):$(tag)'
+
+          # Run smoke tests
+          - task: Bash@3
+            displayName: 'Run smoke tests'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "Running smoke tests..."
+                kubectl wait --for=condition=ready pod -l app=cabinet -n cabinet-dev --timeout=60s
+                kubectl exec -it $(kubectl get pod -l app=cabinet -n cabinet-dev -o jsonpath="{.items[0].metadata.name}") -n cabinet-dev -- cabinet --version
+
+- stage: Deploy_Prod
+  displayName: 'Deploy to Production'
+  dependsOn: Deploy_Dev
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployProd
+    displayName: 'Deploy to Production'
+    environment: 'production'
+    pool:
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # Blue-Green deployment
+          - task: KubernetesManifest@0
+            displayName: 'Deploy Green environment'
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'k8s-prod'
+              namespace: 'cabinet-prod'
+              manifests: |
+                $(Pipeline.Workspace)/kubernetes/deployment-green.yaml
+              containers: '$(imageRepository):$(tag)'
+
+          # Health check
+          - task: Bash@3
+            displayName: 'Health check'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "Performing health checks..."
+                sleep 30
+                kubectl exec -it $(kubectl get pod -l app=cabinet,version=green -n cabinet-prod -o jsonpath="{.items[0].metadata.name}") -n cabinet-prod -- cabinet --version
+
+          # Switch traffic to green
+          - task: KubernetesManifest@0
+            displayName: 'Switch traffic to green'
+            inputs:
+              action: 'patch'
+              kubernetesServiceConnection: 'k8s-prod'
+              namespace: 'cabinet-prod'
+              kind: 'service'
+              name: 'cabinet-service'
+              patch: '{"spec":{"selector":{"version":"green"}}}'

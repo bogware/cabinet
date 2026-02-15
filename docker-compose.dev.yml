@@ -1,0 +1,25 @@
+version: '3.8'
+
+# Development override configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  cabinet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build  # Use build stage for development
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - CABINET_LOG_LEVEL=Debug
+      - CABINET_Detection__AutoDetect=true
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/src/src
+      - ./tests:/src/tests
+
+      # Mount local configuration
+      - ./cabinet.dev.config.json:/config/cabinet.config.json:ro
+    command: ["watch", "run", "--project", "/src/src/Cabinet.CLI/Cabinet.CLI.csproj"]
+    stdin_open: true
+    tty: true

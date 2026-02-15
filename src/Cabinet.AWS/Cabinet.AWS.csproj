@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.CloudWatch" Version="3.7.304.14" />
+    <PackageReference Include="AWSSDK.CloudWatchLogs" Version="3.7.305.48" />
+    <PackageReference Include="AWSSDK.CloudTrail" Version="3.7.304.13" />
+    <PackageReference Include="AWSSDK.S3" Version="3.7.309.4" />
+    <PackageReference Include="AWSSDK.SecurityToken" Version="3.7.400" />
+    <PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="3.7.301" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cabinet.Core\Cabinet.Core.csproj" />
+    <ProjectReference Include="..\Cabinet.Parsers\Cabinet.Parsers.csproj" />
+  </ItemGroup>
+
+</Project>

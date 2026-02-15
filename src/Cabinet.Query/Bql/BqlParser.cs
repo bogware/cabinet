@@ -1,0 +1,3046 @@
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Cabinet.Query.Bql;
+
+/// <summary>
+/// Recursive-descent parser for BQL (Bog Query Language).
+/// Supports both BQL natural language syntax and SPL-compatible syntax.
+/// Implements IQueryParser for backward compatibility with the existing query engine.
+/// </summary>
+public sealed class BqlParser : IQueryParser
+{
+    private List<BqlToken> _tokens = new();
+    private int _pos;
+    private int _recursionDepth;
+    private const int MaxRecursionDepth = 100;
+    private const int MaxQueryLength = 100_000;
+    private const int MaxPipelineStages = 100;
+    private readonly object _parseLock = new();
+
+    // ─── IQueryParser implementation (legacy compatibility) ───
+
+    public QueryPlan Parse(string query)
+    {
+        var bqlQuery = ParseBql(query);
+        return ConvertToLegacyPlan(bqlQuery);
+    }
+
+    // ─── BQL-native parsing ──────────────────────────────────
+
+    /// <summary>
+    /// Parse a BQL or SPL query string into a BQL AST.
+    /// Thread-safe: concurrent calls are serialized via lock to protect instance state.
+    /// </summary>
+    public BqlQuery ParseBql(string query)
+    {
+        lock (_parseLock)
+        {
+            return ParseBqlCore(query);
+        }
+    }
+
+    private BqlQuery ParseBqlCore(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            throw new QueryParseException("Query cannot be empty");
+
+        if (query.Length > MaxQueryLength)
+            throw new QueryParseException($"Query exceeds maximum length of {MaxQueryLength} characters");
+
+        var lexer = new BqlLexer(query);
+        _tokens = lexer.Tokenize();
+        _pos = 0;
+        _recursionDepth = 0;
+
+        var bqlQuery = new BqlQuery();
+
+        // Parse the first stage (search/find or implicit search)
+        var firstStage = ParseFirstStage(bqlQuery);
+        if (firstStage != null)
+            bqlQuery.Stages.Add(firstStage);
+
+        // Parse piped stages
+        while (Current.Kind == BqlTokenKind.Pipe)
+        {
+            if (bqlQuery.Stages.Count >= MaxPipelineStages)
+                throw new QueryParseException($"Query exceeds maximum of {MaxPipelineStages} pipeline stages");
+
+            Advance(); // skip pipe
+            var stage = ParseStage();
+            bqlQuery.Stages.Add(stage);
+        }
+
+        if (Current.Kind != BqlTokenKind.Eof)
+            throw new QueryParseException($"Unexpected token: {Current.Value}", $"position {Current.Position}");
+
+        return bqlQuery;
+    }
+
+    // ─── First stage parsing ─────────────────────────────────
+
+    private BqlStage? ParseFirstStage(BqlQuery query)
+    {
+        // Empty or just EOF
+        if (Current.Kind == BqlTokenKind.Eof)
+            return new SearchStage("*");
+
+        // Explicit find/search keyword
+        if (Current.IsAnyKeyword("find", "search"))
+        {
+            Advance();
+            return ParseSearchBody(query);
+        }
+
+        // Check if first token is a known stage keyword
+        if (IsStageKeyword(Current))
+        {
+            // Implicit "search *" followed by explicit stage
+            return new SearchStage("*");
+        }
+
+        // Implicit search: everything before the first pipe is the search text
+        return ParseImplicitSearch(query);
+    }
+
+    private SearchStage ParseSearchBody(BqlQuery query)
+    {
+        var sb = new StringBuilder();
+        var parenDepth = 0;
+
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            // Track parens to avoid breaking on pipes inside expressions
+            if (Current.Kind == BqlTokenKind.OpenParen) parenDepth++;
+            if (Current.Kind == BqlTokenKind.CloseParen) parenDepth--;
+
+            // Check for time range modifiers: "from last Xh" or "between X and Y"
+            if (parenDepth == 0 && Current.IsKeyword("from") && Peek(1).IsKeyword("last"))
+            {
+                ParseFromLast(query);
+                continue;
+            }
+
+            if (parenDepth == 0 && Current.IsKeyword("between"))
+            {
+                ParseBetween(query);
+                continue;
+            }
+
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+            Advance();
+        }
+
+        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
+        return new SearchStage(searchText);
+    }
+
+    private SearchStage ParseImplicitSearch(BqlQuery query)
+    {
+        var sb = new StringBuilder();
+
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            // Check for time range modifiers
+            if (Current.IsKeyword("from") && Peek(1).IsKeyword("last"))
+            {
+                ParseFromLast(query);
+                continue;
+            }
+
+            if (Current.IsKeyword("between"))
+            {
+                ParseBetween(query);
+                continue;
+            }
+
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+            Advance();
+        }
+
+        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
+        return new SearchStage(searchText);
+    }
+
+    private void ParseFromLast(BqlQuery query)
+    {
+        Advance(); // skip "from"
+        Advance(); // skip "last"
+
+        if (Current.Kind != BqlTokenKind.TimeSpanLiteral)
+            throw new QueryParseException("Expected time span after 'from last' (e.g., 24h, 7d, 30m)", $"position {Current.Position}");
+
+        var ts = ParseTimeSpanValue(Current.Value) ?? TimeSpan.FromHours(24);
+        query.TimeRange = new BqlTimeRange { Start = DateTime.UtcNow - ts, End = DateTime.UtcNow };
+        Advance();
+    }
+
+    private void ParseBetween(BqlQuery query)
+    {
+        Advance(); // skip "between"
+
+        var start = ParseDateTimeLiteral();
+        ExpectKeyword("and");
+        var end = ParseDateTimeLiteral();
+
+        query.TimeRange = new BqlTimeRange { Start = start, End = end };
+    }
+
+    // ─── Stage parsing ───────────────────────────────────────
+
+    private BqlStage ParseStage()
+    {
+        if (Current.Kind == BqlTokenKind.Eof)
+            throw new QueryParseException("Expected a stage after pipe operator");
+
+        // BQL-style keywords
+        if (Current.IsKeyword("where")) { Advance(); return ParseWhereStage(); }
+        if (Current.IsAnyKeyword("group")) return ParseGroupByStage();
+        if (Current.IsAnyKeyword("sort")) return ParseSortStage();
+        if (Current.IsAnyKeyword("limit")) { Advance(); return ParseLimitStage(); }
+        if (Current.IsAnyKeyword("compute")) { Advance(); return ParseEvalStage(); }
+        if (Current.IsAnyKeyword("extract")) { Advance(); return ParseRexStage(); }
+        if (Current.IsAnyKeyword("select")) { Advance(); return ParseTableStage(); }
+        if (Current.IsAnyKeyword("unique")) return ParseUniqueByStage();
+        if (Current.IsKeyword("rename")) { Advance(); return ParseRenameStage(); }
+        if (Current.IsKeyword("fill")) { Advance(); return ParseFillStage(); }
+        if (Current.IsKeyword("expand")) { Advance(); return ParseExpandStage(); }
+        if (Current.IsKeyword("fillnull")) { Advance(); return ParseFillNullStage(); }
+        if (Current.IsAnyKeyword("bucket", "bin")) { Advance(); return ParseBucketStage(); }
+        if (Current.IsKeyword("makeresults")) { Advance(); return ParseMakeResultsStage(); }
+        if (Current.IsKeyword("mvexpand")) { Advance(); return ParseMvExpandStage(); }
+        if (Current.IsKeyword("chart")) { Advance(); return ParseChartStage(); }
+        if (Current.IsKeyword("filldown")) { Advance(); return ParseFillDownStage(); }
+        if (Current.IsKeyword("addcoltotals")) { Advance(); return ParseAddColTotalsStage(); }
+        if (Current.IsKeyword("inputlookup")) { Advance(); return ParseInputLookupStage(); }
+        if (Current.IsKeyword("rare")) { Advance(); return ParseRareStage(); }
+        if (Current.IsKeyword("regex")) { Advance(); return ParseRegexStage(); }
+        if (Current.IsKeyword("fieldsummary")) { Advance(); return ParseFieldSummaryStage(); }
+        if (Current.IsKeyword("xyseries")) { Advance(); return ParseXyseriesStage(); }
+        if (Current.IsKeyword("untable")) { Advance(); return ParseUntableStage(); }
+        if (Current.IsKeyword("convert")) { Advance(); return ParseConvertStage(); }
+
+        // SPL-style keywords
+        if (Current.IsKeyword("eventstats")) { Advance(); return ParseEventStatsStage(); }
+        if (Current.IsKeyword("streamstats")) { Advance(); return ParseStreamStatsStage(); }
+        if (Current.IsKeyword("stats")) { Advance(); return ParseStatsStage(); }
+        if (Current.IsKeyword("eval")) { Advance(); return ParseEvalStage(); }
+        if (Current.IsKeyword("rex")) { Advance(); return ParseRexStage(); }
+        if (Current.IsKeyword("head")) { Advance(); return ParseLimitStage(); }
+        if (Current.IsKeyword("tail")) { Advance(); return ParseTailStage(); }
+        if (Current.IsAnyKeyword("table", "fields")) { Advance(); return ParseTableStage(); }
+        if (Current.IsKeyword("dedup")) { Advance(); return ParseDedupStage(); }
+        if (Current.IsKeyword("top")) { Advance(); return ParseTopStage(); }
+        if (Current.IsKeyword("timechart")) { Advance(); return ParseTimechartStage(); }
+        if (Current.IsKeyword("fieldalias")) { Advance(); return ParseFieldAliasStage(); }
+        if (Current.IsKeyword("transaction")) { Advance(); return ParseTransactionStage(); }
+        if (Current.IsKeyword("lookup")) { Advance(); return ParseLookupStage(); }
+        if (Current.IsKeyword("append")) { Advance(); return ParseAppendStage(); }
+        if (Current.IsKeyword("join")) { Advance(); return ParseJoinStage(); }
+        if (Current.IsKeyword("macro")) { Advance(); return ParseMacroStage(); }
+        if (Current.IsKeyword("subsearch")) { Advance(); return ParseSubsearchStage(); }
+        if (Current.IsAnyKeyword("search", "find")) { Advance(); return ParseSearchStageInPipeline(); }
+
+        throw new QueryParseException($"Unknown stage: {Current.Value}", $"position {Current.Position}");
+    }
+
+    // ─── WHERE (with AND/OR/NOT/parentheses) ─────────────────
+
+    private WhereStage ParseWhereStage()
+    {
+        var expr = ParseOrExpression();
+        return new WhereStage(expr);
+    }
+
+    private BqlExpression ParseOrExpression()
+    {
+        var left = ParseAndExpression();
+
+        while (Current.IsKeyword("or"))
+        {
+            Advance();
+            var right = ParseAndExpression();
+            left = new LogicalExpression(left, "OR", right);
+        }
+
+        return left;
+    }
+
+    private BqlExpression ParseAndExpression()
+    {
+        var left = ParseNotExpression();
+
+        while (Current.IsKeyword("and"))
+        {
+            Advance();
+            var right = ParseNotExpression();
+            left = new LogicalExpression(left, "AND", right);
+        }
+
+        return left;
+    }
+
+    private BqlExpression ParseNotExpression()
+    {
+        if (Current.IsKeyword("not"))
+        {
+            Advance();
+            var operand = ParseNotExpression();
+            return new NotExpression(operand);
+        }
+
+        return ParseComparison();
+    }
+
+    private BqlExpression ParseComparison()
+    {
+        var left = ParseAdditive();
+
+        // IN expression
+        if (Current.IsKeyword("in"))
+        {
+            Advance();
+            Expect(BqlTokenKind.OpenParen, "(");
+            var values = new List<BqlExpression>();
+            values.Add(ParsePrimary());
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                values.Add(ParsePrimary());
+            }
+            Expect(BqlTokenKind.CloseParen, ")");
+            return new InExpression(left, values);
+        }
+
+        // LIKE expression
+        if (Current.IsKeyword("like"))
+        {
+            Advance();
+            if (Current.Kind != BqlTokenKind.StringLiteral)
+                throw new QueryParseException("Expected string pattern after LIKE", $"position {Current.Position}");
+            var pattern = Current.Value;
+            Advance();
+            return new LikeExpression(left, pattern);
+        }
+
+        // Comparison operators
+        if (IsComparisonOperator(Current.Kind))
+        {
+            var op = Current.Value;
+            Advance();
+            var right = ParseAdditive();
+            return new ComparisonExpression(left, op, right);
+        }
+
+        return left;
+    }
+
+    private BqlExpression ParseAdditive()
+    {
+        var left = ParseMultiplicative();
+
+        while (Current.Kind is BqlTokenKind.Plus or BqlTokenKind.Minus)
+        {
+            var op = Current.Value;
+            Advance();
+            var right = ParseMultiplicative();
+            left = new ArithmeticExpression(left, op, right);
+        }
+
+        return left;
+    }
+
+    private BqlExpression ParseMultiplicative()
+    {
+        var left = ParseUnary();
+
+        while (Current.Kind is BqlTokenKind.Star or BqlTokenKind.Slash or BqlTokenKind.Percent)
+        {
+            var op = Current.Value;
+            Advance();
+            var right = ParseUnary();
+            left = new ArithmeticExpression(left, op, right);
+        }
+
+        return left;
+    }
+
+    private BqlExpression ParseUnary()
+    {
+        if (Current.Kind == BqlTokenKind.Minus)
+        {
+            Advance();
+            var operand = ParsePrimary();
+            return new ArithmeticExpression(new LiteralExpression(0), "-", operand);
+        }
+
+        return ParsePrimary();
+    }
+
+    private BqlExpression ParsePrimary()
+    {
+        // Parenthesized expression with recursion depth guard
+        if (Current.Kind == BqlTokenKind.OpenParen)
+        {
+            if (++_recursionDepth > MaxRecursionDepth)
+                throw new QueryParseException("Query too deeply nested (maximum depth: 100)");
+            try
+            {
+                Advance();
+                var expr = ParseOrExpression();
+                Expect(BqlTokenKind.CloseParen, ")");
+                return expr;
+            }
+            finally
+            {
+                _recursionDepth--;
+            }
+        }
+
+        // String literal
+        if (Current.Kind == BqlTokenKind.StringLiteral)
+        {
+            var val = Current.Value;
+            Advance();
+            return new LiteralExpression(val);
+        }
+
+        // Number literal
+        if (Current.Kind == BqlTokenKind.NumberLiteral)
+        {
+            var val = Current.Value;
+            Advance();
+            if (val.Contains('.'))
+                return new LiteralExpression(double.Parse(val, CultureInfo.InvariantCulture));
+            return new LiteralExpression(long.Parse(val, CultureInfo.InvariantCulture));
+        }
+
+        // Star (wildcard)
+        if (Current.Kind == BqlTokenKind.Star)
+        {
+            Advance();
+            return new LiteralExpression("*");
+        }
+
+        // Named severity levels
+        if (IsSeverityKeyword(Current))
+        {
+            var severity = ParseSeverityValue(Current.Value);
+            Advance();
+            return new LiteralExpression(severity);
+        }
+
+        // Boolean literals
+        if (Current.IsKeyword("true")) { Advance(); return new LiteralExpression(true); }
+        if (Current.IsKeyword("false")) { Advance(); return new LiteralExpression(false); }
+        if (Current.IsKeyword("null")) { Advance(); return new LiteralExpression(null); }
+
+        // Identifier — could be field reference or function call
+        if (Current.Kind == BqlTokenKind.Identifier)
+        {
+            var name = Current.Value;
+            Advance();
+
+            // Function call: name(args)
+            if (Current.Kind == BqlTokenKind.OpenParen)
+            {
+                Advance();
+                var args = new List<BqlExpression>();
+                if (Current.Kind != BqlTokenKind.CloseParen)
+                {
+                    args.Add(ParseOrExpression());
+                    while (Current.Kind == BqlTokenKind.Comma)
+                    {
+                        Advance();
+                        args.Add(ParseOrExpression());
+                    }
+                }
+                Expect(BqlTokenKind.CloseParen, ")");
+                return new FunctionExpression(name, args);
+            }
+
+            return new FieldExpression(name);
+        }
+
+        throw new QueryParseException($"Unexpected token: {Current.Value}", $"position {Current.Position}");
+    }
+
+    // ─── STATS / GROUP BY ────────────────────────────────────
+
+    private StatsStage ParseStatsStage()
+    {
+        var stage = new StatsStage();
+
+        // Parse aggregation functions
+        stage.Aggregations.Add(ParseAggregateFunction());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.Aggregations.Add(ParseAggregateFunction());
+        }
+
+        // Parse optional BY clause
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            stage.GroupByFields.Add(ExpectIdentifier());
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                stage.GroupByFields.Add(ExpectIdentifier());
+            }
+        }
+
+        return stage;
+    }
+
+    private StatsStage ParseGroupByStage()
+    {
+        Advance(); // skip "group"
+
+        // "group by field1, field2" → stats count by field1, field2
+        if (Current.IsKeyword("by"))
+            Advance();
+
+        var stage = new StatsStage();
+        stage.Aggregations.Add(new AggregateFunction("count"));
+
+        stage.GroupByFields.Add(ExpectIdentifier());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.GroupByFields.Add(ExpectIdentifier());
+        }
+
+        return stage;
+    }
+
+    private AggregateFunction ParseAggregateFunction()
+    {
+        var name = ExpectIdentifier();
+
+        // Function with field: avg(duration), sum(bytes)
+        if (Current.Kind == BqlTokenKind.OpenParen)
+        {
+            Advance();
+            var field = ExpectIdentifier();
+            Expect(BqlTokenKind.CloseParen, ")");
+            var agg = new AggregateFunction(name, field);
+
+            // Optional alias: "as alias_name"
+            if (Current.IsKeyword("as"))
+            {
+                Advance();
+                agg.Alias = ExpectIdentifier();
+            }
+
+            return agg;
+        }
+
+        // Plain function (no parens): "count"
+        var plainAgg = new AggregateFunction(name);
+        if (Current.IsKeyword("as"))
+        {
+            Advance();
+            plainAgg.Alias = ExpectIdentifier();
+        }
+
+        return plainAgg;
+    }
+
+    // ─── SORT ────────────────────────────────────────────────
+
+    private SortStage ParseSortStage()
+    {
+        Advance(); // skip "sort"
+        var stage = new SortStage();
+
+        // BQL style: "sort by field asc/desc"
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            ParseBqlSortFields(stage);
+        }
+        else
+        {
+            // SPL style: "sort ±field1, ±field2"
+            ParseSplSortFields(stage);
+        }
+
+        return stage;
+    }
+
+    private void ParseBqlSortFields(SortStage stage)
+    {
+        stage.Fields.Add(ParseBqlSortField());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.Fields.Add(ParseBqlSortField());
+        }
+    }
+
+    private SortField ParseBqlSortField()
+    {
+        var field = ExpectIdentifier();
+        var desc = false;
+
+        if (Current.IsKeyword("desc"))
+        {
+            desc = true;
+            Advance();
+        }
+        else if (Current.IsKeyword("asc"))
+        {
+            Advance();
+        }
+
+        return new SortField(field, desc);
+    }
+
+    private void ParseSplSortFields(SortStage stage)
+    {
+        stage.Fields.Add(ParseSplSortField());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.Fields.Add(ParseSplSortField());
+        }
+    }
+
+    private SortField ParseSplSortField()
+    {
+        var desc = false;
+        if (Current.Kind == BqlTokenKind.Minus)
+        {
+            desc = true;
+            Advance();
+        }
+        else if (Current.Kind == BqlTokenKind.Plus)
+        {
+            Advance();
+        }
+
+        var field = ExpectIdentifier();
+        return new SortField(field, desc);
+    }
+
+    // ─── Simple stages ───────────────────────────────────────
+
+    private LimitStage ParseLimitStage()
+    {
+        var count = ExpectNumber();
+        return new LimitStage(count);
+    }
+
+    private TailStage ParseTailStage()
+    {
+        var count = Current.Kind == BqlTokenKind.NumberLiteral ? ExpectNumber() : 10;
+        return new TailStage(count);
+    }
+
+    private EvalStage ParseEvalStage()
+    {
+        var assignments = new List<EvalAssignment>();
+
+        var fieldName = ExpectIdentifier();
+        Expect(BqlTokenKind.Equals, "=");
+        var expression = ParseOrExpression();
+        assignments.Add(new EvalAssignment(fieldName, expression));
+
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            var nextField = ExpectIdentifier();
+            Expect(BqlTokenKind.Equals, "=");
+            var nextExpr = ParseOrExpression();
+            assignments.Add(new EvalAssignment(nextField, nextExpr));
+        }
+
+        return new EvalStage(assignments);
+    }
+
+    private RexStage ParseRexStage()
+    {
+        // SPL style: rex field=source "pattern"
+        // BQL style: extract "pattern" from source
+        var sourceField = "RawLine";
+
+        if (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            // SPL: field=source
+            var key = Current.Value;
+            Advance(); Advance(); // skip "field" and "="
+            if (string.Equals(key, "field", StringComparison.OrdinalIgnoreCase))
+                sourceField = ExpectIdentifier();
+        }
+
+        if (Current.Kind != BqlTokenKind.StringLiteral)
+            throw new QueryParseException("Expected regex pattern string", $"position {Current.Position}");
+
+        var pattern = Current.Value;
+        Advance();
+
+        // BQL: "from" source
+        if (Current.IsKeyword("from"))
+        {
+            Advance();
+            sourceField = ExpectIdentifier();
+        }
+
+        return new RexStage(pattern, sourceField);
+    }
+
+    private RenameStage ParseRenameStage()
+    {
+        var mappings = new List<RenameMapping>();
+
+        var oldName = ExpectIdentifier();
+        ExpectKeyword("as");
+        var newName = ExpectIdentifier();
+        mappings.Add(new RenameMapping(oldName, newName));
+
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            var nextOld = ExpectIdentifier();
+            ExpectKeyword("as");
+            var nextNew = ExpectIdentifier();
+            mappings.Add(new RenameMapping(nextOld, nextNew));
+        }
+
+        return new RenameStage(mappings);
+    }
+
+    private TableStage ParseTableStage()
+    {
+        var fields = new List<string> { ExpectIdentifier() };
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            fields.Add(ExpectIdentifier());
+        }
+        return new TableStage(fields);
+    }
+
+    private DedupStage ParseDedupStage()
+    {
+        var fields = new List<string> { ExpectIdentifier() };
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            fields.Add(ExpectIdentifier());
+        }
+        return new DedupStage(fields);
+    }
+
+    private BqlStage ParseUniqueByStage()
+    {
+        Advance(); // skip "unique"
+        if (Current.IsKeyword("by"))
+            Advance();
+        var fields = new List<string> { ExpectIdentifier() };
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            fields.Add(ExpectIdentifier());
+        }
+        return new DedupStage(fields);
+    }
+
+    private TopStage ParseTopStage()
+    {
+        var count = 10;
+        if (Current.Kind == BqlTokenKind.NumberLiteral)
+            count = ExpectNumber();
+        var field = ExpectIdentifier();
+        return new TopStage(count, field);
+    }
+
+    private TimechartStage ParseTimechartStage()
+    {
+        var span = TimeSpan.FromHours(1);
+        var aggregation = "count";
+        string? byField = null;
+
+        // Parse span=Xh
+        if (Current.Kind == BqlTokenKind.Identifier && Current.Value.StartsWith("span", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Current.Value.Equals("span", StringComparison.OrdinalIgnoreCase) && Peek(1).Kind == BqlTokenKind.Equals)
+            {
+                Advance(); Advance(); // skip "span" "="
+                if (Current.Kind == BqlTokenKind.TimeSpanLiteral)
+                {
+                    span = ParseTimeSpanValue(Current.Value) ?? span;
+                    Advance();
+                }
+            }
+        }
+
+        // Parse aggregation
+        string? aggField = null;
+        if (Current.Kind == BqlTokenKind.Identifier && !Current.IsKeyword("by"))
+        {
+            aggregation = Current.Value.ToLowerInvariant();
+            Advance();
+
+            // Function form: count(field)
+            if (Current.Kind == BqlTokenKind.OpenParen)
+            {
+                Advance();
+                if (Current.Kind != BqlTokenKind.CloseParen)
+                {
+                    aggField = Current.Value;
+                    Advance();
+                }
+                Expect(BqlTokenKind.CloseParen, ")");
+            }
+        }
+
+        // Parse BY clause
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            byField = ExpectIdentifier();
+        }
+
+        return new TimechartStage(span, aggregation, byField, aggField);
+    }
+
+    private LookupStage ParseLookupStage()
+    {
+        // lookup <source> <key_field> [OUTPUT <field1>, <field2>, ...]
+        var source = ExpectIdentifier();
+        var keyField = ExpectIdentifier();
+
+        var outputFields = new List<string>();
+        if (Current.IsKeyword("output"))
+        {
+            Advance(); // skip "output"
+            outputFields.Add(ExpectIdentifier());
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                outputFields.Add(ExpectIdentifier());
+            }
+        }
+
+        return new LookupStage
+        {
+            LookupSource = source,
+            KeyField = keyField,
+            OutputFields = outputFields
+        };
+    }
+
+    private AppendStage ParseAppendStage()
+    {
+        // append [<subsearch>] — consume everything up to the next pipe or EOF as the subsearch text
+        var sb = new StringBuilder();
+        // Expect opening bracket for subsearch
+        if (Current.Kind == BqlTokenKind.OpenBracket)
+        {
+            Advance(); // skip "["
+            var depth = 1;
+            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
+            {
+                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
+                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+        }
+        else
+        {
+            // No brackets — consume tokens until pipe or EOF
+            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+            {
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+        }
+
+        return new AppendStage { SubsearchQuery = sb.ToString() };
+    }
+
+    private JoinStage ParseJoinStage()
+    {
+        // join [type=<inner|outer|left>] <field> [<subsearch>]
+        var joinType = "inner";
+
+        // Check for type= parameter
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("type", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); // skip "type"
+            Advance(); // skip "="
+            joinType = ExpectIdentifier().ToLowerInvariant();
+        }
+
+        var joinField = ExpectIdentifier();
+
+        // Parse subsearch
+        var sb = new StringBuilder();
+        if (Current.Kind == BqlTokenKind.OpenBracket)
+        {
+            Advance(); // skip "["
+            var depth = 1;
+            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
+            {
+                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
+                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+        }
+        else
+        {
+            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+            {
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+        }
+
+        return new JoinStage
+        {
+            JoinField = joinField,
+            JoinType = joinType,
+            SubsearchQuery = sb.ToString()
+        };
+    }
+
+    // ─── MACRO stage ──────────────────────────────────────────
+
+    private MacroStage ParseMacroStage()
+    {
+        // macro <name> [arg1, arg2, ...]
+        var macroName = ExpectIdentifier();
+        var arguments = new List<string>();
+
+        // Parse optional arguments (comma-separated values or identifiers)
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            string argValue;
+            if (Current.Kind == BqlTokenKind.StringLiteral)
+            {
+                argValue = Current.Value;
+                Advance();
+            }
+            else if (Current.Kind == BqlTokenKind.NumberLiteral)
+            {
+                argValue = Current.Value;
+                Advance();
+            }
+            else if (Current.Kind == BqlTokenKind.Identifier)
+            {
+                argValue = Current.Value;
+                Advance();
+            }
+            else
+            {
+                break;
+            }
+
+            arguments.Add(argValue);
+
+            // Skip optional comma separator between arguments
+            if (Current.Kind == BqlTokenKind.Comma)
+                Advance();
+        }
+
+        return new MacroStage(macroName, arguments);
+    }
+
+    // ─── SUBSEARCH stage ──────────────────────────────────────
+
+    private SubsearchStage ParseSubsearchStage()
+    {
+        // subsearch [<inner_query>]
+        var sb = new StringBuilder();
+
+        if (Current.Kind == BqlTokenKind.OpenBracket)
+        {
+            Advance(); // skip "["
+            var depth = 1;
+            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
+            {
+                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
+                if (Current.Kind == BqlTokenKind.CloseBracket)
+                {
+                    depth--;
+                    if (depth == 0) { Advance(); break; }
+                }
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+        }
+        else
+        {
+            throw new QueryParseException("Expected '[' after 'subsearch'", $"position {Current.Position}");
+        }
+
+        if (string.IsNullOrWhiteSpace(sb.ToString()))
+            throw new QueryParseException("Subsearch query cannot be empty");
+
+        return new SubsearchStage(sb.ToString());
+    }
+
+    private SearchStage ParseSearchStageInPipeline()
+    {
+        var sb = new StringBuilder();
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+            Advance();
+        }
+        return new SearchStage(sb.Length > 0 ? sb.ToString() : "*");
+    }
+
+    private EvalStage ParseFillStage()
+    {
+        // fill field with value → eval field = coalesce(field, value)
+        var field = ExpectIdentifier();
+        ExpectKeyword("with");
+        var value = ParsePrimary();
+        return new EvalStage(field, new FunctionExpression("coalesce", new List<BqlExpression>
+        {
+            new FieldExpression(field),
+            value
+        }));
+    }
+
+    private EvalStage ParseExpandStage()
+    {
+        // expand field → placeholder (expand is not easily representable, use eval identity)
+        var field = ExpectIdentifier();
+        return new EvalStage(field, new FieldExpression(field));
+    }
+
+    // ─── Splunk parity stages ────────────────────────────────
+
+    private FillNullStage ParseFillNullStage()
+    {
+        // fillnull [value=X] [field1, field2, ...]
+        var stage = new FillNullStage();
+
+        // Check for value= parameter
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("value", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); // skip "value"
+            Advance(); // skip "="
+            stage.DefaultValue = Current.Kind == BqlTokenKind.StringLiteral || Current.Kind == BqlTokenKind.NumberLiteral || Current.Kind == BqlTokenKind.Identifier
+                ? Current.Value : "0";
+            Advance();
+        }
+
+        // Parse optional field list
+        while (Current.Kind == BqlTokenKind.Identifier && !IsStageKeyword(Current))
+        {
+            stage.Fields.Add(Current.Value);
+            Advance();
+            if (Current.Kind == BqlTokenKind.Comma) Advance();
+        }
+
+        return stage;
+    }
+
+    private BucketStage ParseBucketStage()
+    {
+        // bucket/bin field [span=X] [as alias]
+        var stage = new BucketStage { Field = ExpectIdentifier() };
+
+        // Parse optional parameters
+        while (Current.Kind == BqlTokenKind.Identifier && !IsStageKeyword(Current))
+        {
+            if (Current.Value.Equals("span", StringComparison.OrdinalIgnoreCase) && Peek(1).Kind == BqlTokenKind.Equals)
+            {
+                Advance(); Advance(); // skip "span" and "="
+                var spanStr = Current.Value;
+                Advance();
+                // Try time span (1h, 30m, 1d, etc.)
+                stage.Span = ParseTimeSpanValue(spanStr);
+                if (!stage.Span.HasValue && double.TryParse(spanStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var numSpan))
+                    stage.NumericSpan = numSpan;
+            }
+            else if (Current.IsKeyword("as"))
+            {
+                Advance();
+                stage.Alias = ExpectIdentifier();
+            }
+            else break;
+        }
+
+        return stage;
+    }
+
+    private MakeResultsStage ParseMakeResultsStage()
+    {
+        // makeresults [count=N]
+        var stage = new MakeResultsStage();
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("count", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); Advance(); // skip "count" and "="
+            if (int.TryParse(Current.Value, out var count))
+            {
+                stage.Count = Math.Min(count, 50000); // cap at 50K
+                Advance();
+            }
+        }
+        else if (Current.Kind == BqlTokenKind.NumberLiteral && int.TryParse(Current.Value, out var directCount))
+        {
+            stage.Count = Math.Min(directCount, 50000);
+            Advance();
+        }
+        return stage;
+    }
+
+    private MvExpandStage ParseMvExpandStage()
+    {
+        // mvexpand field [limit=N]
+        var stage = new MvExpandStage { Field = ExpectIdentifier() };
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("limit", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); Advance();
+            if (int.TryParse(Current.Value, out var limit))
+            {
+                stage.Limit = limit;
+                Advance();
+            }
+        }
+        return stage;
+    }
+
+    private ChartStage ParseChartStage()
+    {
+        // chart agg(field) [OVER field1] [BY field2]
+        var stage = new ChartStage();
+        // Parse aggregation(s)
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe &&
+               !Current.IsAnyKeyword("over", "by"))
+        {
+            var aggName = Current.Value.ToLowerInvariant();
+            Advance();
+            string? aggField = null;
+            string? alias = null;
+            if (Current.Kind == BqlTokenKind.OpenParen)
+            {
+                Advance();
+                if (Current.Kind != BqlTokenKind.CloseParen) { aggField = Current.Value; Advance(); }
+                Expect(BqlTokenKind.CloseParen, ")");
+            }
+            if (Current.IsKeyword("as")) { Advance(); alias = ExpectIdentifier(); }
+            var agg = new AggregateFunction(aggName, aggField) { Alias = alias };
+            stage.Aggregations.Add(agg);
+            if (Current.Kind == BqlTokenKind.Comma) Advance();
+        }
+        if (Current.IsKeyword("over")) { Advance(); stage.OverField = ExpectIdentifier(); }
+        if (Current.IsKeyword("by")) { Advance(); stage.ByField = ExpectIdentifier(); }
+        return stage;
+    }
+
+    private FillDownStage ParseFillDownStage()
+    {
+        // filldown field1, field2, ...
+        var stage = new FillDownStage();
+        if (Current.Kind == BqlTokenKind.Identifier && !IsStageKeyword(Current))
+        {
+            stage.Fields.Add(Current.Value);
+            Advance();
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                stage.Fields.Add(ExpectIdentifier());
+            }
+        }
+        return stage;
+    }
+
+    private AddColTotalsStage ParseAddColTotalsStage()
+    {
+        // addcoltotals [fieldname=label] [field1, field2, ...]
+        var stage = new AddColTotalsStage();
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("fieldname", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); Advance();
+            stage.LabelField = Current.Value;
+            Advance();
+        }
+        while (Current.Kind == BqlTokenKind.Identifier && !IsStageKeyword(Current))
+        {
+            stage.Fields.Add(Current.Value);
+            Advance();
+            if (Current.Kind == BqlTokenKind.Comma) Advance();
+        }
+        return stage;
+    }
+
+    private InputLookupStage ParseInputLookupStage()
+    {
+        // inputlookup <lookup_name>
+        return new InputLookupStage { LookupName = ExpectIdentifier() };
+    }
+
+    private RareStage ParseRareStage()
+    {
+        // rare [N] field — inverse of top
+        var count = 10;
+        if (Current.Kind == BqlTokenKind.NumberLiteral)
+            count = ExpectNumber();
+        var field = ExpectIdentifier();
+        return new RareStage { Count = count, Field = field };
+    }
+
+    private RegexStage ParseRegexStage()
+    {
+        // regex [field=name] "pattern"  OR  regex field!=name "pattern"
+        var stage = new RegexStage();
+
+        if (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            var key = Current.Value;
+            Advance(); Advance(); // skip "field" and "="
+            if (string.Equals(key, "field", StringComparison.OrdinalIgnoreCase))
+                stage.Field = Current.Value;
+            else
+                stage.Field = key;
+            Advance();
+        }
+
+        if (Current.Kind == BqlTokenKind.StringLiteral)
+        {
+            stage.Pattern = Current.Value;
+            Advance();
+        }
+        else if (Current.Kind == BqlTokenKind.Identifier)
+        {
+            stage.Pattern = Current.Value;
+            Advance();
+        }
+
+        return stage;
+    }
+
+    private FieldSummaryStage ParseFieldSummaryStage()
+    {
+        // fieldsummary [maxvals=N]
+        var stage = new FieldSummaryStage();
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("maxvals", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); Advance();
+            if (int.TryParse(Current.Value, out var maxVals))
+            {
+                stage.MaxValues = maxVals;
+                Advance();
+            }
+        }
+        return stage;
+    }
+
+    private XyseriesStage ParseXyseriesStage()
+    {
+        // xyseries row_field column_field value_field
+        var row = ExpectIdentifier();
+        var col = ExpectIdentifier();
+        var val = ExpectIdentifier();
+        return new XyseriesStage { RowField = row, ColumnField = col, ValueField = val };
+    }
+
+    private UntableStage ParseUntableStage()
+    {
+        // untable row_field column_field value_field
+        var row = ExpectIdentifier();
+        var col = ExpectIdentifier();
+        var val = ExpectIdentifier();
+        return new UntableStage { RowField = row, ColumnField = col, ValueField = val };
+    }
+
+    private EvalStage ParseConvertStage()
+    {
+        // convert ctime(field) [as alias], dur2sec(field) [as alias]
+        // Translates to eval assignments using expression functions
+        var assignments = new List<EvalAssignment>();
+        do
+        {
+            if (Current.Kind == BqlTokenKind.Comma) Advance();
+            var funcName = ExpectIdentifier();
+            Expect(BqlTokenKind.OpenParen, "(");
+            var fieldExpr = ParseOrExpression();
+            Expect(BqlTokenKind.CloseParen, ")");
+            var alias = funcName + "(" + (fieldExpr is FieldExpression fe ? fe.Name : "value") + ")";
+            if (Current.IsKeyword("as"))
+            {
+                Advance();
+                alias = ExpectIdentifier();
+            }
+            assignments.Add(new EvalAssignment(alias, new FunctionExpression(funcName, new List<BqlExpression> { fieldExpr })));
+        } while (Current.Kind == BqlTokenKind.Comma);
+
+        return new EvalStage(assignments);
+    }
+
+    private static TimeSpan? ParseTimeSpanValue(string value)
+    {
+        var match = Regex.Match(value, @"^(\d+)(s|m|h|d|w)$", RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+        if (!match.Success) return null;
+        // Use long.TryParse to prevent overflow on very large values, clamp to reasonable max (10 years)
+        if (!long.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, out var amount) || amount < 0)
+            return null;
+        const long maxDays = 3650; // ~10 years
+        return match.Groups[2].Value.ToLowerInvariant() switch
+        {
+            "s" => amount > maxDays * 86400 ? null : TimeSpan.FromSeconds(amount),
+            "m" => amount > maxDays * 1440 ? null : TimeSpan.FromMinutes(amount),
+            "h" => amount > maxDays * 24 ? null : TimeSpan.FromHours(amount),
+            "d" => amount > maxDays ? null : TimeSpan.FromDays(amount),
+            "w" => amount > maxDays / 7 ? null : TimeSpan.FromDays(amount * 7),
+            _ => null
+        };
+    }
+
+    private FieldAliasStage ParseFieldAliasStage()
+    {
+        // fieldalias alias1=original1, alias2=original2
+        var aliases = new Dictionary<string, string>();
+
+        var aliasName = ExpectIdentifier();
+        Expect(BqlTokenKind.Equals, "=");
+        var originalField = ExpectIdentifier();
+        aliases[aliasName] = originalField;
+
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            aliasName = ExpectIdentifier();
+            Expect(BqlTokenKind.Equals, "=");
+            originalField = ExpectIdentifier();
+            aliases[aliasName] = originalField;
+        }
+
+        return new FieldAliasStage(aliases);
+    }
+
+    private TransactionStage ParseTransactionStage()
+    {
+        // transaction field1, field2 [maxspan=Xh] [maxevents=N]
+        var fields = new List<string>();
+        fields.Add(ExpectIdentifier());
+
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            fields.Add(ExpectIdentifier());
+        }
+
+        TimeSpan? maxSpan = null;
+        int? maxEvents = null;
+
+        // Parse optional parameters
+        while (Current.Kind == BqlTokenKind.Identifier && Current.Kind != BqlTokenKind.Pipe && Current.Kind != BqlTokenKind.Eof)
+        {
+            if (Current.Value.StartsWith("maxspan", StringComparison.OrdinalIgnoreCase))
+            {
+                Advance(); // skip "maxspan"
+                if (Current.Kind == BqlTokenKind.Equals) Advance();
+                if (Current.Kind == BqlTokenKind.TimeSpanLiteral)
+                {
+                    maxSpan = ParseTimeSpanValue(Current.Value);
+                    Advance();
+                }
+                continue;
+            }
+            if (Current.Value.StartsWith("maxevents", StringComparison.OrdinalIgnoreCase))
+            {
+                Advance(); // skip "maxevents"
+                if (Current.Kind == BqlTokenKind.Equals) Advance();
+                if (Current.Kind == BqlTokenKind.NumberLiteral)
+                {
+                    maxEvents = Math.Clamp(ExpectNumber(), 1, 100_000);
+                }
+                continue;
+            }
+            break;
+        }
+
+        return new TransactionStage(fields, maxSpan, maxEvents);
+    }
+
+    private EventStatsStage ParseEventStatsStage()
+    {
+        var stage = new EventStatsStage();
+
+        // Parse aggregation functions (same as stats)
+        stage.Aggregations.Add(ParseAggregateFunction());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.Aggregations.Add(ParseAggregateFunction());
+        }
+
+        // Parse optional BY clause
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            stage.GroupByFields.Add(ExpectIdentifier());
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                stage.GroupByFields.Add(ExpectIdentifier());
+            }
+        }
+
+        return stage;
+    }
+
+    private StreamStatsStage ParseStreamStatsStage()
+    {
+        var stage = new StreamStatsStage();
+
+        // Parse optional window=N parameter
+        if (Current.Kind == BqlTokenKind.Identifier &&
+            Current.Value.Equals("window", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance(); // skip "window"
+            Advance(); // skip "="
+            stage.Window = ExpectNumber();
+        }
+
+        // Parse aggregation functions (same as stats)
+        stage.Aggregations.Add(ParseAggregateFunction());
+        while (Current.Kind == BqlTokenKind.Comma)
+        {
+            Advance();
+            stage.Aggregations.Add(ParseAggregateFunction());
+        }
+
+        // Parse optional BY clause
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            stage.GroupByFields.Add(ExpectIdentifier());
+            while (Current.Kind == BqlTokenKind.Comma)
+            {
+                Advance();
+                stage.GroupByFields.Add(ExpectIdentifier());
+            }
+        }
+
+        return stage;
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────
+
+    private BqlToken Current => _pos < _tokens.Count ? _tokens[_pos] : new BqlToken(BqlTokenKind.Eof, "", -1);
+
+    private BqlToken Peek(int offset)
+    {
+        var idx = _pos + offset;
+        return idx < _tokens.Count ? _tokens[idx] : new BqlToken(BqlTokenKind.Eof, "", -1);
+    }
+
+    private void Advance() => _pos++;
+
+    private void Expect(BqlTokenKind kind, string display)
+    {
+        if (Current.Kind != kind)
+            throw new QueryParseException($"Expected '{display}' but got '{Current.Value}'", $"position {Current.Position}");
+        Advance();
+    }
+
+    private void ExpectKeyword(string keyword)
+    {
+        if (!Current.IsKeyword(keyword))
+            throw new QueryParseException($"Expected '{keyword}' but got '{Current.Value}'", $"position {Current.Position}");
+        Advance();
+    }
+
+    private string ExpectIdentifier()
+    {
+        if (Current.Kind != BqlTokenKind.Identifier)
+            throw new QueryParseException($"Expected identifier but got '{Current.Value}'", $"position {Current.Position}");
+        var name = Current.Value;
+        Advance();
+        return name;
+    }
+
+    private int ExpectNumber()
+    {
+        if (Current.Kind != BqlTokenKind.NumberLiteral)
+            throw new QueryParseException($"Expected number but got '{Current.Value}'", $"position {Current.Position}");
+        var num = int.Parse(Current.Value, CultureInfo.InvariantCulture);
+        Advance();
+        return num;
+    }
+
+    private DateTime ParseDateTimeLiteral()
+    {
+        if (Current.Kind == BqlTokenKind.StringLiteral)
+        {
+            var val = Current.Value;
+            Advance();
+            if (DateTime.TryParse(val, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt))
+                return dt.ToUniversalTime();
+            throw new QueryParseException($"Invalid date/time: '{val}'", $"position {Current.Position}");
+        }
+        throw new QueryParseException("Expected date/time string literal", $"position {Current.Position}");
+    }
+
+
+    private static int ParseSeverityValue(string name) => name.ToLowerInvariant() switch
+    {
+        "trace" => 0,
+        "debug" => 1,
+        "info" or "information" => 2,
+        "warning" or "warn" => 3,
+        "error" or "err" => 4,
+        "critical" or "crit" => 5,
+        "fatal" => 6,
+        _ => 2
+    };
+
+    private static bool IsSeverityKeyword(BqlToken token) =>
+        token.Kind == BqlTokenKind.Identifier &&
+        token.Value.ToLowerInvariant() is "trace" or "debug" or "info" or "information"
+            or "warning" or "warn" or "error" or "err" or "critical" or "crit" or "fatal";
+
+    private static bool IsComparisonOperator(BqlTokenKind kind) =>
+        kind is BqlTokenKind.Equals or BqlTokenKind.NotEquals
+            or BqlTokenKind.Greater or BqlTokenKind.GreaterEquals
+            or BqlTokenKind.Less or BqlTokenKind.LessEquals;
+
+    private static bool IsStageKeyword(BqlToken token) =>
+        token.IsAnyKeyword(
+            "where", "stats", "group", "sort", "head", "tail", "top",
+            "limit", "compute", "eval", "extract", "rex", "rename",
+            "select", "table", "fields", "dedup", "unique", "timechart",
+            "fill", "expand", "fieldalias", "transaction",
+            "lookup", "append", "join", "eventstats", "streamstats",
+            "fillnull", "bucket", "bin", "makeresults", "mvexpand",
+            "chart", "filldown", "addcoltotals", "inputlookup",
+            "rare", "regex", "fieldsummary", "xyseries", "untable", "convert",
+            "macro", "subsearch");
+
+    // ─── Legacy QueryPlan conversion ─────────────────────────
+
+    private static QueryPlan ConvertToLegacyPlan(BqlQuery query)
+    {
+        var plan = new QueryPlan();
+        foreach (var stage in query.Stages)
+        {
+            var op = ConvertStageToOperator(stage);
+            if (op != null)
+                plan.Operators.Add(op);
+        }
+        return plan;
+    }
+
+    private static QueryOperator? ConvertStageToOperator(BqlStage stage) => stage switch
+    {
+        SearchStage s => new LegacySearchOperator(s.SearchText),
+        WhereStage w => new LegacyWhereOperator(w.Condition),
+        StatsStage st => new LegacyStatsOperator(st.Aggregations, st.GroupByFields),
+        SortStage so => new LegacySortOperator(so.Fields),
+        LimitStage l => new LegacyLimitOperator(l.Count),
+        TailStage t => new LegacyTailOperator(t.Count),
+        DedupStage d => new LegacyDedupOperator(d.Fields),
+        TopStage tp => new LegacyTopOperator(tp.Count, tp.Field),
+        TableStage tb => new LegacyTableOperator(tb.Fields),
+        EvalStage e => new LegacyEvalOperator(e.Assignments),
+        RexStage r => new LegacyRexOperator(r.Pattern, r.SourceField),
+        RenameStage rn => new LegacyRenameOperator(rn.Mappings),
+        TimechartStage tc => new LegacyTimechartOperator(tc.Span, tc.Aggregation, tc.ByField, tc.AggregationField),
+        FieldAliasStage fa => new LegacyFieldAliasOperator(fa.Aliases),
+        TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents),
+        EventStatsStage es => new LegacyEventStatsOperator(es.Aggregations, es.GroupByFields),
+        StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
+        FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
+        BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
+        MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
+        MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
+        ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),
+        FillDownStage fd => new LegacyFillDownOperator(fd.Fields),
+        AddColTotalsStage ac => new LegacyAddColTotalsOperator(ac.LabelField, ac.Fields),
+        InputLookupStage => new LegacyPassthroughOperator("inputlookup"),
+        LookupStage => new LegacyPassthroughOperator("lookup"),
+        AppendStage => new LegacyPassthroughOperator("append"),
+        JoinStage => new LegacyPassthroughOperator("join"),
+        MacroStage => new LegacyPassthroughOperator("macro"),
+        SubsearchStage => new LegacyPassthroughOperator("subsearch"),
+        RareStage r => new LegacyRareOperator(r.Count, r.Field),
+        RegexStage rx => new LegacyRegexOperator(rx.Field, rx.Pattern, rx.Negate),
+        FieldSummaryStage fs => new LegacyFieldSummaryOperator(fs.MaxValues),
+        XyseriesStage xy => new LegacyXyseriesOperator(xy.RowField, xy.ColumnField, xy.ValueField),
+        UntableStage ut => new LegacyUntableOperator(ut.RowField, ut.ColumnField, ut.ValueField),
+        _ => null
+    };
+}
+
+// ─── Legacy operator wrappers ────────────────────────────────
+// These allow the BQL parser to integrate with the existing QueryEngine
+
+internal sealed class LegacySearchOperator : QueryOperator
+{
+    private readonly string _pattern;
+    public override string Name => "search";
+
+    public LegacySearchOperator(string pattern) { _pattern = pattern.Trim('"'); }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        if (_pattern == "*") return Task.FromResult(input);
+
+        var result = input.Where(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var rawLine = dict.TryGetValue("RawLine", out var rl) ? rl?.ToString() : null;
+            return rawLine?.Contains(_pattern, StringComparison.OrdinalIgnoreCase) == true;
+        });
+
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyWhereOperator : QueryOperator
+{
+    private readonly BqlExpression _condition;
+    public override string Name => "where";
+
+    public LegacyWhereOperator(BqlExpression condition) { _condition = condition; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var result = input.Where(evt => BqlExpressionEvaluator.EvaluateBool(_condition, (IDictionary<string, object?>)evt));
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyStatsOperator : QueryOperator
+{
+    private readonly List<AggregateFunction> _aggregations;
+    private readonly List<string> _groupByFields;
+    public override string Name => "stats";
+
+    public LegacyStatsOperator(List<AggregateFunction> aggs, List<string> groupBy)
+    {
+        _aggregations = aggs;
+        _groupByFields = groupBy;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        // Safety: materialization is bounded upstream — BqlQueryEngine caps storage reads via
+        // QueryContext.Limit (default 10K) and BqlOptimizer.MaxFetchLimit (500K for aggregations).
+        var events = input.ToList();
+
+        if (_groupByFields.Count == 0)
+        {
+            // No grouping — always produce a single row (even if empty set)
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            foreach (var agg in _aggregations)
+                row[agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})"] = ComputeAggregate(agg, events);
+            return Task.FromResult<IEnumerable<dynamic>>(new[] { (dynamic)row });
+        }
+
+        // Empty set with grouping returns empty (no groups to show)
+        if (events.Count == 0)
+        {
+            return Task.FromResult<IEnumerable<dynamic>>(Array.Empty<dynamic>());
+        }
+
+        // Group by
+        var groups = events.GroupBy(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            return string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+        });
+
+        var results = new List<dynamic>();
+        foreach (var group in groups)
+        {
+            // Materialize group once — avoids re-enumeration per aggregation function
+            var groupList = group.ToList();
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var first = (IDictionary<string, object?>)groupList[0];
+
+            foreach (var field in _groupByFields)
+                row[field] = first.TryGetValue(field, out var v) ? v : null;
+
+            foreach (var agg in _aggregations)
+                row[agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})"] = ComputeAggregate(agg, groupList);
+
+            results.Add(row);
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+
+    internal static object? ComputeAggregate(AggregateFunction agg, List<dynamic> events)
+    {
+        if (agg.Name == "count") return events.Count;
+
+        if (agg.Name == "dc" || agg.Name == "distinct_count")
+        {
+            return events
+                .Select(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field ?? "", out var v) ? v?.ToString() : null)
+                .Where(v => v != null)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+        }
+
+        var values = events
+            .Select(e => GetNumericValue((IDictionary<string, object?>)e, agg.Field ?? ""))
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToList();
+
+        if (values.Count == 0) return null;
+
+        // Handle percentile variants first (perc95, p99, etc.)
+        if (agg.Name.StartsWith("perc") || agg.Name == "percentile" ||
+            (agg.Name.StartsWith("p") && agg.Name.Length > 1 && char.IsDigit(agg.Name[1])))
+        {
+            return ComputePercentile(values, agg);
+        }
+
+        return agg.Name switch
+        {
+            "sum" => values.Sum(),
+            "avg" => values.Average(),
+            "min" => values.Min(),
+            "max" => values.Max(),
+            "median" => ComputeMedian(values),
+            "stdev" or "stdevp" => ComputeStdev(values, population: agg.Name == "stdevp"),
+            "variance" or "varp" => ComputeVariance(values, population: agg.Name == "varp"),
+            _ => events.Count
+        };
+    }
+
+    private static double ComputeMedian(List<double> values)
+    {
+        var sorted = values.OrderBy(v => v).ToList();
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 0
+            ? (sorted[mid - 1] + sorted[mid]) / 2.0
+            : sorted[mid];
+    }
+
+    private static double ComputeStdev(List<double> values, bool population)
+    {
+        return Math.Sqrt(ComputeVariance(values, population));
+    }
+
+    private static double ComputeVariance(List<double> values, bool population = false)
+    {
+        if (values.Count == 0) return 0;
+        if (!population && values.Count == 1) return double.NaN;
+        var avg = values.Average();
+        var sumSquares = values.Sum(v => (v - avg) * (v - avg));
+        return population ? sumSquares / values.Count : sumSquares / (values.Count - 1);
+    }
+
+    private static double ComputePercentile(List<double> values, AggregateFunction agg)
+    {
+        if (values.Count == 0) return 0.0;
+
+        // percentile(field) defaults to 95th, perc95(field) uses 95
+        var percentile = 95.0;
+        var name = agg.Name.ToLowerInvariant();
+        if (name.StartsWith("perc") && double.TryParse(name[4..], NumberStyles.Any, CultureInfo.InvariantCulture, out var p))
+            percentile = p;
+        else if (name.StartsWith("p") && double.TryParse(name[1..], NumberStyles.Any, CultureInfo.InvariantCulture, out var p2))
+            percentile = p2;
+
+        // Clamp percentile to valid range
+        percentile = Math.Clamp(percentile, 0.0, 100.0);
+
+        var sorted = values.OrderBy(v => v).ToList();
+        if (sorted.Count == 1) return sorted[0];
+
+        var index = (percentile / 100.0) * (sorted.Count - 1);
+        var lower = (int)Math.Floor(index);
+        var upper = (int)Math.Ceiling(index);
+        lower = Math.Clamp(lower, 0, sorted.Count - 1);
+        upper = Math.Clamp(upper, 0, sorted.Count - 1);
+        if (lower == upper) return sorted[lower];
+        var fraction = index - lower;
+        return sorted[lower] + fraction * (sorted[upper] - sorted[lower]);
+    }
+
+    internal static double? GetNumericValue(IDictionary<string, object?> dict, string field)
+    {
+        if (!dict.TryGetValue(field, out var val) || val == null) return null;
+        if (val is double d) return d;
+        if (val is long l) return l;
+        if (val is int i) return i;
+        if (double.TryParse(val.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)) return parsed;
+        return null;
+    }
+}
+
+internal sealed class LegacySortOperator : QueryOperator
+{
+    private readonly List<SortField> _fields;
+    public override string Name => "sort";
+
+    public LegacySortOperator(List<SortField> fields) { _fields = fields; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        if (_fields.Count == 0) return Task.FromResult(input);
+
+        var first = _fields[0];
+        IOrderedEnumerable<dynamic> ordered = first.Descending
+            ? input.OrderByDescending(e => GetSortValue(e, first.Field))
+            : input.OrderBy(e => GetSortValue(e, first.Field));
+
+        for (var i = 1; i < _fields.Count; i++)
+        {
+            var f = _fields[i];
+            ordered = f.Descending
+                ? ordered.ThenByDescending(e => GetSortValue(e, f.Field))
+                : ordered.ThenBy(e => GetSortValue(e, f.Field));
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(ordered);
+    }
+
+    private static object? GetSortValue(dynamic evt, string field)
+    {
+        var dict = (IDictionary<string, object?>)evt;
+        return dict.TryGetValue(field, out var v) ? v : null;
+    }
+}
+
+internal sealed class LegacyLimitOperator : QueryOperator
+{
+    private readonly int _count;
+    public override string Name => "head";
+
+    public LegacyLimitOperator(int count) { _count = count; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default) =>
+        Task.FromResult(input.Take(_count));
+}
+
+internal sealed class LegacyTailOperator : QueryOperator
+{
+    private readonly int _count;
+    public override string Name => "tail";
+
+    public LegacyTailOperator(int count) { _count = count; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var list = input.ToList();
+        return Task.FromResult<IEnumerable<dynamic>>(list.Skip(Math.Max(0, list.Count - _count)));
+    }
+}
+
+internal sealed class LegacyDedupOperator : QueryOperator
+{
+    private readonly List<string> _fields;
+    public override string Name => "dedup";
+
+    public LegacyDedupOperator(List<string> fields) { _fields = fields; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = input.Where(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var key = string.Join("|", _fields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+            return seen.Add(key);
+        });
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyTopOperator : QueryOperator
+{
+    private readonly int _count;
+    private readonly string _field;
+    public override string Name => "top";
+
+    public LegacyTopOperator(int count, string field) { _count = count; _field = field; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var groups = input
+            .GroupBy(evt =>
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                return dict.TryGetValue(_field, out var v) ? v?.ToString() ?? "" : "";
+            })
+            .OrderByDescending(g => g.Count())
+            .Take(_count);
+
+        var results = groups.Select(g =>
+        {
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            row[_field] = g.Key;
+            row["count"] = g.Count();
+            return (dynamic)row;
+        });
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+}
+
+internal sealed class LegacyTableOperator : QueryOperator
+{
+    private readonly List<string> _fields;
+    public override string Name => "table";
+
+    public LegacyTableOperator(List<string> fields) { _fields = fields; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var result = input.Select(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            foreach (var field in _fields)
+            {
+                if (dict.TryGetValue(field, out var val))
+                    row[field] = val;
+            }
+            return (dynamic)row;
+        });
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyEvalOperator : QueryOperator
+{
+    private readonly List<EvalAssignment> _assignments;
+    public override string Name => "eval";
+
+    public LegacyEvalOperator(List<EvalAssignment> assignments)
+    {
+        _assignments = assignments;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var result = input.Select(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            foreach (var assignment in _assignments)
+            {
+                dict[assignment.FieldName] = BqlExpressionEvaluator.Evaluate(assignment.Expression, dict);
+            }
+            return evt;
+        });
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyRexOperator : QueryOperator
+{
+    private readonly string _pattern;
+    private readonly string _sourceField;
+    public override string Name => "rex";
+
+    public LegacyRexOperator(string pattern, string sourceField)
+    {
+        _pattern = pattern;
+        _sourceField = sourceField;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        // Compile regex once with a timeout to prevent ReDoS from user-supplied patterns
+        var regex = new Regex(
+            _pattern,
+            RegexOptions.Compiled,
+            TimeSpan.FromSeconds(1));
+
+        var result = input.Select(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var source = dict.TryGetValue(_sourceField, out var v) ? v?.ToString() : null;
+            if (source != null)
+            {
+                try
+                {
+                    var match = regex.Match(source);
+                    if (match.Success)
+                    {
+                        foreach (var groupName in regex.GetGroupNames())
+                        {
+                            if (!int.TryParse(groupName, out _))
+                                dict[groupName] = match.Groups[groupName].Value;
+                        }
+                    }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    // Skip this event if the regex takes too long (likely ReDoS pattern)
+                }
+            }
+            return evt;
+        });
+        return Task.FromResult<IEnumerable<dynamic>>(result);
+    }
+}
+
+internal sealed class LegacyRenameOperator : QueryOperator
+{
+    private readonly List<RenameMapping> _mappings;
+    public override string Name => "rename";
+
+    public LegacyRenameOperator(List<RenameMapping> mappings)
+    {
+        _mappings = mappings;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var result = input.Select(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            foreach (var mapping in _mappings)
+            {
+                if (dict.TryGetValue(mapping.OldName, out var val))
+                {
+                    dict[mapping.NewName] = val;
+                    dict.Remove(mapping.OldName);
+                }
+            }
+            return evt;
+        });
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyTimechartOperator : QueryOperator
+{
+    private readonly TimeSpan _span;
+    private readonly string _aggregation;
+    private readonly string? _byField;
+    private readonly string? _aggField;
+    public override string Name => "timechart";
+
+    public LegacyTimechartOperator(TimeSpan span, string aggregation, string? byField, string? aggField)
+    {
+        _span = span;
+        _aggregation = aggregation;
+        _byField = byField;
+        _aggField = aggField;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        var results = new List<dynamic>();
+
+        // Group events into time buckets
+        var buckets = events
+            .Select(e =>
+            {
+                var dict = (IDictionary<string, object?>)e;
+                var ts = dict.TryGetValue("Timestamp", out var v) && v is DateTime dt
+                    ? dt
+                    : DateTime.MinValue;
+                return (Event: e, Timestamp: ts);
+            })
+            .Where(x => x.Timestamp != DateTime.MinValue)
+            .GroupBy(x =>
+            {
+                var ticks = x.Timestamp.Ticks;
+                var bucketTicks = _span.Ticks;
+                return new DateTime((ticks / bucketTicks) * bucketTicks, DateTimeKind.Utc);
+            })
+            .OrderBy(g => g.Key);
+
+        foreach (var bucket in buckets)
+        {
+            if (_byField != null)
+            {
+                // Sub-group by the by-field
+                var subGroups = bucket.GroupBy(x =>
+                {
+                    var dict = (IDictionary<string, object?>)x.Event;
+                    return dict.TryGetValue(_byField, out var v) ? v?.ToString() ?? "" : "";
+                });
+
+                foreach (var sub in subGroups)
+                {
+                    var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                    row["_time"] = bucket.Key;
+                    row[_byField] = sub.Key;
+                    row[_aggregation] = ComputeAgg(sub.Select(x => x.Event).ToList());
+                    results.Add(row);
+                }
+            }
+            else
+            {
+                var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                row["_time"] = bucket.Key;
+                row[_aggregation] = ComputeAgg(bucket.Select(x => x.Event).ToList());
+                results.Add(row);
+            }
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+
+    private object ComputeAgg(List<dynamic> events)
+    {
+        if (_aggregation == "count") return events.Count;
+
+        var values = events
+            .Select(e =>
+            {
+                var dict = (IDictionary<string, object?>)e;
+                if (dict.TryGetValue(_aggField ?? "", out var v) && v != null)
+                {
+                    if (v is double d) return (double?)d;
+                    if (v is long l) return (double?)l;
+                    if (v is int i) return (double?)i;
+                    if (double.TryParse(v.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var p)) return (double?)p;
+                }
+                return (double?)null;
+            })
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToList();
+
+        if (values.Count == 0) return 0;
+
+        return _aggregation switch
+        {
+            "sum" => values.Sum(),
+            "avg" => values.Average(),
+            "min" => values.Min(),
+            "max" => values.Max(),
+            _ => (object)events.Count
+        };
+    }
+}
+
+internal sealed class LegacyFieldAliasOperator : QueryOperator
+{
+    private readonly Dictionary<string, string> _aliases;
+    public override string Name => "fieldalias";
+
+    public LegacyFieldAliasOperator(Dictionary<string, string> aliases) { _aliases = aliases; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var result = input.Select(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            foreach (var alias in _aliases)
+            {
+                if (dict.TryGetValue(alias.Value, out var val))
+                    dict[alias.Key] = val;
+            }
+            return evt;
+        });
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class LegacyTransactionOperator : QueryOperator
+{
+    private readonly List<string> _fields;
+    private readonly TimeSpan? _maxSpan;
+    private readonly int? _maxEvents;
+    public override string Name => "transaction";
+
+    public LegacyTransactionOperator(List<string> fields, TimeSpan? maxSpan, int? maxEvents)
+    {
+        _fields = fields;
+        _maxSpan = maxSpan;
+        _maxEvents = maxEvents;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        var results = new List<dynamic>();
+
+        // Group events by the transaction fields
+        var groups = events.GroupBy(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            return string.Join("|", _fields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+        });
+
+        foreach (var group in groups)
+        {
+            var orderedEvents = group
+                .Select(e =>
+                {
+                    var dict = (IDictionary<string, object?>)e;
+                    var ts = dict.TryGetValue("Timestamp", out var v) && v is DateTime dt ? dt : DateTime.MinValue;
+                    return (Event: e, Timestamp: ts);
+                })
+                .OrderBy(x => x.Timestamp)
+                .ToList();
+
+            // Split into transactions based on maxSpan and maxEvents
+            var txn = new List<(dynamic Event, DateTime Timestamp)>();
+
+            foreach (var item in orderedEvents)
+            {
+                var shouldSplit = false;
+
+                if (txn.Count > 0)
+                {
+                    if (_maxSpan.HasValue && item.Timestamp - txn[0].Timestamp > _maxSpan.Value)
+                        shouldSplit = true;
+                    if (_maxEvents.HasValue && txn.Count >= _maxEvents.Value)
+                        shouldSplit = true;
+                }
+
+                if (shouldSplit)
+                {
+                    results.Add(BuildTransaction(txn));
+                    txn.Clear();
+                }
+
+                txn.Add(item);
+            }
+
+            if (txn.Count > 0)
+                results.Add(BuildTransaction(txn));
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+
+    private dynamic BuildTransaction(List<(dynamic Event, DateTime Timestamp)> txnEvents)
+    {
+        var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+        var firstDict = (IDictionary<string, object?>)txnEvents[0].Event;
+
+        // Copy fields from first event
+        foreach (var kvp in firstDict)
+            row[kvp.Key] = kvp.Value;
+
+        // Add transaction metadata
+        row["_eventcount"] = txnEvents.Count;
+        if (txnEvents.Count > 1)
+        {
+            row["_duration"] = (txnEvents[^1].Timestamp - txnEvents[0].Timestamp).TotalSeconds;
+        }
+        else
+        {
+            row["_duration"] = 0.0;
+        }
+
+        // Concatenate raw lines
+        var rawLines = txnEvents
+            .Select(e => ((IDictionary<string, object?>)e.Event).TryGetValue("RawLine", out var v) ? v?.ToString() : null)
+            .Where(l => l != null);
+        row["_raw"] = string.Join("\n", rawLines);
+
+        return row;
+    }
+}
+
+/// <summary>
+/// EventStats: compute aggregations per group and append results to all original events.
+/// Unlike stats, eventstats is non-reducing — all original events are preserved.
+/// </summary>
+internal sealed class LegacyEventStatsOperator : QueryOperator
+{
+    private readonly List<AggregateFunction> _aggregations;
+    private readonly List<string> _groupByFields;
+    public override string Name => "eventstats";
+
+    public LegacyEventStatsOperator(List<AggregateFunction> aggs, List<string> groupBy)
+    {
+        _aggregations = aggs;
+        _groupByFields = groupBy;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+
+        if (_groupByFields.Count == 0)
+        {
+            // Global aggregation — compute once, append to all events
+            var aggValues = new Dictionary<string, object?>();
+            foreach (var agg in _aggregations)
+            {
+                var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                aggValues[key] = LegacyStatsOperator.ComputeAggregate(agg, events);
+            }
+            foreach (var evt in events)
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                foreach (var kvp in aggValues)
+                    dict[kvp.Key] = kvp.Value;
+            }
+        }
+        else
+        {
+            // Group and compute per-group, then append to each event in that group
+            var groups = events.GroupBy(evt =>
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                return string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+            });
+
+            foreach (var group in groups)
+            {
+                var groupEvents = group.ToList();
+                var aggValues = new Dictionary<string, object?>();
+                foreach (var agg in _aggregations)
+                {
+                    var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                    aggValues[key] = LegacyStatsOperator.ComputeAggregate(agg, groupEvents);
+                }
+                foreach (var evt in groupEvents)
+                {
+                    var dict = (IDictionary<string, object?>)evt;
+                    foreach (var kvp in aggValues)
+                        dict[kvp.Key] = kvp.Value;
+                }
+            }
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+/// <summary>
+/// StreamStats: compute running/cumulative aggregations as events stream through.
+/// Supports optional window parameter to limit the number of preceding events considered.
+/// </summary>
+internal sealed class LegacyStreamStatsOperator : QueryOperator
+{
+    private readonly List<AggregateFunction> _aggregations;
+    private readonly List<string> _groupByFields;
+    private readonly int _window;
+    public override string Name => "streamstats";
+
+    public LegacyStreamStatsOperator(List<AggregateFunction> aggs, List<string> groupBy, int window)
+    {
+        _aggregations = aggs;
+        _groupByFields = groupBy;
+        _window = window;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        // Track running windows per group (or global if no group-by)
+        var groupWindows = new Dictionary<string, List<dynamic>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var groupKey = _groupByFields.Count > 0
+                ? string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""))
+                : "";
+
+            if (!groupWindows.TryGetValue(groupKey, out var window))
+            {
+                window = new List<dynamic>();
+                groupWindows[groupKey] = window;
+            }
+
+            window.Add(evt);
+
+            // Keep window bounded to avoid unbounded memory growth.
+            // Trim excess entries in-place — zero allocation vs original Skip().ToList().
+            if (_window > 0 && window.Count > _window)
+            {
+                window.RemoveRange(0, window.Count - _window);
+            }
+
+            // Compute running aggregations over the (now bounded) window
+            foreach (var agg in _aggregations)
+            {
+                var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                dict[key] = LegacyStatsOperator.ComputeAggregate(agg, window);
+            }
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+/// <summary>
+/// Passthrough operator for stages that are recognized but have no real execution logic yet.
+/// Returns the input events unchanged without throwing an exception.
+/// </summary>
+internal sealed class LegacyPassthroughOperator : QueryOperator
+{
+    private readonly string _stageName;
+    public override string Name => _stageName;
+
+    public LegacyPassthroughOperator(string stageName) { _stageName = stageName; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        return Task.FromResult(input);
+    }
+}
+
+/// <summary>
+/// Stub operator for stages that are recognized by the parser but not yet implemented.
+/// Throws NotSupportedException at execution time.
+/// </summary>
+internal sealed class LegacyNotImplementedOperator : QueryOperator
+{
+    private readonly string _stageName;
+    public override string Name => _stageName;
+
+    public LegacyNotImplementedOperator(string stageName) { _stageName = stageName; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        throw new NotSupportedException($"The '{_stageName}' stage is not yet implemented.");
+    }
+}
+
+// ─── Splunk parity operators ─────────────────────────────────
+
+internal sealed class LegacyFillNullOperator : QueryOperator
+{
+    private readonly string _defaultValue;
+    private readonly List<string> _fields;
+    public override string Name => "fillnull";
+
+    public LegacyFillNullOperator(string defaultValue, List<string> fields)
+    {
+        _defaultValue = defaultValue;
+        _fields = fields;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            if (_fields.Count > 0)
+            {
+                foreach (var field in _fields)
+                {
+                    if (!dict.ContainsKey(field) || dict[field] == null)
+                        dict[field] = _defaultValue;
+                }
+            }
+            else
+            {
+                // Fill all null fields
+                foreach (var key in dict.Keys.ToList())
+                {
+                    if (dict[key] == null)
+                        dict[key] = _defaultValue;
+                }
+            }
+        }
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+internal sealed class LegacyBucketOperator : QueryOperator
+{
+    private readonly string _field;
+    private readonly TimeSpan? _span;
+    private readonly double? _numericSpan;
+    private readonly string? _alias;
+    public override string Name => "bucket";
+
+    public LegacyBucketOperator(string field, TimeSpan? span, double? numericSpan, string? alias)
+    {
+        _field = field;
+        _span = span;
+        _numericSpan = numericSpan;
+        _alias = alias;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        var targetField = _alias ?? _field;
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            if (!dict.TryGetValue(_field, out var val) || val == null) continue;
+
+            if (val is DateTime dt && _span.HasValue)
+            {
+                // Time bucketing: floor to span interval
+                var ticks = dt.Ticks - (dt.Ticks % _span.Value.Ticks);
+                dict[targetField] = new DateTime(ticks, DateTimeKind.Utc);
+            }
+            else if (_numericSpan.HasValue)
+            {
+                // Numeric bucketing: floor to span interval
+                if (BqlExpressionEvaluator.ToDoublePublic(val) is { } numVal)
+                    dict[targetField] = Math.Floor(numVal / _numericSpan.Value) * _numericSpan.Value;
+            }
+            else if (_span.HasValue && BqlExpressionEvaluator.ToDoublePublic(val) is { } epochVal)
+            {
+                // Epoch seconds bucketing
+                var spanSeconds = _span.Value.TotalSeconds;
+                dict[targetField] = Math.Floor(epochVal / spanSeconds) * spanSeconds;
+            }
+        }
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+internal sealed class LegacyMakeResultsOperator : QueryOperator
+{
+    private readonly int _count;
+    public override string Name => "makeresults";
+
+    public LegacyMakeResultsOperator(int count) { _count = count; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        // makeresults generates synthetic events, ignoring input
+        var results = new List<dynamic>();
+        var now = DateTime.UtcNow;
+        for (var i = 0; i < _count; i++)
+        {
+            var expando = new System.Dynamic.ExpandoObject();
+            var dict = (IDictionary<string, object?>)expando;
+            dict["_time"] = now;
+            dict["Timestamp"] = now;
+            dict["_raw"] = "";
+            dict["RawLine"] = "";
+            results.Add(expando);
+        }
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+}
+
+internal sealed class LegacyMvExpandOperator : QueryOperator
+{
+    private readonly string _field;
+    private readonly int _limit;
+    public override string Name => "mvexpand";
+
+    public LegacyMvExpandOperator(string field, int limit) { _field = field; _limit = limit; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var results = new List<dynamic>();
+        var count = 0;
+        foreach (var evt in input)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            if (!dict.TryGetValue(_field, out var val) || val == null)
+            {
+                results.Add(evt);
+                continue;
+            }
+
+            IEnumerable<object?> values;
+            if (val is string[] arr) values = arr;
+            else if (val is IEnumerable<object?> list) values = list;
+            else if (val is string s && s.Contains(',')) values = s.Split(',').Select(v => (object?)v.Trim());
+            else { results.Add(evt); continue; }
+
+            foreach (var v in values)
+            {
+                if (count++ >= _limit) break;
+                var newExpando = new System.Dynamic.ExpandoObject();
+                var newDict = (IDictionary<string, object?>)newExpando;
+                foreach (var kvp in dict) newDict[kvp.Key] = kvp.Value;
+                newDict[_field] = v;
+                results.Add(newExpando);
+            }
+        }
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+}
+
+internal sealed class LegacyChartOperator : QueryOperator
+{
+    private readonly List<AggregateFunction> _aggregations;
+    private readonly string? _overField;
+    private readonly string? _byField;
+    public override string Name => "chart";
+
+    public LegacyChartOperator(List<AggregateFunction> aggs, string? overField, string? byField)
+    {
+        _aggregations = aggs;
+        _overField = overField;
+        _byField = byField;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        // Chart is essentially stats with the "over" field as primary group-by
+        var groupByFields = new List<string>();
+        if (_overField != null) groupByFields.Add(_overField);
+        if (_byField != null) groupByFields.Add(_byField);
+
+        var statsOp = new LegacyStatsOperator(_aggregations, groupByFields);
+        return statsOp.ExecuteAsync(input, ct);
+    }
+}
+
+internal sealed class LegacyFillDownOperator : QueryOperator
+{
+    private readonly List<string> _fields;
+    public override string Name => "filldown";
+
+    public LegacyFillDownOperator(List<string> fields) { _fields = fields; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        var lastValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var fieldsToFill = _fields.Count > 0 ? _fields : dict.Keys.ToList();
+
+            foreach (var field in fieldsToFill)
+            {
+                if (dict.TryGetValue(field, out var val) && val != null)
+                {
+                    lastValues[field] = val;
+                }
+                else if (lastValues.TryGetValue(field, out var last) && last != null)
+                {
+                    dict[field] = last;
+                }
+            }
+        }
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+internal sealed class LegacyAddColTotalsOperator : QueryOperator
+{
+    private readonly string _labelField;
+    private readonly List<string> _fields;
+    public override string Name => "addcoltotals";
+
+    public LegacyAddColTotalsOperator(string labelField, List<string> fields)
+    {
+        _labelField = labelField;
+        _fields = fields;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        if (events.Count == 0) return Task.FromResult<IEnumerable<dynamic>>(events);
+
+        var totals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var fieldsToTotal = _fields.Count > 0 ? _fields : ((IDictionary<string, object?>)events[0]).Keys.ToList();
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            foreach (var field in fieldsToTotal)
+            {
+                if (dict.TryGetValue(field, out var val) && BqlExpressionEvaluator.ToDoublePublic(val) is { } numVal)
+                {
+                    totals[field] = totals.GetValueOrDefault(field) + numVal;
+                }
+            }
+        }
+
+        // Append totals row
+        var totalRow = new System.Dynamic.ExpandoObject();
+        var totalDict = (IDictionary<string, object?>)totalRow;
+        totalDict[_labelField] = "TOTALS";
+        foreach (var kvp in totals) totalDict[kvp.Key] = kvp.Value;
+        events.Add(totalRow);
+
+        return Task.FromResult<IEnumerable<dynamic>>(events);
+    }
+}
+
+// ─── P1-P3 new operators ─────────────────────────────────────
+
+/// <summary>
+/// Rare: find least common values of a field (inverse of top).
+/// </summary>
+internal sealed class LegacyRareOperator : QueryOperator
+{
+    private readonly int _count;
+    private readonly string _field;
+    public override string Name => "rare";
+
+    public LegacyRareOperator(int count, string field) { _count = count; _field = field; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var groups = input
+            .GroupBy(evt =>
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                return dict.TryGetValue(_field, out var v) ? v?.ToString() ?? "" : "";
+            })
+            .OrderBy(g => g.Count()) // ascending = rarest first
+            .Take(_count);
+
+        var results = groups.Select(g =>
+        {
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            row[_field] = g.Key;
+            row["count"] = g.Count();
+            row["percent"] = 0.0; // filled in below
+            return (dynamic)row;
+        }).ToList();
+
+        // Compute percentages
+        var total = results.Sum(r => (int)((IDictionary<string, object?>)r)["count"]!);
+        if (total > 0)
+        {
+            foreach (var r in results)
+            {
+                var dict = (IDictionary<string, object?>)r;
+                dict["percent"] = Math.Round((int)dict["count"]! * 100.0 / total, 2);
+            }
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+}
+
+/// <summary>
+/// Regex: filter events where a field matches (or doesn't match) a regex pattern.
+/// </summary>
+internal sealed class LegacyRegexOperator : QueryOperator
+{
+    private readonly string _field;
+    private readonly string _pattern;
+    private readonly bool _negate;
+    public override string Name => "regex";
+
+    public LegacyRegexOperator(string field, string pattern, bool negate)
+    {
+        _field = field;
+        _pattern = pattern;
+        _negate = negate;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var regex = new Regex(
+            _pattern,
+            RegexOptions.Compiled | RegexOptions.IgnoreCase,
+            TimeSpan.FromSeconds(1));
+
+        var result = input.Where(evt =>
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var value = dict.TryGetValue(_field, out var v) ? v?.ToString() ?? "" : "";
+            try
+            {
+                var match = regex.IsMatch(value);
+                return _negate ? !match : match;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        });
+
+        return Task.FromResult<IEnumerable<dynamic>>(result);
+    }
+}
+
+/// <summary>
+/// Field summary: compute statistics about each field across all events.
+/// Returns one row per field with count, distinct count, numeric min/max/avg, and sample values.
+/// </summary>
+internal sealed class LegacyFieldSummaryOperator : QueryOperator
+{
+    private readonly int _maxValues;
+    public override string Name => "fieldsummary";
+
+    public LegacyFieldSummaryOperator(int maxValues) { _maxValues = maxValues; }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+        if (events.Count == 0) return Task.FromResult<IEnumerable<dynamic>>(events);
+
+        // Collect stats per field
+        var fieldStats = new Dictionary<string, FieldStatData>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            foreach (var kvp in dict)
+            {
+                if (!fieldStats.TryGetValue(kvp.Key, out var stats))
+                {
+                    stats = new FieldStatData();
+                    fieldStats[kvp.Key] = stats;
+                }
+
+                stats.TotalCount++;
+                if (kvp.Value != null)
+                {
+                    stats.ValueCount++;
+                    var strVal = kvp.Value.ToString() ?? "";
+                    stats.DistinctValues.Add(strVal);
+                    if (stats.SampleValues.Count < _maxValues && !stats.SampleValues.Contains(strVal))
+                        stats.SampleValues.Add(strVal);
+
+                    if (BqlExpressionEvaluator.ToDoublePublic(kvp.Value) is { } numVal)
+                    {
+                        stats.NumericCount++;
+                        stats.Sum += numVal;
+                        stats.Min = Math.Min(stats.Min, numVal);
+                        stats.Max = Math.Max(stats.Max, numVal);
+                    }
+                }
+            }
+        }
+
+        var results = new List<dynamic>();
+        foreach (var kvp in fieldStats.OrderBy(f => f.Key))
+        {
+            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            row["field"] = kvp.Key;
+            row["count"] = kvp.Value.ValueCount;
+            row["distinct_count"] = kvp.Value.DistinctValues.Count;
+            row["is_exact"] = kvp.Value.DistinctValues.Count <= 1000;
+            row["numeric_count"] = kvp.Value.NumericCount;
+            row["min"] = kvp.Value.NumericCount > 0 ? kvp.Value.Min : (object?)null;
+            row["max"] = kvp.Value.NumericCount > 0 ? kvp.Value.Max : (object?)null;
+            row["mean"] = kvp.Value.NumericCount > 0 ? kvp.Value.Sum / kvp.Value.NumericCount : (object?)null;
+            row["values"] = string.Join(", ", kvp.Value.SampleValues.Take(_maxValues));
+            results.Add(row);
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+
+    private sealed class FieldStatData
+    {
+        public int TotalCount;
+        public int ValueCount;
+        public int NumericCount;
+        public double Sum;
+        public double Min = double.MaxValue;
+        public double Max = double.MinValue;
+        public HashSet<string> DistinctValues = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> SampleValues = new();
+    }
+}
+
+/// <summary>
+/// XY Series: pivot data from row format into columnar format.
+/// Takes (row_field, column_field, value_field) and creates one row per unique row_field value,
+/// with columns named after distinct column_field values.
+/// </summary>
+internal sealed class LegacyXyseriesOperator : QueryOperator
+{
+    private readonly string _rowField;
+    private readonly string _colField;
+    private readonly string _valField;
+    public override string Name => "xyseries";
+
+    public LegacyXyseriesOperator(string rowField, string colField, string valField)
+    {
+        _rowField = rowField;
+        _colField = colField;
+        _valField = valField;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var events = input.ToList();
+
+        // Group by row field, then pivot column values
+        var rowGroups = new Dictionary<string, IDictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evt in events)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var rowKey = dict.TryGetValue(_rowField, out var rv) ? rv?.ToString() ?? "" : "";
+            var colKey = dict.TryGetValue(_colField, out var cv) ? cv?.ToString() ?? "" : "";
+            var value = dict.TryGetValue(_valField, out var vv) ? vv : null;
+
+            if (!rowGroups.TryGetValue(rowKey, out var row))
+            {
+                row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                row[_rowField] = rowKey;
+                rowGroups[rowKey] = row;
+            }
+            row[colKey] = value;
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(rowGroups.Values.Cast<dynamic>().ToList());
+    }
+}
+
+/// <summary>
+/// Untable: inverse of xyseries — unpivot columnar data back into rows.
+/// </summary>
+internal sealed class LegacyUntableOperator : QueryOperator
+{
+    private readonly string _rowField;
+    private readonly string _colField;
+    private readonly string _valField;
+    public override string Name => "untable";
+
+    public LegacyUntableOperator(string rowField, string colField, string valField)
+    {
+        _rowField = rowField;
+        _colField = colField;
+        _valField = valField;
+    }
+
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var results = new List<dynamic>();
+
+        foreach (var evt in input)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var rowValue = dict.TryGetValue(_rowField, out var rv) ? rv : null;
+
+            foreach (var kvp in dict)
+            {
+                if (string.Equals(kvp.Key, _rowField, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                row[_rowField] = rowValue;
+                row[_colField] = kvp.Key;
+                row[_valField] = kvp.Value;
+                results.Add(row);
+            }
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+}
+
+/// <summary>
+/// InputLookup: load all rows from a lookup table as events.
+/// Replaces the passthrough stub with real IKnowledgeStorage integration.
+/// </summary>
+internal sealed class LegacyInputLookupOperator : QueryOperator
+{
+    private readonly string _lookupName;
+    private readonly Cabinet.Core.Interfaces.IKnowledgeStorage _storage;
+    public override string Name => "inputlookup";
+
+    public LegacyInputLookupOperator(string lookupName, Cabinet.Core.Interfaces.IKnowledgeStorage storage)
+    {
+        _lookupName = lookupName;
+        _storage = storage;
+    }
+
+    public override async Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
+        if (lookup == null)
+            return Enumerable.Empty<dynamic>();
+
+        var results = new List<dynamic>();
+        foreach (var row in lookup.Rows)
+        {
+            var expando = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            foreach (var kvp in row)
+            {
+                expando[kvp.Key] = kvp.Value;
+            }
+            results.Add(expando);
+        }
+
+        return results;
+    }
+}
+
+/// <summary>
+/// Lookup: enrich events by joining with a lookup table on a key field.
+/// For each event, looks up the key field value in the lookup table and appends matching columns.
+/// </summary>
+internal sealed class LegacyLookupOperator : QueryOperator
+{
+    private readonly string _lookupName;
+    private readonly string _keyField;
+    private readonly List<string> _outputFields;
+    private readonly Cabinet.Core.Interfaces.IKnowledgeStorage _storage;
+    public override string Name => "lookup";
+
+    public LegacyLookupOperator(string lookupName, string keyField, List<string> outputFields, Cabinet.Core.Interfaces.IKnowledgeStorage storage)
+    {
+        _lookupName = lookupName;
+        _keyField = keyField;
+        _outputFields = outputFields;
+        _storage = storage;
+    }
+
+    public override async Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
+        if (lookup == null)
+            return input; // No lookup found, pass through unchanged
+
+        // Build index: key field value → lookup row (first match wins)
+        var index = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in lookup.Rows)
+        {
+            if (row.TryGetValue(_keyField, out var keyVal) && !index.ContainsKey(keyVal))
+            {
+                index[keyVal] = row;
+            }
+        }
+
+        // Determine which fields to output from the lookup
+        var fieldsToOutput = _outputFields.Count > 0
+            ? _outputFields
+            : lookup.Columns.Where(c => !string.Equals(c, _keyField, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var results = new List<dynamic>();
+        foreach (var evt in input)
+        {
+            var dict = (IDictionary<string, object?>)evt;
+            var keyValue = dict.TryGetValue(_keyField, out var kv) ? kv?.ToString() : null;
+
+            if (keyValue != null && index.TryGetValue(keyValue, out var lookupRow))
+            {
+                foreach (var field in fieldsToOutput)
+                {
+                    if (lookupRow.TryGetValue(field, out var val))
+                    {
+                        dict[field] = val;
+                    }
+                }
+            }
+
+            results.Add(evt);
+        }
+
+        return results;
+    }
+}
