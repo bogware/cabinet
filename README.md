@@ -1,7 +1,7 @@
 # Cabinet - Enterprise Log Intelligence System
 
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple)](https://dotnet.microsoft.com/)
-[![Build](https://img.shields.io/github/actions/workflow/status/draxios/cabinet/ci.yml?branch=main)](https://github.com/draxios/cabinet/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/bogware/cabinet/ci.yml?branch=main)](https://github.com/bogware/cabinet/actions)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com)
 
