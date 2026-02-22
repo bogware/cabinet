@@ -42,20 +42,6 @@ public sealed class DataModelAccelerationService : BackgroundService
         return model;
     }
 
-    /// <summary>Register a data model for acceleration (synchronous convenience wrapper)</summary>
-    public DataModel RegisterModel(DataModel model)
-    {
-        _models[model.Id] = model;
-        // Fire-and-forget persistence — best effort, will be retried on next rebuild cycle
-        _ = Task.Run(async () =>
-        {
-            try { await _storage.SaveModelAsync(model); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist data model '{Name}'", model.Name); }
-        });
-        _logger.LogInformation("Registered data model '{Name}' (id: {Id})", model.Name, model.Id);
-        return model;
-    }
-
     /// <summary>Get a registered data model</summary>
     public DataModel? GetModel(string id) => _models.TryGetValue(id, out var m) ? m : null;
 
@@ -68,19 +54,6 @@ public sealed class DataModelAccelerationService : BackgroundService
         _summaries.TryRemove(id, out _);
         var removed = _models.TryRemove(id, out _);
         await _storage.DeleteModelAsync(id, cancellationToken);
-        return removed;
-    }
-
-    /// <summary>Delete a data model and its summaries (synchronous convenience wrapper)</summary>
-    public bool DeleteModel(string id)
-    {
-        _summaries.TryRemove(id, out _);
-        var removed = _models.TryRemove(id, out _);
-        _ = Task.Run(async () =>
-        {
-            try { await _storage.DeleteModelAsync(id); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to delete data model {Id} from storage", id); }
-        });
         return removed;
     }
 

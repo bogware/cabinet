@@ -1,85 +1,237 @@
 namespace Cabinet.Core.Models;
 
+/// <summary>
+/// SSO configuration for Cabinet authentication.
+/// Currently only OIDC is implemented end-to-end (see <see cref="OidcSettings"/>).
+/// SAML 2.0 and LDAP configuration models exist as foundation for future implementation
+/// but are not yet wired to authentication providers. See ADR-008 in ARCHITECTURE.md.
+/// </summary>
 public sealed class SsoConfiguration
 {
+    /// <summary>
+    /// Enable SSO authentication. When true, the configured <see cref="Provider"/> is activated
+    /// alongside API key authentication. Currently only <see cref="SsoProviderType.Oidc"/> is functional.
+    /// </summary>
     public bool Enabled { get; set; }
 
+    /// <summary>
+    /// SSO provider type. Only <see cref="SsoProviderType.Oidc"/> is currently implemented.
+    /// Selecting <see cref="SsoProviderType.Saml"/> or <see cref="SsoProviderType.Ldap"/>
+    /// will log a warning and fall through without configuring authentication.
+    /// </summary>
     public SsoProviderType Provider { get; set; } = SsoProviderType.Oidc;
 
+    /// <summary>
+    /// OpenID Connect settings. This is the recommended and only implemented SSO path.
+    /// </summary>
     public OidcSettings? Oidc { get; set; }
 
+    /// <summary>
+    /// SAML 2.0 settings. Configuration foundation only — not yet implemented.
+    /// OIDC is the recommended SSO path. SAML 2.0 support requires the Sustainsys.Saml2
+    /// package and is planned for a future release.
+    /// </summary>
     public SamlSettings? Saml { get; set; }
 
+    /// <summary>
+    /// LDAP/Active Directory settings. Configuration foundation only — not yet implemented.
+    /// OIDC is the recommended SSO path. LDAP support requires the
+    /// Novell.Directory.Ldap.NETStandard package and is planned for a future release.
+    /// </summary>
     public LdapSettings? Ldap { get; set; }
 
+    /// <summary>
+    /// Maps external identity claims (from OIDC tokens or future SAML assertions)
+    /// to Cabinet <see cref="SystemRole"/> assignments and index permissions.
+    /// </summary>
     public List<ClaimRoleMapping> RoleMappings { get; set; } = new();
 
+    /// <summary>
+    /// When true, users authenticating via SSO are automatically provisioned
+    /// with <see cref="DefaultRole"/> if no <see cref="RoleMappings"/> match.
+    /// </summary>
     public bool AutoProvision { get; set; } = true;
 
+    /// <summary>
+    /// Default role assigned to SSO-authenticated users when no claim mapping matches.
+    /// </summary>
     public SystemRole DefaultRole { get; set; } = SystemRole.Viewer;
 }
 
+/// <summary>
+/// SSO provider type selector. Only <see cref="Oidc"/> is currently implemented.
+/// <see cref="Saml"/> and <see cref="Ldap"/> are reserved for future implementation.
+/// </summary>
 public enum SsoProviderType
 {
+    /// <summary>
+    /// OpenID Connect — the recommended and only implemented SSO provider.
+    /// Supports JWT Bearer tokens via any OIDC-compliant identity provider
+    /// (Entra ID, Okta, Keycloak, Auth0, etc.).
+    /// </summary>
     Oidc,
+
+    /// <summary>
+    /// SAML 2.0 — configuration foundation only, not yet implemented.
+    /// Requires the Sustainsys.Saml2 NuGet package. Planned for future release.
+    /// </summary>
     Saml,
+
+    /// <summary>
+    /// LDAP / Active Directory — configuration foundation only, not yet implemented.
+    /// Requires the Novell.Directory.Ldap.NETStandard NuGet package. Planned for future release.
+    /// </summary>
     Ldap
 }
 
+/// <summary>
+/// OpenID Connect authentication settings. This is the only SSO provider currently
+/// implemented in Cabinet. Configured via the <c>Sso:Oidc</c> configuration section.
+/// Supports any OIDC-compliant identity provider (Entra ID, Okta, Keycloak, Auth0, etc.).
+/// </summary>
 public sealed class OidcSettings
 {
+    /// <summary>
+    /// OIDC authority URL (issuer). Example: <c>https://login.microsoftonline.com/{tenant}/v2.0</c>
+    /// </summary>
     public required string Authority { get; set; }
 
+    /// <summary>
+    /// OIDC client (application) ID registered with the identity provider.
+    /// </summary>
     public required string ClientId { get; set; }
 
+    /// <summary>
+    /// OIDC client secret. Required for confidential clients. Use environment variables
+    /// or user-secrets in production — never hardcode.
+    /// </summary>
     public string? ClientSecret { get; set; }
 
+    /// <summary>
+    /// OIDC scopes to request. Defaults to openid, profile, email.
+    /// </summary>
     public string[] Scopes { get; set; } = new[] { "openid", "profile", "email" };
 
+    /// <summary>
+    /// OAuth2 callback path for authorization code flow.
+    /// </summary>
     public string CallbackPath { get; set; } = "/auth/callback";
 
+    /// <summary>
+    /// Name of the JWT claim containing group memberships, used for role mapping.
+    /// </summary>
     public string GroupsClaim { get; set; } = "groups";
 }
 
+/// <summary>
+/// SAML 2.0 authentication settings. Configuration foundation only — not yet implemented.
+/// OIDC is the recommended SSO path. SAML 2.0 support requires the Sustainsys.Saml2
+/// NuGet package and is planned for a future release. These settings are present so that
+/// configuration can be prepared ahead of the implementation.
+/// </summary>
 public sealed class SamlSettings
 {
+    /// <summary>
+    /// Service Provider entity ID (your application's identifier in the IdP).
+    /// </summary>
     public required string EntityId { get; set; }
 
+    /// <summary>
+    /// IdP metadata URL for federation metadata discovery.
+    /// </summary>
     public required string MetadataUrl { get; set; }
 
+    /// <summary>
+    /// Assertion Consumer Service (ACS) URL where the IdP posts SAML responses.
+    /// </summary>
     public string? AssertionConsumerServiceUrl { get; set; }
 
+    /// <summary>
+    /// X.509 certificate (PEM or Base64) for signature validation.
+    /// </summary>
     public string? Certificate { get; set; }
 
+    /// <summary>
+    /// Require the IdP to sign SAML assertions. Strongly recommended for production.
+    /// </summary>
     public bool RequireSignedAssertions { get; set; } = true;
 }
 
+/// <summary>
+/// LDAP / Active Directory authentication settings. Configuration foundation only — not yet implemented.
+/// OIDC is the recommended SSO path. LDAP support requires the Novell.Directory.Ldap.NETStandard
+/// NuGet package and is planned for a future release. These settings are present so that
+/// configuration can be prepared ahead of the implementation.
+/// </summary>
 public sealed class LdapSettings
 {
+    /// <summary>
+    /// LDAP server hostname or IP address.
+    /// </summary>
     public required string Server { get; set; }
 
+    /// <summary>
+    /// LDAP server port. Defaults to 636 (LDAPS). Use 389 for non-TLS (not recommended).
+    /// </summary>
     public int Port { get; set; } = 636;
 
+    /// <summary>
+    /// Use SSL/TLS for the LDAP connection. Strongly recommended for production.
+    /// </summary>
     public bool UseSsl { get; set; } = true;
 
+    /// <summary>
+    /// Base Distinguished Name for user searches (e.g., <c>DC=example,DC=com</c>).
+    /// </summary>
     public required string BaseDn { get; set; }
 
+    /// <summary>
+    /// Bind DN for authenticating to the LDAP server (service account).
+    /// Use environment variables in production — never hardcode credentials.
+    /// </summary>
     public string? BindDn { get; set; }
 
+    /// <summary>
+    /// Bind password for the service account.
+    /// Use environment variables in production — never hardcode credentials.
+    /// </summary>
     public string? BindPassword { get; set; }
 
+    /// <summary>
+    /// LDAP filter for user lookup. <c>{0}</c> is replaced with the username.
+    /// Default uses sAMAccountName for Active Directory compatibility.
+    /// </summary>
     public string UserSearchFilter { get; set; } = "(sAMAccountName={0})";
 
+    /// <summary>
+    /// Optional LDAP filter for group membership lookup.
+    /// </summary>
     public string? GroupSearchFilter { get; set; }
 }
 
+/// <summary>
+/// Maps an external identity claim (from OIDC JWT or future SAML assertion)
+/// to a Cabinet <see cref="SystemRole"/> and optional per-index permissions.
+/// </summary>
 public sealed class ClaimRoleMapping
 {
+    /// <summary>
+    /// The claim type to match (e.g., <c>groups</c>, <c>role</c>, <c>department</c>).
+    /// </summary>
     public required string ClaimType { get; set; }
 
+    /// <summary>
+    /// The claim value to match (case-insensitive comparison).
+    /// </summary>
     public required string ClaimValue { get; set; }
 
+    /// <summary>
+    /// Cabinet role assigned when this claim matches.
+    /// </summary>
     public SystemRole Role { get; set; } = SystemRole.Viewer;
 
+    /// <summary>
+    /// Optional per-index permissions granted when this claim matches.
+    /// </summary>
     public List<IndexPermission> IndexPermissions { get; set; } = new();
 }

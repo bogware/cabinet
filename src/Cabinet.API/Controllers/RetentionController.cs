@@ -15,15 +15,20 @@ public class RetentionController : ControllerBase
     private static readonly object _lock = new();
 
     /// <summary>
-    /// List all retention policies.
+    /// List all retention policies with pagination.
     /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(List<RetentionPolicyDto>), StatusCodes.Status200OK)]
-    public IActionResult GetPolicies()
+    public IActionResult GetPolicies([FromQuery] int offset = 0, [FromQuery] int count = 100)
     {
+        count = Math.Clamp(count, 1, 1000);
+        offset = Math.Max(0, offset);
+
         lock (_lock)
         {
-            return Ok(_policies.Values.ToList());
+            var all = _policies.Values.ToList();
+            Response.Headers["X-Total-Count"] = all.Count.ToString();
+            return Ok(all.Skip(offset).Take(count).ToList());
         }
     }
 

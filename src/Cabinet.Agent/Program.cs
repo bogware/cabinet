@@ -95,8 +95,12 @@ public static class Program
             return new FileMonitorService(agentConfig, registry, forwarder, logger);
         });
 
-        // Support systemd on Linux
+        // Support systemd on Linux and Windows Service
         builder.Services.AddSystemd();
+        builder.Services.AddWindowsService(options =>
+        {
+            options.ServiceName = "CabinetAgent";
+        });
 
         var host = builder.Build();
 

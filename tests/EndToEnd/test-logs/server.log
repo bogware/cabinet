@@ -1,0 +1,20 @@
+2024-12-07 10:00:00 [INFO] Server starting on port 27015
+2024-12-07 10:00:01 [INFO] Loading map c1m1_hotel
+2024-12-07 10:00:02 [DEBUG] Initializing network subsystem
+2024-12-07 10:00:03 [INFO] Server ready, waiting for connections
+2024-12-07 10:00:10 [INFO] Player "TestPlayer1" connected (STEAM_0:1:12345678)
+2024-12-07 10:00:11 [INFO] Player "TestPlayer2" connected (STEAM_0:0:87654321)
+2024-12-07 10:00:15 [DEBUG] Processing game tick 1000
+2024-12-07 10:00:30 [WARNING] High latency detected for player "TestPlayer1": 150ms
+2024-12-07 10:00:45 [ERROR] Failed to load plugin "custom_plugin": file not found
+2024-12-07 10:01:00 [INFO] Map change requested: c1m2_streets
+2024-12-07 10:01:01 [DEBUG] Saving player data
+2024-12-07 10:01:02 [INFO] Map loaded: c1m2_streets
+2024-12-07 10:01:10 [WARNING] Player "TestPlayer2" has unusual movement speed
+2024-12-07 10:01:15 [ERROR] Database connection timeout after 30s
+2024-12-07 10:01:20 [INFO] Retrying database connection...
+2024-12-07 10:01:21 [INFO] Database connection restored
+2024-12-07 10:01:30 [DEBUG] Processing game tick 2000
+2024-12-07 10:01:45 [INFO] Player "TestPlayer1" disconnected
+2024-12-07 10:02:00 [ERROR] Plugin "admin_tools" threw unhandled exception: NullReferenceException
+2024-12-07 10:02:15 [INFO] Server shutting down gracefully

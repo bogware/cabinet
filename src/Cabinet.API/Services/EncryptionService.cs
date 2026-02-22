@@ -151,8 +151,16 @@ public sealed class EncryptionService : IDisposable
         var newKey = new byte[KeySize];
         RandomNumberGenerator.Fill(newKey);
         var tempPath = keyPath + ".tmp";
-        await File.WriteAllBytesAsync(tempPath, newKey, cancellationToken);
-        File.Move(tempPath, keyPath, overwrite: true);
+        try
+        {
+            await File.WriteAllBytesAsync(tempPath, newKey, cancellationToken);
+            File.Move(tempPath, keyPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
+            throw;
+        }
 
         // Set restrictive file permissions (owner-only read/write)
         if (!OperatingSystem.IsWindows())

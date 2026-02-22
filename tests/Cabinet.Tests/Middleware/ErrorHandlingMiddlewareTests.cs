@@ -93,7 +93,7 @@ public class ErrorHandlingMiddlewareTests
     }
 
     [Fact]
-    public async Task InvokeAsync_ClientException_ReturnsGenericDetail()
+    public async Task InvokeAsync_ClientException_IncludesExceptionMessage()
     {
         var middleware = new ErrorHandlingMiddleware(
             _ => throw new ArgumentException("Missing required field: name"),
@@ -104,9 +104,9 @@ public class ErrorHandlingMiddlewareTests
 
         context.Response.Body.Seek(0, SeekOrigin.Begin);
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        // Middleware uses a generic detail message for ArgumentException, not the actual exception message
-        body.Should().Contain("Invalid request parameters.");
-        body.Should().NotContain("Missing required field: name");
+        // Client error messages are safe to expose — helps API consumers debug issues
+        body.Should().Contain("Invalid request parameters:");
+        body.Should().Contain("Missing required field: name");
     }
 
     private static DefaultHttpContext CreateContext()

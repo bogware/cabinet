@@ -23,6 +23,11 @@ public sealed class BqlLexer
     private const int MaxTokenCount = 10_000;
 
     /// <summary>
+    /// Maximum length for a single string literal token to prevent memory exhaustion.
+    /// </summary>
+    private const int MaxStringLiteralLength = 1_000_000;
+
+    /// <summary>
     /// Tokenize the entire input into a list of tokens
     /// </summary>
     public List<BqlToken> Tokenize()
@@ -135,6 +140,11 @@ public sealed class BqlLexer
 
             sb.Append(ch);
             _pos++;
+
+            if (sb.Length > MaxStringLiteralLength)
+                throw new QueryParseException(
+                    $"String literal exceeds maximum length ({MaxStringLiteralLength})",
+                    $"position {start}");
         }
 
         throw new QueryParseException($"Unterminated string literal starting at position {start}", $"position {start}");

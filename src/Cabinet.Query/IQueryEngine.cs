@@ -8,6 +8,16 @@ namespace Cabinet.Query;
 public interface IQueryEngine
 {
     Task<QueryResult> ExecuteAsync(QueryExecutionContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Execute a query and stream results as IAsyncEnumerable without materializing all results in memory.
+    /// For simple search queries (no pipeline stages), results stream directly from storage.
+    /// For queries with pipeline stages (aggregation, sort, etc.), results are materialized internally
+    /// then yielded one at a time.
+    /// </summary>
+    IAsyncEnumerable<dynamic> ExecuteStreamAsync(
+        QueryExecutionContext context,
+        CancellationToken cancellationToken = default);
 }
 
 public class QueryExecutionContext

@@ -26,10 +26,13 @@ public class FieldExtractionsController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(List<FieldExtraction>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetAll()
+    public async Task<IActionResult> GetAll([FromQuery] int offset = 0, [FromQuery] int count = 100)
     {
-        var extractions = await _storage.GetAllAsync();
-        return Ok(extractions);
+        count = Math.Clamp(count, 1, 1000);
+        offset = Math.Max(0, offset);
+        var all = (await _storage.GetAllAsync()).ToList();
+        Response.Headers["X-Total-Count"] = all.Count.ToString();
+        return Ok(all.Skip(offset).Take(count).ToList());
     }
 
     /// <summary>

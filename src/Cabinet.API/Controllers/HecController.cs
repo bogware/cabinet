@@ -147,7 +147,6 @@ public class HecController : ControllerBase
     /// Metadata (host, sourcetype, index) provided via query parameters.
     /// </summary>
     [HttpPost("raw")]
-    [Consumes("text/plain")]
     [RequireCapability(Capability.Ingest)]
     [RequestSizeLimit(5 * 1024 * 1024)] // 5 MB max per HEC request
     [ProducesResponseType(typeof(HecResponse), StatusCodes.Status200OK)]

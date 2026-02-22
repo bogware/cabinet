@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Cabinet.Core.Interfaces;
@@ -6,7 +8,6 @@ using Cabinet.API.Middleware;
 using Cabinet.Query;
 using Cabinet.Query.Bql;
 using Cabinet.Query.NaturalLanguage;
-using System.Runtime.CompilerServices;
 
 namespace Cabinet.API.Controllers;
 
@@ -158,33 +159,96 @@ public class QueryController : ControllerBase
     }
 
     /// <summary>
-    /// Stream query results
+    /// Stream query results as newline-delimited JSON (NDJSON).
+    /// Each result is a complete JSON object on its own line, enabling
+    /// incremental parsing without waiting for the full result set.
+    /// For simple search queries, results stream directly from storage
+    /// without materializing all events in memory.
     /// </summary>
     [HttpPost("stream")]
     [RequireCapability(Capability.Search)]
-    [ProducesResponseType(typeof(LogEvent), StatusCodes.Status200OK)]
-    public async IAsyncEnumerable<LogEvent> StreamQuery(
-        [FromBody] QueryRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task StreamQuery([FromBody] QueryRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Query))
         {
-            yield break;
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(
+                new ProblemDetails { Detail = "Query is required", Status = 400, Title = "Bad Request" },
+                cancellationToken);
+            return;
         }
 
         if (request.Query.Length > 10_000)
         {
-            yield break;
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(
+                new ProblemDetails { Detail = "Query too long. Maximum length is 10,000 characters.", Status = 400, Title = "Bad Request" },
+                cancellationToken);
+            return;
         }
+
+        // Validate query syntax before starting the stream to enable proper error responses.
+        // Once streaming begins, the HTTP status code is committed and cannot be changed.
+        try
+        {
+            _queryParser.Parse(request.Query);
+        }
+        catch (QueryParseException ex)
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(
+                new ProblemDetails { Detail = $"Invalid query syntax: {ex.Message}", Status = 400, Title = "Bad Request" },
+                cancellationToken);
+            return;
+        }
+
+        // Begin NDJSON streaming response
+        Response.ContentType = "application/x-ndjson";
+        Response.Headers.CacheControl = "no-cache";
 
         // Enforce a 5-minute timeout on streaming queries to prevent resource exhaustion
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
 
         var tenantIndex = HttpContext.GetTenantIndexPrefix();
-        await foreach (var evt in _queryEngine.ExecuteStreamAsync(request.Query, request.Parameters, timeoutCts.Token, index: tenantIndex))
+        var context = new QueryExecutionContext
         {
-            yield return evt;
+            Query = request.Query,
+            Limit = 100_000,
+            Index = tenantIndex,
+            Timeout = TimeSpan.FromMinutes(5)
+        };
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new JsonStringEnumConverter() }
+        };
+
+        try
+        {
+            await foreach (var evt in _queryEngine.ExecuteStreamAsync(context, timeoutCts.Token))
+            {
+                object eventObj = evt;
+                var line = JsonSerializer.Serialize(eventObj, eventObj.GetType(), jsonOptions);
+                await Response.WriteAsync(line, timeoutCts.Token);
+                await Response.WriteAsync("\n", timeoutCts.Token);
+                await Response.Body.FlushAsync(timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Query timeout — stream ends; client sees incomplete NDJSON
+            _logger.LogWarning("Stream query timed out: {Query}",
+                request.Query[..Math.Min(200, request.Query.Length)]);
+        }
+        catch (Exception ex)
+        {
+            // Error during streaming — can't change status code since headers are committed
+            _logger.LogError(ex, "Stream query failed during execution: {Query}",
+                request.Query[..Math.Min(200, request.Query.Length)]);
         }
     }
 
@@ -240,6 +304,10 @@ public class QueryController : ControllerBase
         count = Math.Clamp(count, 1, 1000);
         offset = Math.Max(0, offset);
 
+        // Note: GetAllAsync returns the full list; Skip/Take happens in-memory.
+        // For production scale, ISavedQueryStorage should accept offset/count parameters
+        // to push pagination to the database. This is acceptable for v1.0 since saved
+        // queries are a low-cardinality object (typically < 100 per deployment).
         var queries = await _savedQueryStorage.GetAllAsync();
         Response.Headers["X-Total-Count"] = queries.Count.ToString();
         return Ok(queries.Skip(offset).Take(count));
@@ -583,8 +651,11 @@ public class QueryController : ControllerBase
 
             if (request.Format.Equals("csv", StringComparison.OrdinalIgnoreCase))
             {
-                var csv = ExportDynamicToCsv(resultList);
-                return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", "export.csv");
+                // Stream CSV directly to response body to avoid materializing large exports in memory
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = "attachment; filename=export.csv";
+                await WriteCsvToStreamAsync(Response.Body, resultList);
+                return new EmptyResult();
             }
 
             // Default: JSON
@@ -661,14 +732,14 @@ public class QueryController : ControllerBase
     }
 
     /// <summary>
-    /// Convert dynamic results (ExpandoObject or LogEvent) to CSV.
-    /// Preserves aggregation columns that would be lost by LogEvent conversion.
+    /// Stream dynamic results (ExpandoObject or LogEvent) as CSV directly to the response body.
+    /// Avoids materializing the entire CSV in memory for large exports.
     /// </summary>
-    private static string ExportDynamicToCsv(List<dynamic> events)
+    private static async Task WriteCsvToStreamAsync(Stream stream, List<dynamic> events)
     {
-        if (events.Count == 0) return "";
+        if (events.Count == 0) return;
 
-        var sb = new System.Text.StringBuilder();
+        using var writer = new StreamWriter(stream, System.Text.Encoding.UTF8, bufferSize: 8192, leaveOpen: true);
 
         // Collect all unique keys across all events
         var allKeys = new List<string>();
@@ -692,7 +763,7 @@ public class QueryController : ControllerBase
             }
         }
 
-        sb.AppendLine(string.Join(",", allKeys.Select(EscapeCsvField)));
+        await writer.WriteLineAsync(string.Join(",", allKeys.Select(EscapeCsvField)));
 
         foreach (dynamic evt in events)
         {
@@ -720,14 +791,17 @@ public class QueryController : ControllerBase
                     values.Add(EscapeCsvField(val));
                 }
             }
-            sb.AppendLine(string.Join(",", values));
+            await writer.WriteLineAsync(string.Join(",", values));
         }
 
-        return sb.ToString();
+        await writer.FlushAsync();
     }
 
     private static string EscapeCsvField(string value)
     {
+        // Prevent CSV formula injection by prefixing dangerous characters with a single quote
+        if (value.Length > 0 && (value[0] == '=' || value[0] == '+' || value[0] == '-' || value[0] == '@' || value[0] == '\t' || value[0] == '\r'))
+            value = "'" + value;
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
             return $"\"{value.Replace("\"", "\"\"")}\"";
         return value;

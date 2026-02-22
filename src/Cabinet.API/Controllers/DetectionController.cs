@@ -53,6 +53,7 @@ public class DetectionController : ControllerBase
 
         foreach (var evt in events)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var result = await _scumscanDetector.AnalyzeAsync(evt);
             if (result != null)
             {
@@ -86,6 +87,7 @@ public class DetectionController : ControllerBase
 
         foreach (var evt in events)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var result = await _hackwatchDetector.AnalyzeAsync(evt);
             if (result != null)
             {
@@ -119,6 +121,7 @@ public class DetectionController : ControllerBase
 
         foreach (var evt in events)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var result = await _adminabuseDetector.AnalyzeAsync(evt);
             if (result != null)
             {

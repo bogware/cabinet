@@ -148,6 +148,8 @@ public static class BqlExpressionEvaluator
         // Null values never match LIKE patterns (consistent with SQL/Splunk semantics)
         if (rawValue == null) return false;
         var value = rawValue.ToString() ?? "";
+        // Guard against excessively long LIKE patterns
+        if (expr.Pattern.Length > 10_000) return false;
         // Convert SQL LIKE pattern to regex: first replace wildcards, then escape the rest
         var pattern = expr.Pattern;
         // Temporarily replace % and _ with placeholders that won't be escaped
@@ -301,6 +303,7 @@ public static class BqlExpressionEvaluator
         if (args.ElementAtOrDefault(0) == null) return false;
         var str = args[0]!.ToString() ?? "";
         var pattern = args.ElementAtOrDefault(1)?.ToString() ?? "";
+        if (pattern.Length > 10_000) return false; // Guard against excessively long patterns
         // SQL-like LIKE: % = any chars, _ = single char
         var regex = "^" + Regex.Escape(pattern).Replace("%", ".*").Replace("_", ".") + "$";
         try { return Regex.IsMatch(str, regex, RegexOptions.IgnoreCase, RegexTimeout); }
@@ -370,7 +373,13 @@ public static class BqlExpressionEvaluator
         var str = args.ElementAtOrDefault(0)?.ToString();
         var pattern = args.ElementAtOrDefault(1)?.ToString();
         if (str == null || pattern == null) return false;
-        try { return Regex.IsMatch(str, pattern, RegexOptions.IgnoreCase, RegexTimeout); }
+        if (pattern.Length > 10_000) return false; // Guard against excessively long patterns
+        try
+        {
+            // Pre-compile with timeout to protect against ReDoS during compilation
+            var regex = new Regex(pattern, RegexOptions.IgnoreCase, RegexTimeout);
+            return regex.IsMatch(str);
+        }
         catch { return false; }
     }
 

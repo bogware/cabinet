@@ -195,6 +195,38 @@ API/CLI → Services → Data → Core
 - If key database is leaked, SHA-256 hashes are faster to brute-force than bcrypt
 - Acceptable because: (a) keys are high-entropy, (b) keys can be rotated, (c) defense-in-depth via access controls
 
+### ADR-008: OIDC-First SSO Strategy (SAML 2.0 and LDAP Not Yet Implemented)
+
+**Decision:** Implement OpenID Connect (OIDC) as the first and currently only SSO provider. SAML 2.0 and LDAP configuration models exist as foundation but have no runtime implementation.
+
+**Context:** Cabinet needs enterprise SSO to move beyond API key-only authentication. The three main enterprise SSO protocols are OIDC, SAML 2.0, and LDAP/AD.
+
+**Status:** OIDC is fully implemented. SAML 2.0 and LDAP are **not implemented** — only their configuration models (`SamlSettings`, `LdapSettings` in `Cabinet.Core/Models/SsoConfiguration.cs`) exist. Selecting SAML or LDAP as the SSO provider logs a warning and does not configure any authentication handler.
+
+**Rationale:**
+- OIDC is the modern standard — supported by all major identity providers (Entra ID, Okta, Keycloak, Auth0, Google Workspace)
+- ASP.NET Core has first-party OIDC/JWT support via `Microsoft.AspNetCore.Authentication.JwtBearer` — no third-party packages required
+- SAML 2.0 requires `Sustainsys.Saml2` (third-party) and has a more complex integration surface (XML signatures, assertion parsing, artifact resolution)
+- LDAP requires `Novell.Directory.Ldap.NETStandard` (third-party) and adds connection pool management, bind credential handling, and direct coupling to directory infrastructure
+- Most organizations that still use SAML or LDAP also have an OIDC-capable identity provider (or can front LDAP with one like Keycloak)
+
+**Implementation details:**
+- `SsoConfiguration` (`Core/Models/SsoConfiguration.cs`) — top-level config with `Provider` enum (`Oidc`, `Saml`, `Ldap`)
+- `OidcAuthenticationExtensions.AddCabinetSso()` (`API/Authentication/OidcAuthenticationService.cs`) — wires OIDC JWT Bearer auth alongside API key auth
+- `ClaimRoleMapper` — maps OIDC claims to Cabinet `SystemRole` and `Capability` assignments
+- `NoOpAuthHandler` — fallback Bearer handler when SSO is disabled
+
+**What is NOT implemented:**
+- SAML 2.0 authentication handler (would require `Sustainsys.Saml2.AspNetCore2` package)
+- LDAP bind authentication (would require `Novell.Directory.Ldap.NETStandard` package)
+- SAML/LDAP claim extraction and role mapping at runtime
+- SAML Single Logout (SLO)
+- LDAP group membership resolution
+
+**Future path:**
+- SAML 2.0: Add `Sustainsys.Saml2` package, implement handler in `AddCabinetSso()` SAML branch, map SAML attributes via `ClaimRoleMapper`
+- LDAP: Add `Novell.Directory.Ldap.NETStandard` package, implement custom `AuthenticationHandler<LdapSettings>`, bind-verify credentials, resolve group membership
+
 ## Thread-Safety Patterns
 
 ### Pattern 1: Volatile + SemaphoreSlim Initialization

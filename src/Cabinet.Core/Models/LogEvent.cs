@@ -11,7 +11,6 @@ public sealed class LogEvent
     public LogEvent()
     {
         Fields = new ConcurrentDictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        Tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -76,20 +75,20 @@ public sealed class LogEvent
 
     /// <summary>
     /// Tags for categorization and filtering.
-    /// Use AddTag/HasTag/GetTagSnapshot for thread-safe access.
-    /// The property setter is kept for deserialization compatibility.
+    /// For concurrent access, use AddTag/HasTag/GetTagSnapshot which are lock-protected.
+    /// Direct property access is fine during single-threaded parsing/construction.
     /// </summary>
-    public HashSet<string> Tags { get; set; }
+    public HashSet<string> Tags { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _tagsLock = new();
 
-    /// <summary>Thread-safe tag add</summary>
+    /// <summary>Thread-safe tag add (use for concurrent scenarios)</summary>
     public void AddTag(string tag) { lock (_tagsLock) Tags.Add(tag); }
 
-    /// <summary>Thread-safe tag check</summary>
+    /// <summary>Thread-safe tag check (use for concurrent scenarios)</summary>
     public bool HasTag(string tag) { lock (_tagsLock) return Tags.Contains(tag); }
 
-    /// <summary>Thread-safe snapshot of all tags</summary>
+    /// <summary>Thread-safe snapshot of all tags (use for concurrent iteration)</summary>
     public string[] GetTagSnapshot() { lock (_tagsLock) return Tags.ToArray(); }
 
     /// <summary>

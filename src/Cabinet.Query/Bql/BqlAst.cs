@@ -709,3 +709,20 @@ public sealed class SubsearchStage : BqlStage
         SubsearchQuery = subsearchQuery;
     }
 }
+
+/// <summary>
+/// Multisearch stage: multisearch [search "q1"] [search "q2"] [search "q3"]
+/// Runs multiple independent search queries and combines (unions) their results.
+/// Each sub-search is executed independently against the storage backend and
+/// the results are merged into a single result set.
+/// </summary>
+public sealed class MultisearchStage : BqlStage
+{
+    public override string StageName => "multisearch";
+    public List<string> SearchQueries { get; }
+
+    public MultisearchStage(List<string> searchQueries)
+    {
+        SearchQueries = searchQueries;
+    }
+}

@@ -549,6 +549,55 @@ public class KnowledgeController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ImportAll([FromBody] KnowledgeImportDto import)
     {
+        // Validate all objects before persisting any (fail-fast on bad input)
+        if (import.Lookups != null)
+        {
+            foreach (var lookup in import.Lookups)
+            {
+                if (string.IsNullOrWhiteSpace(lookup.Name))
+                    return Problem(detail: "All lookups must have a Name", statusCode: 400);
+                if (lookup.Name.Length > 200)
+                    return Problem(detail: $"Lookup name '{lookup.Name}' exceeds 200 characters", statusCode: 400);
+                if (lookup.Rows is { Count: > 10_000 })
+                    return Problem(detail: $"Lookup '{lookup.Name}' exceeds 10,000 row limit", statusCode: 400);
+                if (lookup.Columns is { Count: > 100 })
+                    return Problem(detail: $"Lookup '{lookup.Name}' exceeds 100 column limit", statusCode: 400);
+            }
+        }
+        if (import.Macros != null)
+        {
+            foreach (var macro in import.Macros)
+            {
+                if (string.IsNullOrWhiteSpace(macro.Name))
+                    return Problem(detail: "All macros must have a Name", statusCode: 400);
+                if (macro.Name.Length > 200)
+                    return Problem(detail: $"Macro name '{macro.Name}' exceeds 200 characters", statusCode: 400);
+                if (string.IsNullOrWhiteSpace(macro.Definition))
+                    return Problem(detail: $"Macro '{macro.Name}' must have a Definition", statusCode: 400);
+                if (!string.IsNullOrWhiteSpace(macro.ValidationRegex))
+                {
+                    try { _ = new Regex(macro.ValidationRegex, RegexOptions.None, TimeSpan.FromSeconds(1)); }
+                    catch (ArgumentException ex)
+                    {
+                        return Problem(detail: $"Macro '{macro.Name}' has invalid ValidationRegex: {ex.Message}", statusCode: 400);
+                    }
+                }
+            }
+        }
+        if (import.FieldAliases != null)
+        {
+            foreach (var alias in import.FieldAliases)
+            {
+                if (string.IsNullOrWhiteSpace(alias.OriginalField))
+                    return Problem(detail: "All field aliases must have an OriginalField", statusCode: 400);
+                if (string.IsNullOrWhiteSpace(alias.AliasField))
+                    return Problem(detail: "All field aliases must have an AliasField", statusCode: 400);
+                if (string.Equals(alias.OriginalField, alias.AliasField, StringComparison.OrdinalIgnoreCase))
+                    return Problem(detail: $"Field alias '{alias.OriginalField}' cannot alias to itself", statusCode: 400);
+            }
+        }
+
+        // All validated — now persist
         int lookupCount = 0, macroCount = 0, aliasCount = 0;
 
         if (import.Lookups != null)

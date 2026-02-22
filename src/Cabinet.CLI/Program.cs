@@ -42,6 +42,7 @@ class Program
         rootCommand.AddCommand(new AWSCommand());
         rootCommand.AddCommand(new CentralizeCommand());
         rootCommand.AddCommand(new BackupCommand());
+        rootCommand.AddCommand(new SetupWizardCommand());
 
         // Build command line with host
         var builder = new CommandLineBuilder(rootCommand)

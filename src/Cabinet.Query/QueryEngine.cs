@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Dynamic;
+using System.Runtime.CompilerServices;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -87,6 +88,21 @@ public class QueryEngine : IQueryEngine
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Stream query results by materializing via ExecuteAsync, then yielding one at a time.
+    /// </summary>
+    public async IAsyncEnumerable<dynamic> ExecuteStreamAsync(
+        QueryExecutionContext context,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var result = await ExecuteAsync(context, cancellationToken);
+        foreach (var evt in result.Events)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return evt;
+        }
     }
 
     private async Task<IEnumerable<dynamic>> ReadStorageAsync(

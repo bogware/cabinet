@@ -103,6 +103,8 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger
             var tempPath = _chainStatePath + ".tmp";
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, _chainStatePath, overwrite: true);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(_chainStatePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
         catch (Exception ex)
         {

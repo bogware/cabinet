@@ -25,13 +25,21 @@ public class DataModelController : ControllerBase
         _logger = logger;
     }
 
-    /// <summary>List all registered data models</summary>
+    /// <summary>List all registered data models with pagination</summary>
     [HttpGet]
     [RequireCapability(Capability.Search)]
     [ProducesResponseType(typeof(IEnumerable<DataModelResponse>), StatusCodes.Status200OK)]
-    public IActionResult ListModels()
+    public IActionResult ListModels([FromQuery] int offset = 0, [FromQuery] int count = 100)
     {
-        var models = _accelerationService.ListModels()
+        count = Math.Clamp(count, 1, 1000);
+        offset = Math.Max(0, offset);
+
+        var allModels = _accelerationService.ListModels().ToList();
+        Response.Headers["X-Total-Count"] = allModels.Count.ToString();
+
+        var models = allModels
+            .Skip(offset)
+            .Take(count)
             .Select(m => new DataModelResponse
             {
                 Id = m.Id,
@@ -54,7 +62,7 @@ public class DataModelController : ControllerBase
     [Authorize(Policy = "RequireWritePermission")]
     [ProducesResponseType(typeof(DataModelResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public IActionResult CreateModel([FromBody] CreateDataModelRequest request)
+    public async Task<IActionResult> CreateModel([FromBody] CreateDataModelRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
             return Problem(detail: "Name is required", statusCode: 400);
@@ -82,7 +90,7 @@ public class DataModelController : ControllerBase
             RetentionDays = Math.Clamp(request.RetentionDays, 1, 365)
         };
 
-        _accelerationService.RegisterModel(model);
+        await _accelerationService.RegisterModelAsync(model, cancellationToken);
 
         return CreatedAtAction(nameof(GetModel), new { id = model.Id }, ToResponse(model));
     }
@@ -107,9 +115,9 @@ public class DataModelController : ControllerBase
     [Authorize(Policy = "RequireWritePermission")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public IActionResult DeleteModel(string id)
+    public async Task<IActionResult> DeleteModelAsync(string id, CancellationToken cancellationToken)
     {
-        if (!_accelerationService.DeleteModel(id))
+        if (!await _accelerationService.DeleteModelAsync(id, cancellationToken))
             return Problem(detail: "Data model not found", statusCode: 404);
 
         return NoContent();

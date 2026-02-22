@@ -130,17 +130,270 @@ jobs:
           ${{ matrix.artifact_name }}.zip.sha256
         if-no-files-found: ignore
 
+  build-deb:
+    name: Build .deb packages
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            deb_arch: amd64
+          - rid: linux-arm64
+            deb_arch: arm64
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+    - name: Publish API
+      run: |
+        dotnet publish src/Cabinet.API/Cabinet.API.csproj \
+          -c Release -r ${{ matrix.rid }} --self-contained true \
+          -p:PublishSingleFile=true -p:PublishTrimmed=false \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:Version=${{ steps.version.outputs.version }} \
+          -o ./publish/api
+
+    - name: Publish Agent
+      run: |
+        dotnet publish src/Cabinet.Agent/Cabinet.Agent.csproj \
+          -c Release -r ${{ matrix.rid }} --self-contained true \
+          -p:PublishSingleFile=true -p:PublishTrimmed=false \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:Version=${{ steps.version.outputs.version }} \
+          -o ./publish/agent
+
+    - name: Publish CLI
+      run: |
+        dotnet publish src/Cabinet.CLI/Cabinet.CLI.csproj \
+          -c Release -r ${{ matrix.rid }} --self-contained true \
+          -p:PublishSingleFile=true -p:PublishTrimmed=false \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:Version=${{ steps.version.outputs.version }} \
+          -o ./publish/cli
+
+    - name: Build cabinet-api .deb
+      run: |
+        VERSION=${{ steps.version.outputs.version }}
+        DEB_ARCH=${{ matrix.deb_arch }}
+        PKG_DIR=deb-api
+
+        mkdir -p $PKG_DIR/DEBIAN
+        mkdir -p $PKG_DIR/opt/cabinet/api
+        mkdir -p $PKG_DIR/opt/cabinet/cli
+        mkdir -p $PKG_DIR/etc/cabinet
+        mkdir -p $PKG_DIR/var/lib/cabinet
+        mkdir -p $PKG_DIR/lib/systemd/system
+
+        cp -r publish/api/* $PKG_DIR/opt/cabinet/api/
+        cp -r publish/cli/* $PKG_DIR/opt/cabinet/cli/
+
+        cat > $PKG_DIR/DEBIAN/control <<EOF
+        Package: cabinet-api
+        Version: $VERSION
+        Section: admin
+        Priority: optional
+        Architecture: $DEB_ARCH
+        Maintainer: Cabinet Team <cabinet@example.com>
+        Description: Cabinet Log Intelligence System - API Server
+         Cabinet is a log management and intelligence system designed as a
+         Splunk replacement. This package contains the API server and CLI.
+        Homepage: https://github.com/draxios/cabinet
+        EOF
+        # Remove leading whitespace from control file
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/control
+
+        cat > $PKG_DIR/DEBIAN/postinst <<'POSTINST'
+        #!/bin/bash
+        set -e
+        if ! id cabinet &>/dev/null; then
+            useradd --system --no-create-home --shell /sbin/nologin cabinet
+        fi
+        chown -R cabinet:cabinet /var/lib/cabinet
+        chown -R cabinet:cabinet /opt/cabinet/api
+        chmod +x /opt/cabinet/api/Cabinet.API
+        if [ -f /opt/cabinet/cli/cabinet ]; then
+            ln -sf /opt/cabinet/cli/cabinet /usr/local/bin/cabinet
+            chmod +x /opt/cabinet/cli/cabinet
+        fi
+        systemctl daemon-reload
+        systemctl enable cabinet-api.service || true
+        echo ""
+        echo "Cabinet API installed. To start:"
+        echo "  sudo systemctl start cabinet-api"
+        echo "  Dashboard: http://localhost:8080/"
+        POSTINST
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/postinst
+        chmod 755 $PKG_DIR/DEBIAN/postinst
+
+        cat > $PKG_DIR/DEBIAN/prerm <<'PRERM'
+        #!/bin/bash
+        set -e
+        systemctl stop cabinet-api.service 2>/dev/null || true
+        systemctl disable cabinet-api.service 2>/dev/null || true
+        PRERM
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/prerm
+        chmod 755 $PKG_DIR/DEBIAN/prerm
+
+        cat > $PKG_DIR/lib/systemd/system/cabinet-api.service <<SVCEOF
+        [Unit]
+        Description=Cabinet API Server - Log Intelligence System
+        Documentation=https://github.com/draxios/cabinet
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=notify
+        ExecStart=/opt/cabinet/api/Cabinet.API --urls http://0.0.0.0:8080
+        WorkingDirectory=/opt/cabinet/api
+        Restart=on-failure
+        RestartSec=10
+        User=cabinet
+        Group=cabinet
+        NoNewPrivileges=true
+        ProtectSystem=strict
+        ProtectHome=true
+        PrivateTmp=true
+        PrivateDevices=true
+        ReadWritePaths=/var/lib/cabinet /opt/cabinet/api
+        Environment=ASPNETCORE_ENVIRONMENT=Production
+        EnvironmentFile=-/etc/cabinet/cabinet.env
+        StandardOutput=journal
+        StandardError=journal
+        SyslogIdentifier=cabinet-api
+        LimitNOFILE=65535
+
+        [Install]
+        WantedBy=multi-user.target
+        SVCEOF
+        sed -i 's/^        //' $PKG_DIR/lib/systemd/system/cabinet-api.service
+
+        dpkg-deb --build $PKG_DIR cabinet-api_${VERSION}_${DEB_ARCH}.deb
+        sha256sum cabinet-api_${VERSION}_${DEB_ARCH}.deb > cabinet-api_${VERSION}_${DEB_ARCH}.deb.sha256
+
+    - name: Build cabinet-agent .deb
+      run: |
+        VERSION=${{ steps.version.outputs.version }}
+        DEB_ARCH=${{ matrix.deb_arch }}
+        PKG_DIR=deb-agent
+
+        mkdir -p $PKG_DIR/DEBIAN
+        mkdir -p $PKG_DIR/opt/cabinet/agent
+        mkdir -p $PKG_DIR/lib/systemd/system
+
+        cp -r publish/agent/* $PKG_DIR/opt/cabinet/agent/
+
+        cat > $PKG_DIR/DEBIAN/control <<EOF
+        Package: cabinet-agent
+        Version: $VERSION
+        Section: admin
+        Priority: optional
+        Architecture: $DEB_ARCH
+        Maintainer: Cabinet Team <cabinet@example.com>
+        Description: Cabinet Log Forwarding Agent
+         Cabinet Agent is a lightweight log forwarder that monitors log files
+         and sends events to a Cabinet API server for indexing and search.
+        Homepage: https://github.com/draxios/cabinet
+        EOF
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/control
+
+        cat > $PKG_DIR/DEBIAN/postinst <<'POSTINST'
+        #!/bin/bash
+        set -e
+        if ! id cabinet-agent &>/dev/null; then
+            useradd --system --no-create-home --shell /sbin/nologin cabinet-agent
+        fi
+        chown -R cabinet-agent:cabinet-agent /opt/cabinet/agent
+        chmod +x /opt/cabinet/agent/cabinet-agent
+        systemctl daemon-reload
+        systemctl enable cabinet-agent.service || true
+        echo ""
+        echo "Cabinet Agent installed. Configure /opt/cabinet/agent/appsettings.json then:"
+        echo "  sudo systemctl start cabinet-agent"
+        POSTINST
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/postinst
+        chmod 755 $PKG_DIR/DEBIAN/postinst
+
+        cat > $PKG_DIR/DEBIAN/prerm <<'PRERM'
+        #!/bin/bash
+        set -e
+        systemctl stop cabinet-agent.service 2>/dev/null || true
+        systemctl disable cabinet-agent.service 2>/dev/null || true
+        PRERM
+        sed -i 's/^        //' $PKG_DIR/DEBIAN/prerm
+        chmod 755 $PKG_DIR/DEBIAN/prerm
+
+        cat > $PKG_DIR/lib/systemd/system/cabinet-agent.service <<SVCEOF
+        [Unit]
+        Description=Cabinet Log Forwarding Agent
+        Documentation=https://github.com/draxios/cabinet
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=notify
+        ExecStart=/opt/cabinet/agent/cabinet-agent
+        WorkingDirectory=/opt/cabinet/agent
+        Restart=always
+        RestartSec=5
+        User=cabinet-agent
+        Group=cabinet-agent
+        NoNewPrivileges=true
+        ProtectSystem=strict
+        ProtectHome=true
+        PrivateTmp=true
+        PrivateDevices=true
+        ReadWritePaths=/opt/cabinet/agent /var/log
+        StandardOutput=journal
+        StandardError=journal
+        SyslogIdentifier=cabinet-agent
+
+        [Install]
+        WantedBy=multi-user.target
+        SVCEOF
+        sed -i 's/^        //' $PKG_DIR/lib/systemd/system/cabinet-agent.service
+
+        dpkg-deb --build $PKG_DIR cabinet-agent_${VERSION}_${DEB_ARCH}.deb
+        sha256sum cabinet-agent_${VERSION}_${DEB_ARCH}.deb > cabinet-agent_${VERSION}_${DEB_ARCH}.deb.sha256
+
+    - name: Upload .deb artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: deb-packages-${{ matrix.deb_arch }}
+        path: |
+          *.deb
+          *.deb.sha256
+
   create-release:
     name: Create GitHub Release
-    needs: release
+    needs: [release, build-deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+    - uses: actions/checkout@v4
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+
+    - name: Copy install scripts
+      run: |
+        cp scripts/install-server.sh artifacts/
+        cp scripts/install-server.ps1 artifacts/
+        cp scripts/install-agent.sh artifacts/
+        cp scripts/install-agent.ps1 artifacts/
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -151,6 +404,12 @@ jobs:
           artifacts/**/*.tar.gz.sha256
           artifacts/**/*.zip
           artifacts/**/*.zip.sha256
+          artifacts/**/*.deb
+          artifacts/**/*.deb.sha256
+          artifacts/install-server.sh
+          artifacts/install-server.ps1
+          artifacts/install-agent.sh
+          artifacts/install-agent.ps1
 
   docker:
     name: Docker Build & Push

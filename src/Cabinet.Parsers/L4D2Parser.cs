@@ -150,7 +150,7 @@ public partial class L4D2Parser : BaseLogParser
         if (line.Contains(" say ") || line.Contains(" say_team "))
         {
             var chatPattern = line.Contains(" say_team ") ? @"say_team ""(.+?)""" : @"say ""(.+?)""";
-            var match = Regex.Match(line, chatPattern);
+            var match = Regex.Match(line, chatPattern, RegexOptions.None, RegexTimeout);
             if (match.Success)
             {
                 logEvent.SetField("ChatMessage", match.Groups[1].Value);

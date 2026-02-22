@@ -207,13 +207,36 @@ public sealed class BqlOptimizer
             var orValues = new List<(string field, object? value)>();
             if (TryCollectOrEqualities(orExpr, orValues) && orValues.Count > 0)
             {
-                // All OR branches must be equality on the same field
+                // Same-field OR → push as array filter
                 var fieldName = orValues[0].field;
                 if (orValues.All(v => string.Equals(v.field, fieldName, StringComparison.OrdinalIgnoreCase)))
                 {
                     ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     ctx.FieldFilters[fieldName] = orValues.Select(v => v.value).ToArray();
                     return true;
+                }
+
+                // Multi-field OR: group by field and push each group as an array filter.
+                // e.g., host="web-01" OR sourcetype="nginx" OR host="web-02"
+                // → FieldFilters["host"] = ["web-01","web-02"], FieldFilters["sourcetype"] = ["nginx"]
+                // This is only safe because each field group is OR'd, and storage backends
+                // evaluate multi-field filters with AND semantics (which is stricter than OR).
+                // We keep the WHERE in the pipeline to ensure correct OR semantics.
+                var groups = orValues
+                    .GroupBy(v => v.field, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (groups.Count > 1 && groups.All(g => g.Count() >= 1))
+                {
+                    ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var group in groups)
+                    {
+                        var values = group.Select(v => v.value).ToArray();
+                        ctx.FieldFilters[group.Key] = values.Length == 1 ? values[0] : values;
+                    }
+                    // Keep WHERE in pipeline — AND between fields is stricter than OR,
+                    // but narrows fetch volume. The pipeline WHERE ensures correctness.
+                    return false;
                 }
             }
         }

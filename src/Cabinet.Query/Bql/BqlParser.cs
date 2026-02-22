@@ -242,6 +242,7 @@ public sealed class BqlParser : IQueryParser
         if (Current.IsKeyword("join")) { Advance(); return ParseJoinStage(); }
         if (Current.IsKeyword("macro")) { Advance(); return ParseMacroStage(); }
         if (Current.IsKeyword("subsearch")) { Advance(); return ParseSubsearchStage(); }
+        if (Current.IsKeyword("multisearch")) { Advance(); return ParseMultisearchStage(); }
         if (Current.IsAnyKeyword("search", "find")) { Advance(); return ParseSearchStageInPipeline(); }
 
         throw new QueryParseException($"Unknown stage: {Current.Value}", $"position {Current.Position}");
@@ -995,6 +996,53 @@ public sealed class BqlParser : IQueryParser
         return new SubsearchStage(sb.ToString());
     }
 
+    // ─── MULTISEARCH stage ──────────────────────────────────────
+
+    private MultisearchStage ParseMultisearchStage()
+    {
+        // multisearch [search "q1"] [search "q2"] [search "q3"]
+        // Each sub-search is enclosed in brackets and prefixed with "search"
+        var searchQueries = new List<string>();
+
+        while (Current.Kind == BqlTokenKind.OpenBracket)
+        {
+            Advance(); // skip "["
+            var sb = new StringBuilder();
+
+            // Expect "search" keyword inside brackets
+            if (Current.IsAnyKeyword("search", "find"))
+            {
+                Advance(); // skip "search"/"find"
+            }
+
+            // Consume the search query text until closing bracket
+            var depth = 1;
+            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
+            {
+                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
+                if (Current.Kind == BqlTokenKind.CloseBracket)
+                {
+                    depth--;
+                    if (depth == 0) { Advance(); break; }
+                }
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+                Advance();
+            }
+
+            var query = sb.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                searchQueries.Add(query);
+            }
+        }
+
+        if (searchQueries.Count == 0)
+            throw new QueryParseException("multisearch requires at least one [search \"query\"] clause", $"position {Current.Position}");
+
+        return new MultisearchStage(searchQueries);
+    }
+
     private SearchStage ParseSearchStageInPipeline()
     {
         var sb = new StringBuilder();
@@ -1539,7 +1587,7 @@ public sealed class BqlParser : IQueryParser
             "fillnull", "bucket", "bin", "makeresults", "mvexpand",
             "chart", "filldown", "addcoltotals", "inputlookup",
             "rare", "regex", "fieldsummary", "xyseries", "untable", "convert",
-            "macro", "subsearch");
+            "macro", "subsearch", "multisearch");
 
     // ─── Legacy QueryPlan conversion ─────────────────────────
 
@@ -1587,6 +1635,7 @@ public sealed class BqlParser : IQueryParser
         JoinStage => new LegacyPassthroughOperator("join"),
         MacroStage => new LegacyPassthroughOperator("macro"),
         SubsearchStage => new LegacyPassthroughOperator("subsearch"),
+        MultisearchStage => new LegacyPassthroughOperator("multisearch"),
         RareStage r => new LegacyRareOperator(r.Count, r.Field),
         RegexStage rx => new LegacyRegexOperator(rx.Field, rx.Pattern, rx.Negate),
         FieldSummaryStage fs => new LegacyFieldSummaryOperator(fs.MaxValues),
@@ -2808,7 +2857,9 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
                 {
                     stats.ValueCount++;
                     var strVal = kvp.Value.ToString() ?? "";
-                    stats.DistinctValues.Add(strVal);
+                    // Cap distinct value tracking to prevent memory exhaustion
+                    if (stats.DistinctValues.Count < 100_000)
+                        stats.DistinctValues.Add(strVal);
                     if (stats.SampleValues.Count < _maxValues && !stats.SampleValues.Contains(strVal))
                         stats.SampleValues.Add(strVal);
 

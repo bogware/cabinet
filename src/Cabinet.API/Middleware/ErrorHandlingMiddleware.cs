@@ -56,8 +56,8 @@ public class ErrorHandlingMiddleware
             },
             Detail = exception switch
             {
-                ArgumentException => "Invalid request parameters.",
-                KeyNotFoundException => "The requested resource was not found.",
+                ArgumentException ae => $"Invalid request parameters: {ae.Message}",
+                KeyNotFoundException knf => $"The requested resource was not found: {knf.Message}",
                 UnauthorizedAccessException => "Access denied.",
                 _ => "An unexpected error occurred."
             },

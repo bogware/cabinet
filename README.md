@@ -1,650 +1,527 @@
 # Cabinet - Enterprise Log Intelligence System
 
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple)](https://dotnet.microsoft.com/)
+[![Build](https://img.shields.io/github/actions/workflow/status/draxios/cabinet/ci.yml?branch=main)](https://github.com/draxios/cabinet/actions)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com)
 
-Cabinet is a comprehensive enterprise-grade log intelligence system designed for game servers and distributed applications. It provides powerful log ingestion, real-time analysis, intelligent detection, and flexible querying capabilities with a Splunk-like query language.
-
-## Key Features
-
-- **Log Forwarding Agent**: Lightweight cross-platform agent monitors log files and forwards to Cabinet API with checkpointing
-- **Multi-Source Log Ingestion**: Support for game servers (L4D2, Source, Minecraft, Rust), web servers, and custom applications
-- **Real-Time Analysis**: Stream processing with Server-Sent Events for live monitoring
-- **Intelligent Detection**: Multiple detection suites (Scumscan, Hackwatch, Admin Abuse) for security analysis
-- **Powerful Query Engine**: Splunk-like DSL for complex log analysis
-- **Multi-Database Support**: PostgreSQL, MySQL, DynamoDB, and SQLite
-- **API-First Design**: RESTful API with OpenAPI specification and Swagger UI
-- **Docker Ready**: Full containerization with docker-compose orchestration
-- **AWS Integration**: CloudWatch, CloudTrail, S3, and DynamoDB support
-- **High Performance**: Process millions of events with minimal memory footprint
+Cabinet is an enterprise-grade log intelligence system — a modern, open-source alternative to Splunk. Built with .NET 8.0, it provides log ingestion, real-time search, a powerful query language (BQL), alerting, dashboards, and a lightweight forwarding agent. Storage is pluggable: SQLite (dev), PostgreSQL (production), or OpenSearch (enterprise scale).
 
 ## Quick Start
 
-### Using Docker (Recommended)
+### Docker (fastest)
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/cabinet.git
-cd cabinet
-
-# Start all services with docker-compose
+git clone https://github.com/draxios/cabinet.git && cd cabinet
 docker-compose up -d
-
-# View logs
-docker-compose logs -f cabinet-api
-
-# Test the API
-curl http://localhost:5000/health
-
-# Access Swagger UI
-open http://localhost:5000/swagger
+# Dashboard: http://localhost:8080
+# API: http://localhost:8080/api/v1
 ```
 
 ### Local Development
 
 ```bash
 # Prerequisites: .NET 8.0 SDK
-
-# Build the solution
-dotnet build
-
-# Run tests (28 tests, all passing)
-dotnet test
-
-# Start the API
-cd src/Cabinet.API
-dotnet run
-# API will be available at http://localhost:5068
-
-# In another terminal, use the CLI
-cd src/Cabinet.CLI
-dotnet run -- --help
+dotnet build && dotnet test    # 786 tests, all passing
+dotnet run --project src/Cabinet.API
+# Dashboard: http://localhost:5068
 ```
 
-### Using Pre-built Binaries
+---
+
+## Installation
+
+Cabinet ships as self-contained single-file binaries for all major platforms. No runtime required.
+
+### Linux — .deb Package (Debian/Ubuntu)
 
 ```bash
-# Build single-file executable
-dotnet publish src/Cabinet.CLI/Cabinet.CLI.csproj \
-  -c Release -o ./publish \
-  --self-contained false \
-  /p:PublishSingleFile=true
+# Download from GitHub Releases
+wget https://github.com/draxios/cabinet/releases/latest/download/cabinet-api_1.0.0_amd64.deb
 
-# Use the CLI
-./publish/cabinet --help
+# Install — creates systemd service, cabinet user, directory structure
+sudo dpkg -i cabinet-api_1.0.0_amd64.deb
+
+# Start the server
+sudo systemctl start cabinet-api
+
+# Dashboard: http://localhost:8080
+# Logs: journalctl -u cabinet-api -f
 ```
+
+ARM64 (Raspberry Pi, AWS Graviton): use `cabinet-api_1.0.0_arm64.deb`
+
+### Linux — Installer Script (Any Distro)
+
+```bash
+# Download installer
+wget https://github.com/draxios/cabinet/releases/latest/download/install-server.sh
+
+# Install with interactive setup wizard
+sudo ./install-server.sh --run-wizard
+
+# Or install with specific options
+sudo ./install-server.sh --port 8080 --storage postgresql \
+  --conn-string "Host=db;Database=cabinet;Username=cabinet;Password=secret"
+```
+
+The installer:
+- Creates a `cabinet` service user (non-root)
+- Installs to `/opt/cabinet/` with data in `/var/lib/cabinet/`
+- Sets up a security-hardened systemd service (ProtectSystem, PrivateTmp, NoNewPrivileges)
+- Creates a CLI symlink at `/usr/local/bin/cabinet`
+- Generates initial configuration in `/etc/cabinet/`
+
+### Windows — PowerShell Installer
+
+```powershell
+# Run PowerShell as Administrator
+.\install-server.ps1
+
+# Or with options
+.\install-server.ps1 -Port 8080 -Storage sqlite -RunWizard
+
+# With agent bundled
+.\install-server.ps1 -IncludeAgent -RunWizard
+```
+
+The installer:
+- Installs to `C:\Program Files\Cabinet\` with data in `C:\ProgramData\Cabinet\`
+- Registers `CabinetAPI` Windows Service (auto-start)
+- Adds firewall rule for the API port (Domain + Private networks)
+- Adds the CLI to system PATH
+
+### macOS — Manual Install
+
+```bash
+# Download the binary
+wget https://github.com/draxios/cabinet/releases/latest/download/cabinet-osx-arm64.tar.gz
+tar xzf cabinet-osx-arm64.tar.gz
+
+# Run directly
+./api/Cabinet.API --urls http://localhost:8080
+```
+
+For Intel Macs, use `cabinet-osx-x64.tar.gz`.
+
+### Docker Compose (Production)
+
+```bash
+# API + PostgreSQL + Redis
+docker-compose up -d
+
+# With monitoring (Grafana + Prometheus)
+docker-compose --profile monitoring up -d
+```
+
+### Kubernetes
+
+Manifests in `k8s/` include Deployment, Service, ConfigMap, HPA, PDB, NetworkPolicy, Ingress, and PVC.
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/
+```
+
+---
+
+## Installing the Agent
+
+Cabinet Agent is a lightweight log forwarder — install it on any machine to ship logs to your Cabinet server. Similar to Splunk Universal Forwarder or Elastic Filebeat.
+
+### Linux Agent
+
+```bash
+# .deb package
+sudo dpkg -i cabinet-agent_1.0.0_amd64.deb
+# Edit /opt/cabinet/agent/appsettings.json with your server URL and API key
+sudo systemctl start cabinet-agent
+
+# Or use the installer script
+sudo ./install-agent.sh \
+  --server https://cabinet.example.com \
+  --api-key "your-api-key" \
+  --paths "/var/log/*.log,/var/log/syslog"
+```
+
+### Windows Agent
+
+```powershell
+# Run PowerShell as Administrator
+.\install-agent.ps1 -ServerUrl https://cabinet.example.com -ApiKey "your-api-key"
+# Prompts for log paths if not provided
+
+# Or with all options
+.\install-agent.ps1 -ServerUrl http://cabinet:8080 `
+  -ApiKey "your-key" `
+  -Paths "C:\inetpub\logs\*.log,C:\app\logs\*.log"
+```
+
+### Docker Agent
+
+```bash
+docker run -d \
+  -v /var/log:/var/log:ro \
+  -e Agent__Output__ServerUrl=http://cabinet:8080 \
+  -e Agent__Output__ApiKey=your-key \
+  ghcr.io/draxios/cabinet-agent
+```
+
+### Agent Features
+
+- **File monitoring**: Glob patterns, periodic scan for new files
+- **Checkpointing**: Resumes from last position across restarts — never re-sends data
+- **Log rotation**: SHA256 header hash detects rotation and truncation
+- **Multi-line merging**: Java stack traces, Python tracebacks, custom patterns
+- **Batched delivery**: Configurable batch size + flush interval
+- **Reliable**: Exponential backoff retry, disk spill buffer for offline resilience
+- **Splunk HEC compatible**: Uses `/services/collector/event` protocol
+
+---
+
+## Setup Wizard
+
+On first launch, Cabinet provides an interactive setup wizard at `http://localhost:8080/setup` to configure:
+
+- Storage backend (SQLite, PostgreSQL, OpenSearch)
+- API key generation
+- Ingestion settings
+- Optional features (syslog listener, scheduled searches, alerts)
+
+Use `--run-wizard` flag with any installer to auto-open the wizard after install.
+
+---
 
 ## Architecture
 
-Cabinet follows a microservices architecture with clear separation of concerns:
-
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Cabinet Agent   │────▶│   Cabinet API   │◀────│   Web UI/Apps   │
-│ (Log Forwarder) │     │                 │     │                 │
-├─────────────────┤     └─────────────────┘     └─────────────────┘
-│   Cabinet CLI   │────▶        │
-└─────────────────┘  ┌──────────┼──────────────┐
-                     ▼          ▼              ▼
-              ┌──────────┐┌──────────┐  ┌──────────┐
-              │ Storage  ││  Query   │  │Detection │
-              │  Layer   ││  Engine  │  │  Suites  │
-              └──────────┘└──────────┘  └──────────┘
-                     │          │              │
-                     └──────────┼──────────────┘
-                                ▼
-                 ┌─────────────────────────────┐
-                 │       Data Storage          │
-                 │  (PostgreSQL/MySQL/DynamoDB) │
-                 └─────────────────────────────┘
+┌─────────────────┐     ┌─────────────────────────────────────┐
+│  Cabinet Agent  │────▶│           Cabinet API                │
+│ (Log Forwarder) │     │                                     │
+├─────────────────┤     │  ┌──────────┐  ┌────────────────┐   │
+│   Cabinet CLI   │────▶│  │ REST API │  │   Web Dashboard│   │
+└─────────────────┘     │  └──────────┘  └────────────────┘   │
+                        │  ┌──────────┐  ┌────────────────┐   │
+┌─────────────────┐     │  │BQL Query │  │   Detection    │   │
+│  Syslog/HEC     │────▶│  │ Engine   │  │    Suites      │   │
+│  (TCP/UDP)      │     │  └──────────┘  └────────────────┘   │
+└─────────────────┘     │  ┌──────────┐  ┌────────────────┐   │
+                        │  │ Alerting │  │  Dashboards &  │   │
+                        │  │ Engine   │  │  Saved Queries │   │
+                        │  └──────────┘  └────────────────┘   │
+                        └──────────┬──────────────────────────┘
+                                   │
+                 ┌─────────────────┼─────────────────┐
+                 ▼                 ▼                  ▼
+          ┌──────────┐     ┌──────────────┐   ┌──────────────┐
+          │  SQLite   │     │ PostgreSQL   │   │  OpenSearch  │
+          │  (dev)    │     │ (production) │   │ (enterprise) │
+          └──────────┘     └──────────────┘   └──────────────┘
 ```
 
-## API Usage
+## Ingestion
 
-### Authentication
+Cabinet accepts logs from multiple sources:
 
-Cabinet uses API key authentication with tier-based access control:
+| Method | Endpoint | Format |
+|--------|----------|--------|
+| REST API | `POST /api/v1/logs` | Cabinet JSON |
+| Splunk HEC | `POST /services/collector/event` | Splunk HEC JSON |
+| Splunk HEC Raw | `POST /services/collector/raw` | Plain text |
+| Syslog | TCP/UDP port 1514 | RFC 3164 |
+| Agent | File monitoring | Any format |
 
 ```bash
-# Using header (recommended)
-curl -H "X-API-Key: cabinet_master_key_00000000000000000000000000000001" \
-  http://localhost:5000/api/v1/logs
-
-# Using query parameter
-curl "http://localhost:5000/api/v1/logs?api_key=your-key"
-```
-
-Default API keys for testing:
-- **Master Key**: `cabinet_master_key_00000000000000000000000000000001` (Enterprise tier, all permissions)
-- **Read-Only Key**: `cabinet_readonly_key_00000000000000000000000000000002` (Basic tier, read-only)
-
-### Ingest Logs
-
-```bash
-curl -X POST http://localhost:5000/api/v1/logs/ingest \
+# REST API ingest
+curl -X POST http://localhost:8080/api/v1/logs \
+  -H "X-API-Key: dev-enterprise-key" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "logs": [
-      "2024-01-01 12:00:00 INFO Server started successfully",
-      "2024-01-01 12:00:01 WARN High memory usage detected",
-      "2024-01-01 12:00:02 ERROR Connection failed to database"
-    ],
-    "metadata": {
-      "server": "game-server-01",
-      "region": "us-west-2"
-    }
-  }'
+  -d '[{"rawLine": "2024-01-15 ERROR Database connection timeout", "sourceType": "application"}]'
+
+# Splunk HEC ingest (compatible with any Splunk forwarder)
+curl -X POST http://localhost:8080/services/collector/event \
+  -H "Authorization: Splunk dev-enterprise-key" \
+  -d '{"event": "Server started successfully", "sourcetype": "syslog", "host": "web-01"}'
 ```
 
-### Query Logs
+---
 
-```bash
-# Get recent logs with pagination
-curl -H "X-API-Key: your-api-key" \
-  "http://localhost:5000/api/v1/logs?page=1&pageSize=50&severity=ERROR&sortBy=timestamp&descending=true"
+## BQL Query Language
 
-# Stream logs in real-time (Server-Sent Events)
-curl -H "X-API-Key: your-api-key" \
-  "http://localhost:5000/api/v1/logs/stream?since=2024-01-01T00:00:00Z&severity=ERROR"
+BQL (Bog Query Language) is Cabinet's native query language — natural language-inspired with full SPL backward compatibility.
 
-# Get log statistics
-curl -H "X-API-Key: your-api-key" \
-  "http://localhost:5000/api/v1/logs/stats?startTime=2024-01-01T00:00:00Z"
-```
-
-### Execute Queries
-
-Cabinet supports a powerful Splunk-like query language:
-
-```bash
-# Basic search
-curl -X POST http://localhost:5000/api/v1/query/execute \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "query": "search error | head 100"
-  }'
-
-# Complex aggregation
-curl -X POST http://localhost:5000/api/v1/query/execute \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "query": "search * | where severity=\"ERROR\" | stats count() by source_type | sort count desc"
-  }'
-
-# Time-based analysis
-curl -X POST http://localhost:5000/api/v1/query/execute \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "query": "search * | timechart span=1h count() by severity"
-  }'
-```
-
-### Run Detection
-
-```bash
-# Scumscan - Detect suspicious player behavior
-curl -X POST http://localhost:5000/api/v1/detection/scumscan \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{"events": [...]}'
-
-# Hackwatch - Detect hacking attempts
-curl -X POST http://localhost:5000/api/v1/detection/hackwatch \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{"events": [...]}'
-
-# Admin Abuse - Detect admin power abuse
-curl -X POST http://localhost:5000/api/v1/detection/adminabuse \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{"events": [...]}'
-```
-
-## CLI Usage
-
-### Configuration
-
-```bash
-# Configure for local mode (direct database access)
-cabinet configure --mode local --connection "Data Source=cabinet.db"
-
-# Configure for remote mode (via API)
-cabinet configure --mode remote --api-url http://localhost:5000 --api-key your-key
-
-# Test configuration
-cabinet configure --test
-
-# View current configuration
-cabinet configure --show
-```
-
-### Log Operations
-
-```bash
-# Ingest logs from files
-cabinet centralize /var/log/game/*.log --provider postgresql --batch-size 1000
-
-# Query logs using DSL
-cabinet query "search error | where severity='ERROR' | head 100"
-
-# Watch logs in real-time
-cabinet watch --source game-server --severity ERROR --follow
-
-# Export logs
-cabinet export --since "1 hour ago" --format json --output logs.json
-```
-
-### Detection Commands
-
-```bash
-# Run specific detection
-cabinet detect scumscan --since "1 hour ago"
-
-# Run all detections
-cabinet detect all --output report.json
-
-# Generate detection report
-cabinet report --type security --last 24h --format html
-```
-
-### Backup and Restore
-
-```bash
-# Create backup
-cabinet backup --start 2024-01-01 --end 2024-01-31 --path /backups/
-
-# Restore from backup
-cabinet restore --path /backups/backup-20240131.tar.gz
-
-# Create incremental backup
-cabinet backup --incremental --s3-bucket my-backup-bucket
-```
-
-## Query Language
-
-Cabinet uses a powerful pipe-based query language inspired by Splunk SPL:
-
-### Basic Queries
+### Search & Filter
 
 ```
-# Simple search
-search "error"
-
-# Search with wildcards
-search "fail*"
-
-# Search specific fields
-search source_type="game_server"
+find errors from last 24h
+find * | where severity >= warning and host = "web-01"
+find * | where status in (500, 502, 503)
+find connection timeout | where source = "database"
 ```
 
-### Filtering and Selection
+### Aggregation & Statistics
 
 ```
-# Filter results
-search * | where severity="ERROR"
-
-# Multiple conditions
-search * | where severity="ERROR" AND source_type="game_server"
-
-# Select specific fields
-search * | fields timestamp, message, severity, player_id
-
-# Exclude fields
-search * | fields - metadata, raw_log
+find * | stats count, avg(duration) by host, status
+find * | stats dc(user) as unique_users by host
+find * | stats median(latency), stdev(latency), perc95(latency) by endpoint
+find * | timechart span=1h count by severity
+find * | top 10 host
+find * | rare source
 ```
 
-### Aggregations
+### Field Manipulation
 
 ```
-# Count events
-search * | stats count()
-
-# Group by field
-search * | stats count() by severity
-
-# Multiple aggregations
-search * | stats count() as total, avg(response_time) as avg_time by source
-
-# Unique values
-search * | stats distinct(player_id) as unique_players by server_id
+find * | eval total = price * quantity, tax = total * 0.1
+find * | extract "user=(?<username>\w+)" from message
+find * | rename old_field as new_field
+find * | select timestamp, severity, message
+find * | unique by host, source
+find * | convert dur2sec(duration) memk(memory)
 ```
 
-### Time-based Analysis
+### Advanced Pipeline
 
 ```
-# Time chart with 1-hour buckets
-search * | timechart span=1h count() by severity
+find * | where severity >= 4
+  | stats count as errors, avg(response_time) as avg_rt by host
+  | where errors > 100
+  | sort by errors desc
+  | limit 20
 
-# Daily statistics
-search * | timechart span=1d avg(response_time) as avg_response
+find * | transaction host maxspan=1h maxevents=100
+find * | eventstats avg(duration) as avg_dur by host
+find * | streamstats count as running_count by source
+find * | lookup users user_id OUTPUT email, name
+find * | fieldsummary
 ```
 
-### Advanced Operations
+### SPL Compatibility
 
 ```
-# Deduplication
-search * | dedup player_id
-
-# Sorting
-search * | sort timestamp desc
-
-# Top N results
-search * | top 10 player_id
-
-# Head/Tail
-search * | head 100
-search * | tail 50
-
-# Complex pipeline
-search "connection"
-| where severity in ["ERROR", "WARNING"]
-| stats count() as errors, avg(duration) as avg_duration by source
-| where errors > 100
-| sort avg_duration desc
-| head 10
+search error | where severity >= 3 | head 10
+* | stats count by source
+* | sort -timestamp | dedup host
+* | eval duration = end_time - start_time
+* | rex field=source "(?<ip>\d+\.\d+\.\d+\.\d+)"
 ```
+
+### Natural Language
+
+```
+show me errors from the last 24 hours
+how many events by host
+top 10 errors by source
+```
+
+Full BQL reference: [docs/BQL-GUIDE.md](docs/BQL-GUIDE.md)
+
+---
+
+## API Reference
+
+Base URL: `/api/v1` | Auth: `X-API-Key` header
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/logs` | GET/POST | Log CRUD + ingest |
+| `/api/v1/query/execute` | POST | Execute BQL query |
+| `/api/v1/query/stream` | POST | Stream results (NDJSON) |
+| `/api/v1/query/validate` | POST | Validate BQL syntax |
+| `/api/v1/query/explain` | POST | Show query execution plan |
+| `/api/v1/query/translate` | POST | Natural language to BQL |
+| `/api/v1/query/export` | POST | Export results as CSV |
+| `/api/v1/query/saved` | GET/POST/PUT/DELETE | Saved queries CRUD |
+| `/api/v1/dashboards` | GET/POST/PUT/DELETE | Dashboard CRUD |
+| `/api/v1/knowledge` | GET/POST/PUT/DELETE | Lookups, macros, field aliases |
+| `/api/v1/scheduled-searches` | GET/POST/PUT/DELETE | Scheduled search CRUD |
+| `/api/v1/alerts` | GET/POST | Alert history |
+| `/api/v1/detection/{suite}` | POST | Run detection suites |
+| `/api/v1/indexes` | GET/DELETE | Index management |
+| `/api/v1/roles` | GET/PUT/DELETE | RBAC role management |
+| `/api/v1/retention` | GET/PUT/DELETE | Per-index retention policies |
+| `/api/v1/field-extractions` | GET/POST/PUT/DELETE | Runtime field extractions |
+| `/api/v1/datamodels` | GET/POST/DELETE | Data model acceleration |
+| `/health` | GET | Health/readiness/liveness probes |
+| `/metrics` | GET | Prometheus metrics |
+| `/services/collector/event` | POST | Splunk HEC JSON endpoint |
+| `/services/collector/raw` | POST | Splunk HEC raw endpoint |
+
+All list endpoints support `offset` and `count` query parameters with `X-Total-Count` response header.
+
+All error responses use RFC 7807 ProblemDetails format.
+
+Dev API keys (development only): `dev-basic-key`, `dev-professional-key`, `dev-enterprise-key`
+
+Full API guide: [docs/API-GUIDE.md](docs/API-GUIDE.md)
+
+---
+
+## Enterprise Features
+
+| Feature | Description |
+|---------|-------------|
+| **RBAC** | Role-based access (Viewer/Analyst/Admin/SuperAdmin) with per-index permissions |
+| **Multi-tenancy** | Tenant isolation via index prefix scoping |
+| **PII Masking** | Field-level masking at query time (redact, hash, partial, regex, remove) |
+| **Encryption at Rest** | AES-256-GCM with configurable key management |
+| **Tamper-Evident Audit** | SHA256 hash-chained audit trail |
+| **Scheduled Searches** | Cron-based queries with alert conditions |
+| **Alerting** | Console, File, Webhook (Slack/Discord/Teams/PagerDuty), Email |
+| **Dashboards** | CRUD API with panels, grid layout, visualization types |
+| **Knowledge Objects** | Lookups, macros, field aliases |
+| **Distributed Mode** | Redis-backed rate limiting, leader election, API key caching |
+| **Data Model Acceleration** | Pre-aggregated summary tables for tstats-like queries |
+| **Multi-line Merging** | Java stack traces, Python tracebacks, custom patterns |
+| **Syslog Listener** | RFC 3164 TCP/UDP ingestion |
+| **Log Parsers** | L4D2, SourceMod, SteamCMD, Apache, Nginx, JSON, CSV, CEF, Generic |
+
+---
 
 ## Configuration
+
+### Storage Backend
+
+Set via `Storage:Type` environment variable or `appsettings.json`:
+
+| Backend | Config Value | Use Case | Connection String |
+|---------|-------------|----------|-------------------|
+| SQLite | `SQLite` | Development, single-node | `Data Source=cabinet.db` |
+| In-Memory | `Memory` | Testing | N/A |
+| PostgreSQL | `PostgreSQL` | Production | `Host=localhost;Database=cabinet;Username=cabinet;Password=secret` |
+| OpenSearch | `OpenSearch` | Enterprise, distributed | `https://localhost:9200` |
 
 ### Environment Variables
 
 ```bash
-# API Configuration
-ASPNETCORE_ENVIRONMENT=Production
-ASPNETCORE_URLS=http://+:80
-Storage__Type=SQLite
-Storage__ConnectionString=Data Source=/app/data/cabinet.db
-
-# Database Configuration
-Database__Provider=PostgreSQL
-Database__ConnectionString=Host=postgres;Database=cabinet;Username=cabinet;Password=secret
-Database__RetentionDays=90
-Database__ArchiveEnabled=true
-
-# API Keys
-ApiKeys__Keys__0__Key=your-api-key
+Storage__Type=PostgreSQL
+Storage__ConnectionString="Host=db;Database=cabinet;Username=cabinet;Password=secret"
+ApiKeys__Keys__0__Key=your-api-key-here
 ApiKeys__Keys__0__Tier=Enterprise
-ApiKeys__Keys__0__Name=Production Client
-
-# AWS Configuration (optional)
-AWS__Region=us-west-2
-AWS__AccessKeyId=your-access-key
-AWS__SecretAccessKey=your-secret-key
-AWS__S3Bucket=cabinet-logs
+ApiKeys__Keys__0__ClientName="Production App"
+Distributed__Enabled=true
+Distributed__RedisConnectionString=redis:6379
 ```
 
-### Configuration Files
+### Distributed Mode (Multi-Instance)
 
-**appsettings.json** (API):
 ```json
 {
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft": "Warning",
-      "Cabinet": "Debug"
-    }
-  },
-  "Storage": {
-    "Type": "SQLite",
-    "ConnectionString": "Data Source=cabinet.db",
-    "MaxBatchSize": 1000,
-    "FlushInterval": "00:00:05"
-  },
-  "Database": {
-    "Provider": "PostgreSQL",
-    "ConnectionString": "Host=localhost;Database=cabinet",
-    "RetentionDays": 90,
-    "ArchiveEnabled": true,
-    "ArchivePath": "/archives"
-  },
-  "RateLimit": {
-    "Basic": 100,
-    "Professional": 1000,
-    "Enterprise": -1
+  "Distributed": {
+    "Enabled": true,
+    "RedisConnectionString": "redis:6379",
+    "InstanceId": "cabinet-pod-1",
+    "LeaderElection": { "Enabled": true, "LeaseTimeSeconds": 30 },
+    "Cache": { "ApiKeyTtlSeconds": 60 }
   }
 }
 ```
 
-**cabinet.yml** (CLI):
-```yaml
-mode: remote
-remote:
-  api_url: http://localhost:5000
-  api_key: your-api-key
-  timeout: 30
-local:
-  storage_type: sqlite
-  connection_string: Data Source=cabinet.db
-  batch_size: 1000
-defaults:
-  output_format: json
-  page_size: 100
-```
-
-## Docker Deployment
-
-### Docker Compose Profiles
-
-```bash
-# Basic deployment (API + PostgreSQL + Redis)
-docker-compose up -d
-
-# With MySQL instead of PostgreSQL
-docker-compose --profile with-mysql up -d
-
-# With monitoring stack (Grafana + Prometheus)
-docker-compose --profile monitoring up -d
-
-# Development environment with LocalStack
-docker-compose --profile development up -d
-
-# Full stack with everything
-docker-compose --profile with-mysql --profile monitoring --profile development up -d
-```
-
-### Scaling
-
-```bash
-# Scale API instances
-docker-compose up -d --scale cabinet-api=3
-
-# Scale with load balancer
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
-
-### Volumes
-
-Cabinet uses Docker volumes for persistent data:
-
-- `cabinet-data`: Application data and SQLite database
-- `cabinet-logs`: Log files
-- `postgres-data`: PostgreSQL data
-- `redis-data`: Redis cache data
-
-## Monitoring
-
-### Health Endpoints
-
-- **GET /health**: Basic health check (returns "Healthy")
-- **GET /health/ready**: Readiness probe
-- **GET /health/live**: Liveness probe
-- **GET /metrics**: Prometheus metrics
-
-### Grafana Dashboards
-
-When using the monitoring profile, access Grafana at http://localhost:3000 (admin/admin123):
-
-- Cabinet Overview Dashboard
-- Log Analytics Dashboard
-- Detection Analytics Dashboard
-- Performance Metrics Dashboard
-
-## Performance
-
-- **Ingestion Rate**: 10,000+ logs/second
-- **Query Response**: <100ms for most queries
-- **Detection Processing**: 1,000 events/second per suite
-- **Storage Efficiency**: 10:1 compression ratio
-- **Memory Usage**: <500MB under normal load
-- **Startup Time**: <5 seconds
-- **Concurrent Connections**: 1,000+
+---
 
 ## Security
 
-- **Authentication**: API key with tier-based access control
-- **Rate Limiting**: Configurable per tier (Basic: 100/min, Pro: 1000/min, Enterprise: unlimited)
-- **Input Validation**: All inputs sanitized and validated
-- **SQL Injection Protection**: Parameterized queries throughout
-- **Container Security**: Non-root user, minimal base images
-- **Network Security**: Isolated networks in Docker
-- **Secrets Management**: Support for environment variables and secret files
+- **Authentication**: API key via `X-API-Key` header only (no query string)
+- **RBAC**: Granular capabilities (Search, Ingest, Export, Detection, IndexManagement) with per-index permissions
+- **Rate Limiting**: Pre-auth per-IP sliding window + per-tier limits
+- **Input Validation**: All inputs validated; regex timeouts prevent ReDoS; query size limits prevent DoS
+- **SQL Injection**: Fully parameterized queries in all storage backends
+- **Encryption**: AES-256-GCM at rest, HTTPS in transit
+- **Audit Trail**: Tamper-evident hash-chained audit logging
+- **Container Security**: Non-root user (uid 1000), port 8080, minimal base images
+- **systemd Hardening**: ProtectSystem=strict, PrivateTmp, NoNewPrivileges, PrivateDevices
+- **Security Headers**: CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy
+
+---
+
+## Monitoring
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Overall health status |
+| `GET /health/ready` | Readiness probe (for K8s) |
+| `GET /health/live` | Liveness probe (for K8s) |
+| `GET /metrics` | Prometheus-compatible metrics |
+
+Metrics include HTTP request counts/latencies, storage stats, and .NET process/GC metrics.
+
+---
+
+## Building Releases
+
+```bash
+# Build all platforms + .deb packages
+./scripts/build-release.sh 1.0.0
+
+# Output in dist/:
+#   cabinet-api-1.0.0-linux-x64.tar.gz     (+ SHA256)
+#   cabinet-api-1.0.0-linux-arm64.tar.gz
+#   cabinet-api-1.0.0-win-x64.zip
+#   cabinet-api-1.0.0-osx-x64.tar.gz
+#   cabinet-api-1.0.0-osx-arm64.tar.gz
+#   cabinet-cli-1.0.0-{platform}.{ext}
+#   cabinet-agent-1.0.0-{platform}.{ext}
+#   cabinet-api_1.0.0_amd64.deb
+#   cabinet-agent_1.0.0_amd64.deb
+#   install-server.sh, install-server.ps1
+#   install-agent.sh, install-agent.ps1
+```
+
+CI/CD automatically builds all artifacts on tagged releases (`v*`).
+
+---
 
 ## Testing
 
 ```bash
-# Run all tests
-dotnet test
-
-# Run with coverage
-dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
-
-# Run specific test categories
-dotnet test --filter Category=Unit
-dotnet test --filter Category=Integration
-
-# Run end-to-end tests
-cd tests/EndToEnd
-./run-tests.sh
+dotnet test                          # Run all 786+ tests
+dotnet test --filter Category=Unit   # Unit tests only
+dotnet test /p:CollectCoverage=true  # With coverage
 ```
 
-Current test coverage: 28 tests, all passing
+Coverage areas: Parsers, BQL query engine, expression evaluator, storage backends, detection suites, all API controllers, middleware, alert engine, agent components.
 
-## API Documentation
-
-- **Swagger UI**: http://localhost:5000/swagger
-- **OpenAPI JSON**: http://localhost:5000/swagger/v1/swagger.json
-- **API Specification**: [api-spec.yaml](api-spec.yaml) - Comprehensive OpenAPI 3.0 specification
-
-## Troubleshooting
-
-### Common Issues
-
-**API won't start**:
-```bash
-# Check logs
-docker-compose logs cabinet-api
-# or
-dotnet run --verbosity detailed
-
-# Verify port availability
-netstat -tulpn | grep 5000
-```
-
-**Database connection issues**:
-```bash
-# Test PostgreSQL connection
-docker exec -it cabinet-postgres psql -U cabinet -d cabinet
-
-# Check connection string
-echo $Database__ConnectionString
-```
-
-**CLI can't connect to API**:
-```bash
-# Test API connectivity
-curl http://localhost:5000/health
-
-# Verify API key
-cabinet configure --test
-
-# Check CLI configuration
-cat ~/.cabinet/config.yml
-```
-
-**High memory usage**:
-```bash
-# Check memory limits
-docker stats cabinet-api
-
-# Adjust batch sizes
-export Storage__MaxBatchSize=500
-```
+---
 
 ## Development
 
 ### Prerequisites
 
 - .NET 8.0 SDK
-- Docker & Docker Compose
-- PostgreSQL 16+ or MySQL 8.0+
-- Redis 7+
-- Visual Studio 2022 or VS Code
-
-### Building from Source
-
-```bash
-# Clone repository
-git clone https://github.com/yourusername/cabinet.git
-cd cabinet
-
-# Restore dependencies
-dotnet restore
-
-# Build solution
-dotnet build -c Release
-
-# Run tests
-dotnet test
-
-# Publish API
-dotnet publish src/Cabinet.API -c Release -o publish/api
-
-# Publish CLI
-dotnet publish src/Cabinet.CLI -c Release -o publish/cli \
-  /p:PublishSingleFile=true /p:PublishTrimmed=true
-```
+- Docker & Docker Compose (optional, for PostgreSQL/Redis)
 
 ### Project Structure
 
 ```
 cabinet/
 ├── src/
-│   ├── Cabinet.Core/          # Core models and interfaces
-│   ├── Cabinet.API/           # REST API implementation
-│   ├── Cabinet.CLI/           # Command-line interface
-│   ├── Cabinet.Storage/       # Storage abstraction layer
-│   ├── Cabinet.Query/         # Query engine and DSL parser
-│   ├── Cabinet.Detection/     # Detection suites
-│   ├── Cabinet.Parsers/       # Log parsers (L4D2, Source, etc.)
-│   ├── Cabinet.Database/      # Database providers
-│   ├── Cabinet.Alerts/        # Alerting system
-│   └── Cabinet.AWS/           # AWS service integrations
-├── tests/
-│   ├── Cabinet.Tests/         # Unit tests
-│   └── EndToEnd/              # End-to-end tests
-├── docker-compose.yml         # Docker orchestration
-├── Dockerfile                 # CLI container
-├── Dockerfile.api            # API container
-├── Dockerfile.cli            # CLI container
-├── api-spec.yaml             # OpenAPI specification
-└── Cabinet.sln               # Solution file
+│   ├── Cabinet.Core/        # Models, interfaces, configuration
+│   ├── Cabinet.API/         # ASP.NET Core REST API + Web Dashboard
+│   ├── Cabinet.CLI/         # Command-line interface
+│   ├── Cabinet.Agent/       # Log forwarding agent
+│   ├── Cabinet.Query/       # BQL parser, optimizer, query engine
+│   ├── Cabinet.Parsers/     # Log parsers (L4D2, Apache, Nginx, etc.)
+│   ├── Cabinet.Storage/     # SQLite + In-Memory backends
+│   ├── Cabinet.Database/    # PostgreSQL + OpenSearch backends
+│   ├── Cabinet.Detection/   # Security detection suites
+│   ├── Cabinet.Alerts/      # Alert channels (webhook, email, file)
+│   └── Cabinet.AWS/         # AWS integrations (S3, CloudWatch)
+├── tests/Cabinet.Tests/     # 786+ xUnit tests
+├── scripts/                 # Install scripts + build-release.sh
+├── k8s/                     # Kubernetes manifests
+├── docs/                    # Architecture, API guide, BQL guide
+├── docker-compose.yml       # Docker orchestration
+└── .github/workflows/       # CI/CD (build, test, release, Docker)
 ```
 
-## Contributing
+### Contributing
 
-We welcome contributions! Please follow these guidelines:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+---
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+**Version**: 1.0.0
+**Last Updated**: December 2024
+**Status**: Production Ready
+**Build**: All tests passing (28/28)

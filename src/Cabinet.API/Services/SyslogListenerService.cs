@@ -91,7 +91,12 @@ public sealed class SyslogListenerService : BackgroundService
         UdpClient? udpClient = null;
         try
         {
-            var endpoint = new IPEndPoint(IPAddress.Parse(_config.BindAddress), _config.UdpPort);
+            if (!IPAddress.TryParse(_config.BindAddress, out var udpAddress))
+            {
+                _logger.LogError("Invalid syslog bind address: {Address}", _config.BindAddress);
+                return;
+            }
+            var endpoint = new IPEndPoint(udpAddress, _config.UdpPort);
             udpClient = new UdpClient(endpoint);
             _logger.LogInformation("Syslog UDP listener started on {Endpoint}", endpoint);
 
@@ -100,7 +105,9 @@ public sealed class SyslogListenerService : BackgroundService
                 try
                 {
                     var result = await udpClient.ReceiveAsync(stoppingToken);
-                    var message = Encoding.UTF8.GetString(result.Buffer);
+                    // Use replacement fallback for invalid UTF-8 sequences
+                    var message = Encoding.UTF8.GetString(result.Buffer)
+                        ?? string.Empty;
                     await EnqueueMessageAsync(message, result.RemoteEndPoint.Address.ToString(), stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -128,7 +135,12 @@ public sealed class SyslogListenerService : BackgroundService
         TcpListener? tcpListener = null;
         try
         {
-            var endpoint = new IPEndPoint(IPAddress.Parse(_config.BindAddress), _config.TcpPort);
+            if (!IPAddress.TryParse(_config.BindAddress, out var tcpAddress))
+            {
+                _logger.LogError("Invalid syslog bind address: {Address}", _config.BindAddress);
+                return;
+            }
+            var endpoint = new IPEndPoint(tcpAddress, _config.TcpPort);
             tcpListener = new TcpListener(endpoint);
             tcpListener.Start();
             _logger.LogInformation("Syslog TCP listener started on {Endpoint}", endpoint);

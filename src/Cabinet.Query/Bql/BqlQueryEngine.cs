@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Dynamic;
+using System.Runtime.CompilerServices;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Cabinet.Query.NaturalLanguage;
@@ -132,6 +133,71 @@ public sealed class BqlQueryEngine : IQueryEngine
         };
     }
 
+    /// <summary>
+    /// Stream query results without materializing all events in memory.
+    /// For simple queries (all predicates pushed to storage, no remaining pipeline stages),
+    /// events are yielded directly from storage as they arrive.
+    /// For queries with pipeline stages (stats, sort, eval, etc.), events are materialized
+    /// internally to apply the pipeline, then yielded one at a time.
+    /// </summary>
+    public async IAsyncEnumerable<dynamic> ExecuteStreamAsync(
+        QueryExecutionContext context,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        // Enforce per-query timeout
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(context.Timeout);
+        var token = timeoutCts.Token;
+
+        var queryString = context.Query;
+
+        // Try natural language translation if available
+        if (_nlTranslator != null && _nlTranslator.IsNaturalLanguage(queryString))
+        {
+            var translation = await _nlTranslator.TranslateAsync(queryString, token);
+            if (translation.Success && translation.BqlQuery != null)
+            {
+                _logger.LogDebug("NL translated for stream: '{Original}' → '{BQL}'", queryString, translation.BqlQuery);
+                queryString = translation.BqlQuery;
+            }
+        }
+
+        // Parse and optimize
+        var bqlQuery = _parser.ParseBql(queryString);
+        var optimized = _optimizer.Optimize(bqlQuery, context);
+
+        _logger.LogDebug(
+            "Stream query: {RemainingStages} pipeline stages, streaming={DirectStream}",
+            optimized.RemainingStages.Count,
+            optimized.RemainingStages.Count == 0);
+
+        if (optimized.RemainingStages.Count == 0)
+        {
+            // No pipeline stages remain — stream directly from storage without materialization
+            var count = 0;
+            var maxFetchLimit = optimized.StorageContext.Limit;
+
+            await foreach (var evt in _storage.QueryAsync(optimized.StorageContext, token))
+            {
+                yield return ConvertToExpando(evt);
+                count++;
+
+                if (count >= maxFetchLimit)
+                    yield break;
+            }
+        }
+        else
+        {
+            // Pipeline stages require materialization — execute fully, then yield results
+            var result = await ExecuteAsync(context, token);
+            foreach (var evt in result.Events)
+            {
+                token.ThrowIfCancellationRequested();
+                yield return evt;
+            }
+        }
+    }
+
     internal static ExpandoObject ConvertToExpando(LogEvent evt)
     {
         var expando = new ExpandoObject();
@@ -206,6 +272,7 @@ public sealed class BqlQueryEngine : IQueryEngine
             ? new LegacyMacroOperator(m.MacroName, m.Arguments, _storage, _parser, _optimizer, _knowledgeStorage, _logger)
             : new LegacyPassthroughOperator("macro"),
         SubsearchStage ss => new LegacySubsearchOperator(ss.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
+        MultisearchStage ms => new LegacyMultisearchOperator(ms.SearchQueries, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
         _ => new LegacyPassthroughOperator(stage.GetType().Name)
     };
 
@@ -297,6 +364,75 @@ internal sealed class LegacyAppendOperator : QueryOperator
             // On subsearch failure, return original results unchanged (Splunk behavior)
             return mainResults;
         }
+    }
+}
+
+/// <summary>
+/// Multisearch operator — runs multiple independent search queries and unions their results.
+/// Equivalent to Splunk's | multisearch [search "q1"] [search "q2"].
+/// Unlike append, multisearch ignores the incoming pipeline events and produces
+/// a fresh result set from the union of all sub-searches.
+/// </summary>
+internal sealed class LegacyMultisearchOperator : QueryOperator
+{
+    private readonly List<string> _searchQueries;
+    private readonly ILogStorage _storage;
+    private readonly BqlParser _parser;
+    private readonly BqlOptimizer _optimizer;
+    private readonly IKnowledgeStorage? _knowledgeStorage;
+    private readonly ILogger<BqlQueryEngine> _logger;
+    public override string Name => "multisearch";
+
+    public LegacyMultisearchOperator(
+        List<string> searchQueries,
+        ILogStorage storage,
+        BqlParser parser,
+        BqlOptimizer optimizer,
+        IKnowledgeStorage? knowledgeStorage,
+        ILogger<BqlQueryEngine> logger)
+    {
+        _searchQueries = searchQueries;
+        _storage = storage;
+        _parser = parser;
+        _optimizer = optimizer;
+        _knowledgeStorage = knowledgeStorage;
+        _logger = logger;
+    }
+
+    public override async Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    {
+        // Multisearch replaces the incoming pipeline with the union of all sub-searches
+        var combined = new List<dynamic>();
+
+        foreach (var query in _searchQueries)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                // Prefix with "find" so the sub-query is a valid BQL search
+                var fullQuery = $"find {query}";
+
+                var subEngine = new BqlQueryEngine(_storage, _parser, _optimizer,
+                    _logger, knowledgeStorage: _knowledgeStorage);
+
+                var context = new QueryExecutionContext
+                {
+                    Query = fullQuery,
+                    Limit = 50_000
+                };
+
+                var subResult = await subEngine.ExecuteAsync(context, ct);
+                combined.AddRange(subResult.Events);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Multisearch sub-query failed: {Query}", query);
+                // On individual sub-query failure, skip it and continue with the rest (Splunk behavior)
+            }
+        }
+
+        return combined;
     }
 }
 
@@ -588,8 +724,15 @@ internal sealed class LegacyMacroOperator : QueryOperator
         var result = definition;
         for (var i = 0; i < parameterNames.Count && i < arguments.Count; i++)
         {
-            result = result.Replace($"${parameterNames[i]}$", arguments[i], StringComparison.OrdinalIgnoreCase);
+            // Sanitize argument: strip pipe characters to prevent BQL injection
+            var sanitized = arguments[i].Replace("|", "");
+            result = result.Replace($"${parameterNames[i]}$", sanitized, StringComparison.OrdinalIgnoreCase);
         }
+
+        // Guard against macro expansion producing excessively long queries
+        if (result.Length > 100_000)
+            throw new QueryParseException("Macro expansion produced an excessively large query", "macro expansion");
+
         return result;
     }
 

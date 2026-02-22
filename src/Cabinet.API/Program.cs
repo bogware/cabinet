@@ -254,7 +254,7 @@ try
         context.Response.Headers.Append("X-Frame-Options", "DENY");
         context.Response.Headers.Append("X-XSS-Protection", "0"); // Disabled in favor of CSP (modern best practice)
         context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'");
+        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'");
         context.Response.Headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
         await next();
@@ -548,12 +548,15 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator, Cabinet.Query.NaturalLanguage.RuleBasedTranslator>();
     services.AddScoped<IQueryEngine, Cabinet.Query.Bql.BqlQueryEngine>();
 
-    // Query result cache — accelerates dashboard refreshes with TTL-based caching
+    // Query result cache — accelerates dashboard refreshes with TTL-based caching.
+    // In distributed mode, wraps with Redis L2 cache + pub/sub invalidation.
     var queryResultTtl = configuration.GetValue("Distributed:Cache:QueryResultTtlSeconds", 30);
     services.AddSingleton<Cabinet.API.Services.QueryCacheService>(sp =>
         new Cabinet.API.Services.QueryCacheService(
             sp.GetRequiredService<ILogger<Cabinet.API.Services.QueryCacheService>>(),
             TimeSpan.FromSeconds(queryResultTtl)));
+
+    // Distributed query cache (registered later if Redis is available — see distributed section below)
 
     // Async search jobs — background execution for long-running queries
     services.AddSingleton<Cabinet.Core.Interfaces.ISearchJobStorage>(sp =>
@@ -687,6 +690,14 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
                 TimeSpan.FromSeconds(configuration.GetValue("Distributed:Cache:ApiKeyTtlSeconds", 60))));
         services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp =>
             sp.GetRequiredService<Cabinet.API.Services.DistributedApiKeyService>());
+
+        // Distributed query cache — L2 Redis cache with pub/sub invalidation across instances
+        services.AddSingleton<Cabinet.API.Services.DistributedQueryCacheService>(sp =>
+            new Cabinet.API.Services.DistributedQueryCacheService(
+                sp.GetRequiredService<Cabinet.API.Services.QueryCacheService>(),
+                sp.GetRequiredService<Cabinet.API.Infrastructure.RedisConnectionManager>(),
+                sp.GetRequiredService<ILogger<Cabinet.API.Services.DistributedQueryCacheService>>(),
+                TimeSpan.FromSeconds(configuration.GetValue("Distributed:Cache:QueryResultTtlSeconds", 60))));
 
         // Only log the host:port, never credentials — extract first part that doesn't contain '='
         var redisHost = redisConnectionString.Split(',')

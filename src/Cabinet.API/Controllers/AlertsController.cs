@@ -1,4 +1,6 @@
+using Cabinet.API.Middleware;
 using Cabinet.Core.Interfaces;
+using Cabinet.Core.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,6 +12,7 @@ namespace Cabinet.API.Controllers;
 [ApiController]
 [Route("api/v1/alerts")]
 [Authorize]
+[RequireCapability(Capability.Search)]
 public class AlertsController : ControllerBase
 {
     private readonly IAlertHistoryStorage _storage;
