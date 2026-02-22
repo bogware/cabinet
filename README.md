@@ -1,9 +1,8 @@
 # Cabinet - Enterprise Log Intelligence System
 
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple)](https://dotnet.microsoft.com/)
-[![Build](https://img.shields.io/github/actions/workflow/status/bogware/cabinet/ci.yml?branch=main)](https://github.com/bogware/cabinet/actions)
+[![Build](https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg)](https://github.com/bogware/cabinet/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com)
 
 Cabinet is an enterprise-grade log intelligence system — a modern, open-source alternative to Splunk. Built with .NET 8.0, it provides log ingestion, real-time search, a powerful query language (BQL), alerting, dashboards, and a lightweight forwarding agent. Storage is pluggable: SQLite (dev), PostgreSQL (production), or OpenSearch (enterprise scale).
 
