@@ -447,22 +447,19 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build and push
+    - name: Build image for scanning (amd64 only, load into Docker daemon)
       uses: docker/build-push-action@v5
       with:
         context: .
         file: Dockerfile.api
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        load: true
+        tags: cabinet-scan:local
         cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@0.28.0
       with:
-        image-ref: ${{ env.DOCKER_IMAGE }}:sha-${{ github.sha }}
+        image-ref: cabinet-scan:local
         format: 'sarif'
         output: 'trivy-results.sarif'
         exit-code: '1'
@@ -475,3 +472,15 @@ jobs:
         name: trivy-results
         path: trivy-results.sarif
         retention-days: 30
+
+    - name: Build and push multi-platform
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile.api
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
