@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -42,9 +43,13 @@ public partial class SteamCMDParser : BaseLogParser
         var match = Regex.Match(line, @"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]", RegexOptions.None, RegexTimeout);
         if (match.Success)
         {
-            if (DateTime.TryParse(match.Groups[1].Value, out var timestamp))
+            if (DateTime.TryParse(
+                    match.Groups[1].Value,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var timestamp))
             {
-                logEvent.Timestamp = timestamp.ToUniversalTime();
+                logEvent.Timestamp = timestamp;
             }
         }
     }

@@ -49,9 +49,8 @@ public partial class L4D2Parser : BaseLogParser
             {
                 try
                 {
-                    // L4D2 server logs use the server's local time zone
-                    var timestamp = new DateTime(year, month, day, hour, minute, second, DateTimeKind.Local);
-                    logEvent.Timestamp = timestamp.ToUniversalTime();
+                    // The line carries no offset. Read it as UTC so every host produces the same instant.
+                    logEvent.Timestamp = new DateTime(year, month, day, hour, minute, second, DateTimeKind.Utc);
                 }
                 catch (Exception ex)
                 {
