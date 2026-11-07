@@ -20,16 +20,8 @@ public class CabinetConfiguration
     /// </summary>
     public Dictionary<string, ParserProfile> Profiles { get; set; } = new()
     {
-        ["steamcmd"] = new ParserProfile { Name = "steamcmd", Parser = "SteamCMD", FilePatterns = ["**/steamcmd*.log", "**/Steam*.log"] },
-        ["sourcemod"] = new ParserProfile { Name = "sourcemod", Parser = "SourceMod", FilePatterns = ["**/sourcemod/logs/*.log", "**/addons/sourcemod/logs/*.log"] },
-        ["l4d2"] = new ParserProfile { Name = "l4d2", Parser = "L4D2", FilePatterns = ["**/left4dead2/*.log", "**/l4d2/*.log"] },
         ["generic"] = new ParserProfile { Name = "generic", Parser = "Generic", FilePatterns = ["**/*.log", "**/*.txt"] }
     };
-
-    /// <summary>
-    /// Detection suite configuration
-    /// </summary>
-    public DetectionConfiguration Detection { get; set; } = new();
 
     /// <summary>
     /// Output configuration
@@ -214,123 +206,6 @@ public class ParserProfile
     /// Custom parser settings
     /// </summary>
     public Dictionary<string, object> Settings { get; set; } = new();
-}
-
-public class DetectionConfiguration
-{
-    /// <summary>
-    /// Enable automatic detection runs
-    /// </summary>
-    public bool AutoDetect { get; set; } = false;
-
-    /// <summary>
-    /// Scumscan configuration
-    /// </summary>
-    public ScumscanConfiguration Scumscan { get; set; } = new();
-
-    /// <summary>
-    /// Hackwatch configuration
-    /// </summary>
-    public HackwatchConfiguration Hackwatch { get; set; } = new();
-
-    /// <summary>
-    /// Adminabuse configuration
-    /// </summary>
-    public AdminabuseConfiguration Adminabuse { get; set; } = new();
-}
-
-public class ScumscanConfiguration
-{
-    /// <summary>
-    /// Enable scumscan detection
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
-    /// <summary>
-    /// Minimum severity to report
-    /// </summary>
-    public int MinSeverity { get; set; } = 3;
-
-    /// <summary>
-    /// Context window size (lines before/after)
-    /// </summary>
-    public int ContextWindow { get; set; } = 5;
-
-    /// <summary>
-    /// Custom word lists path
-    /// </summary>
-    public string? CustomWordListPath { get; set; }
-}
-
-public class HackwatchConfiguration
-{
-    /// <summary>
-    /// Enable hackwatch detection
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
-    /// <summary>
-    /// VAC detection patterns
-    /// </summary>
-    public List<string> VacPatterns { get; set; } = new()
-    {
-        "VAC", "banned", "cheat", "exploit", "aimbot", "wallhack", "speedhack"
-    };
-
-    /// <summary>
-    /// Anomaly threshold
-    /// </summary>
-    public double AnomalyThreshold { get; set; } = 0.95;
-
-    /// <summary>
-    /// Suspicious K/D ratio threshold
-    /// </summary>
-    public double SuspiciousKDRatio { get; set; } = 10.0;
-
-    /// <summary>
-    /// Suspicious headshot percentage
-    /// </summary>
-    public int SuspiciousHeadshotPercent { get; set; } = 80;
-
-    /// <summary>
-    /// Minimum kills for analysis
-    /// </summary>
-    public int MinKillsForAnalysis { get; set; } = 10;
-
-    /// <summary>
-    /// Maximum reconnects per hour
-    /// </summary>
-    public int MaxReconnectsPerHour { get; set; } = 10;
-}
-
-public class AdminabuseConfiguration
-{
-    /// <summary>
-    /// Enable adminabuse detection
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
-    /// <summary>
-    /// Actions per hour threshold
-    /// </summary>
-    public int ActionsPerHourThreshold { get; set; } = 20;
-
-    /// <summary>
-    /// Repeated target threshold
-    /// </summary>
-    public int RepeatedTargetThreshold { get; set; } = 5;
-
-    /// <summary>
-    /// Action thresholds by type
-    /// </summary>
-    public Dictionary<string, AdminActionThreshold> ActionThresholds { get; set; } = new()
-    {
-        ["ban"] = new AdminActionThreshold { Normal = 2, Warning = 5, Critical = 10 },
-        ["kick"] = new AdminActionThreshold { Normal = 10, Warning = 20, Critical = 50 },
-        ["mute"] = new AdminActionThreshold { Normal = 5, Warning = 10, Critical = 20 },
-        ["warn"] = new AdminActionThreshold { Normal = 20, Warning = 50, Critical = 100 },
-        ["slay"] = new AdminActionThreshold { Normal = 5, Warning = 10, Critical = 20 }
-    };
 }
 
 public class AdminActionThreshold

@@ -1,6 +1,6 @@
 using Cabinet.Core.Models;
 
-namespace Cabinet.Detection;
+namespace Cabinet.Extras.Gaming.Detection;
 
 /// <summary>
 /// Interface for Scumscan detection

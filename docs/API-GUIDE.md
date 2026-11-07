@@ -125,7 +125,7 @@ Three responses use other shapes:
 
 #### POST /api/v1/logs/ingest: Ingest log lines
 
-Requires `Ingest`. The body is an array of raw lines, up to 10,000 per request. Each line is parsed by the first registered parser that accepts it (L4D2, SourceMod, SteamCMD, JSON, CSV, CEF, then Generic). Apache and Nginx parsers aren't registered in the API, so those lines go through the Generic parser. Events are stored in index `main`.
+Requires `Ingest`. The body is an array of raw lines, up to 10,000 per request. Each line is parsed by the first parser that accepts it: JSON, CEF, Apache, Nginx, CSV, the gaming parsers if that extension is on, then Generic.
 
 ```bash
 curl -X POST http://localhost:5000/api/v1/logs/ingest \
@@ -530,7 +530,7 @@ curl -X POST http://localhost:5000/api/v1/scheduled-searches \
 
 ### Detection
 
-Requires `Detection` (Professional or Enterprise). These are game-moderation suites that run on demand over the events in the request body, up to 10,000 per request. Nothing runs at ingest.
+These routes exist only when the gaming extension is on (`Gaming:Enabled=true`); otherwise they return 404. Requires `Detection` (Professional or Enterprise). These are game-moderation suites that run on demand over the events in the request body, up to 10,000 per request. Nothing runs at ingest.
 
 ```bash
 curl -X POST http://localhost:5000/api/v1/detection/hackwatch \

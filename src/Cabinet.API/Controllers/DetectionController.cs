@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Cabinet.Detection;
+using Cabinet.Extras.Gaming.Detection;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Cabinet.API.Middleware;

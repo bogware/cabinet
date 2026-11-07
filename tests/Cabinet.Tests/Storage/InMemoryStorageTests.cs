@@ -117,10 +117,10 @@ public class InMemoryStorageTests
     [Fact]
     public async Task QueryAsync_SourceTypeFilter_FiltersResults()
     {
-        await _storage.StoreAsync(CreateEvent("L4D2 event", sourceType: SourceTypes.L4D2));
+        await _storage.StoreAsync(CreateEvent("L4D2 event", sourceType: "L4D2"));
         await _storage.StoreAsync(CreateEvent("Generic event", sourceType: SourceTypes.Generic));
 
-        var context = new QueryContext { SourceType = SourceTypes.L4D2 };
+        var context = new QueryContext { SourceType = "L4D2" };
         var results = new List<LogEvent>();
         await foreach (var evt in _storage.QueryAsync(context))
         {
@@ -128,7 +128,7 @@ public class InMemoryStorageTests
         }
 
         results.Should().HaveCount(1);
-        results[0].SourceType.Should().Be(SourceTypes.L4D2);
+        results[0].SourceType.Should().Be("L4D2");
     }
 
     [Fact]
@@ -166,17 +166,17 @@ public class InMemoryStorageTests
     [Fact]
     public async Task GetStatsAsync_ReturnsCorrectStats()
     {
-        await _storage.StoreAsync(CreateEvent("Error", severity: LogSeverity.Error, sourceType: SourceTypes.L4D2));
+        await _storage.StoreAsync(CreateEvent("Error", severity: LogSeverity.Error, sourceType: "L4D2"));
         await _storage.StoreAsync(CreateEvent("Info", severity: LogSeverity.Info, sourceType: SourceTypes.Generic));
-        await _storage.StoreAsync(CreateEvent("Warning", severity: LogSeverity.Warning, sourceType: SourceTypes.L4D2));
+        await _storage.StoreAsync(CreateEvent("Warning", severity: LogSeverity.Warning, sourceType: "L4D2"));
 
         var stats = await _storage.GetStatsAsync();
 
         stats.TotalEvents.Should().Be(3);
         stats.OldestEvent.Should().NotBeNull();
         stats.NewestEvent.Should().NotBeNull();
-        stats.EventsBySourceType.Should().ContainKey(SourceTypes.L4D2);
-        stats.EventsBySourceType[SourceTypes.L4D2].Should().Be(2);
+        stats.EventsBySourceType.Should().ContainKey("L4D2");
+        stats.EventsBySourceType["L4D2"].Should().Be(2);
         stats.EventsBySeverity.Should().ContainKey(LogSeverity.Error);
     }
 

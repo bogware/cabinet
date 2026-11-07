@@ -3,17 +3,17 @@ using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Parsers;
+namespace Cabinet.Extras.Gaming.Parsers;
 
 /// <summary>
 /// Parser for SteamCMD update and installation logs
 /// </summary>
-public partial class SteamCMDParser : BaseLogParser
+public partial class SteamCMDParser : GamingLogParser
 {
     public SteamCMDParser(ILogger<SteamCMDParser>? logger = null) : base(logger) { }
 
     public override string Name => "SteamCMD";
-    public override string SourceType => SourceTypes.SteamCMD;
+    public override string SourceType => GamingSourceTypes.SteamCMD;
 
     [GeneratedRegex(@"^\[.*\]\s+(?:Downloading|Installing|Validating|Updating|Loading|Connecting)")]
     private static partial Regex SteamCMDPattern();

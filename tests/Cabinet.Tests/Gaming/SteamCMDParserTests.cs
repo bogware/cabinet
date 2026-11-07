@@ -1,9 +1,10 @@
 using Cabinet.Core.Models;
-using Cabinet.Parsers;
+using Cabinet.Extras.Gaming;
+using Cabinet.Extras.Gaming.Parsers;
 using FluentAssertions;
 using Xunit;
 
-namespace Cabinet.Tests.Parsers;
+namespace Cabinet.Tests.Gaming;
 
 public class SteamCMDParserTests
 {
@@ -31,7 +32,7 @@ public class SteamCMDParserTests
         var result = await _parser.ParseAsync(line);
 
         result.Should().NotBeNull();
-        result!.SourceType.Should().Be(SourceTypes.SteamCMD);
+        result!.SourceType.Should().Be(GamingSourceTypes.SteamCMD);
     }
 
     [Fact]
@@ -42,7 +43,7 @@ public class SteamCMDParserTests
         var result = await _parser.ParseAsync(line);
 
         result.Should().NotBeNull();
-        result!.SourceType.Should().Be(SourceTypes.SteamCMD);
+        result!.SourceType.Should().Be(GamingSourceTypes.SteamCMD);
     }
 
     [Fact]

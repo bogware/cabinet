@@ -107,10 +107,10 @@ The full reference is [docs/BQL-GUIDE.md](docs/BQL-GUIDE.md). The language is be
 | Audit log | Partial | Hash-chained in the log output only. |
 | Global retention | Available | `Storage:RetentionDays`. 0 (the default) keeps everything. |
 | Per-index retention | Not implemented | `/api/v1/retention` stores definitions in memory and doesn't enforce them. |
-| Log parsers | Available | L4D2, SourceMod, SteamCMD, JSON, CSV, CEF, Generic. Apache and Nginx are available in the CLI only. |
+| Log parsers | Available | JSON, CEF, Apache, Nginx, CSV, Generic. |
 | Data models | Partial | Listing and `tstats` routes exist, but creating or deleting a model returns 403 for every configured key. |
 | Field extractions | Partial | CRUD only. Definitions are held in memory and aren't applied to queries. |
-| Game-moderation detection | Partial | Scumscan, Hackwatch and Adminabuse, on demand through `/api/v1/detection/*`. |
+| Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers and on-demand moderation detection at `/api/v1/detection/*`. |
 | Security detection rules | Not implemented | Nothing runs at ingest. |
 | Health and Prometheus metrics | Available | `/health`, `/health/ready`, `/health/live`, `/metrics`. |
 | AWS CloudWatch and CloudTrail | Available | CLI only (`cabinet aws`). |
@@ -155,7 +155,7 @@ src/
   Cabinet.Parsers/    Log parsers
   Cabinet.Storage/    SQLite and in-memory backends
   Cabinet.Database/   PostgreSQL and OpenSearch backends
-  Cabinet.Detection/  Game-moderation detection suites
+  Cabinet.Extras.Gaming/  Optional game log parsers and moderation detection
   Cabinet.Alerts/     Alert channels
   Cabinet.AWS/        CloudWatch and CloudTrail access, S3 client code
 tests/Cabinet.Tests/  xUnit tests

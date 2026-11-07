@@ -20,7 +20,7 @@
     <ProjectReference Include="..\Cabinet.Parsers\Cabinet.Parsers.csproj" />
     <ProjectReference Include="..\Cabinet.Storage\Cabinet.Storage.csproj" />
     <ProjectReference Include="..\Cabinet.Query\Cabinet.Query.csproj" />
-    <ProjectReference Include="..\Cabinet.Detection\Cabinet.Detection.csproj" />
+    <ProjectReference Include="..\Cabinet.Extras.Gaming\Cabinet.Extras.Gaming.csproj" />
     <ProjectReference Include="..\Cabinet.Alerts\Cabinet.Alerts.csproj" />
     <ProjectReference Include="..\Cabinet.AWS\Cabinet.AWS.csproj" />
   </ItemGroup>

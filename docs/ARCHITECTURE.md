@@ -16,10 +16,10 @@ This document describes Cabinet's architecture, key design decisions, and patter
                     └──┬────────┬────────┬──────────┬───┘
                        │        │        │          │
               ┌────────▼──┐ ┌──▼─────┐ ┌▼───────┐ ┌▼──────────┐
-              │  Parsers   │ │ Query  │ │Detect  │ │  Alerts   │
-              │ L4D2,SM,   │ │ BQL    │ │Hack,   │ │ Webhook,  │
-              │ SteamCMD,  │ │ Engine │ │Scum,   │ │ Email,    │
-              │ Generic    │ │ + NL   │ │Admin   │ │ File      │
+              │  Parsers   │ │ Query  │ │ Gaming │ │  Alerts   │
+              │ JSON,CEF,  │ │ BQL    │ │ (opt.) │ │ Webhook,  │
+              │ Apache,    │ │ Engine │ │ games, │ │ Email,    │
+              │ CSV,Generic│ │ + NL   │ │ detect │ │ File      │
               └────────┬───┘ └──┬─────┘ └┬───────┘ └┬──────────┘
                        │        │        │          │
               ┌────────▼────────▼────────▼──────────▼───────────┐
@@ -47,9 +47,9 @@ Each deployment serves one organization. Run a single API instance; see [Deploym
 - `Cabinet.API` — ASP.NET Core REST API with controllers, middleware, authentication
 - `Cabinet.CLI` — System.CommandLine + Spectre.Console terminal application
 
-### Layer 2: Services (Query, Detection, Parsers, Alerts)
+### Layer 2: Services (Query, Parsers, Alerts, Extras.Gaming)
 - `Cabinet.Query` — BQL parser, optimizer, execution engine, natural language translator
-- `Cabinet.Detection` — Game-moderation detection suites, run on demand
+- `Cabinet.Extras.Gaming` — Optional game log parsers and on-demand moderation detection, off unless `Gaming:Enabled` is set
 - `Cabinet.Parsers` — Log format parsers with auto-detection
 - `Cabinet.Alerts` — Alert channels (webhook, email, file, console)
 
@@ -73,7 +73,8 @@ API/CLI → Services → Data → Core
 - All other projects depend on `Core`
 - Services never depend on each other directly
 - Data layer projects don't depend on each other
-- `Cabinet.Query` and `Cabinet.Detection` reference `Cabinet.Storage`
+- `Cabinet.Query` references `Cabinet.Storage`
+- `Cabinet.Extras.Gaming` references `Cabinet.Parsers` for the parser base class, an exception to "services never depend on each other"
 - `Cabinet.AWS` references `Cabinet.Parsers`, an exception to the layer order
 - `Cabinet.API` and `Cabinet.CLI` reference service and data projects and wire them with DI. `Cabinet.CLI` doesn't reference `Cabinet.Database`.
 - `Cabinet.Agent` references nothing

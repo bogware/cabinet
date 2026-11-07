@@ -12,7 +12,7 @@ COPY src/Cabinet.Core/Cabinet.Core.csproj src/Cabinet.Core/
 COPY src/Cabinet.Parsers/Cabinet.Parsers.csproj src/Cabinet.Parsers/
 COPY src/Cabinet.Storage/Cabinet.Storage.csproj src/Cabinet.Storage/
 COPY src/Cabinet.Query/Cabinet.Query.csproj src/Cabinet.Query/
-COPY src/Cabinet.Detection/Cabinet.Detection.csproj src/Cabinet.Detection/
+COPY src/Cabinet.Extras.Gaming/Cabinet.Extras.Gaming.csproj src/Cabinet.Extras.Gaming/
 COPY src/Cabinet.Alerts/Cabinet.Alerts.csproj src/Cabinet.Alerts/
 COPY src/Cabinet.AWS/Cabinet.AWS.csproj src/Cabinet.AWS/
 COPY src/Cabinet.Database/Cabinet.Database.csproj src/Cabinet.Database/

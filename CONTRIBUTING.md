@@ -247,7 +247,7 @@ tests/Cabinet.Tests/
   CLI/            # CLI tests
   Controllers/    # API controller tests
   Core/           # Core model and utility tests
-  Detection/      # Detection suite tests
+  Gaming/         # Gaming extension tests
   Middleware/     # API middleware tests
   Parsers/        # Log parser tests
   Query/          # BQL lexer, parser, engine, optimizer tests

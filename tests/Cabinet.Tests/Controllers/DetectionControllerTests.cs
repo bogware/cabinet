@@ -2,7 +2,7 @@ using System.Security.Claims;
 using Cabinet.API.Controllers;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Detection;
+using Cabinet.Extras.Gaming.Detection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;

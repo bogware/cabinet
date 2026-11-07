@@ -35,7 +35,6 @@ public class DashboardCommand : Command
                 services.AddCabinetParsers();
                 services.AddCabinetStorage();
                 services.AddCabinetQuery();
-                services.AddCabinetDetection();
             })
             .Build();
 
@@ -45,7 +44,6 @@ public class DashboardCommand : Command
 
             var storage = host.Services.GetRequiredService<ILogStorage>();
             var ingestionEngine = host.Services.GetRequiredService<IIngestionEngine>();
-            var detectionSuites = host.Services.GetServices<IDetectionSuite>().ToList();
 
             var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (s, e) =>

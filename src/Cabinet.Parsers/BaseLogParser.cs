@@ -164,20 +164,6 @@ public abstract partial class BaseLogParser : ILogParser
     protected abstract void ExtractSpecificFields(string line, LogEvent logEvent);
 
     /// <summary>
-    /// Extract Steam ID from text
-    /// </summary>
-    protected string? ExtractSteamId(string text)
-    {
-        try
-        {
-            var steamIdPattern = @"STEAM_[0-9]:[0-9]:[0-9]+|\[U:[0-9]:[0-9]+\]";
-            var match = Regex.Match(text, steamIdPattern, RegexOptions.None, RegexTimeout);
-            return match.Success ? match.Value : null;
-        }
-        catch (RegexMatchTimeoutException) { return null; }
-    }
-
-    /// <summary>
     /// Extract IP address from text
     /// </summary>
     protected string? ExtractIpAddress(string text)
@@ -192,18 +178,4 @@ public abstract partial class BaseLogParser : ILogParser
         catch (RegexMatchTimeoutException) { return null; }
     }
 
-    /// <summary>
-    /// Extract player name from text
-    /// </summary>
-    protected string? ExtractPlayerName(string text)
-    {
-        try
-        {
-            // Look for patterns like "PlayerName<123><STEAM_ID>"
-            var pattern = @"([^<]+)<\d+><[^>]+>";
-            var match = Regex.Match(text, pattern, RegexOptions.None, RegexTimeout);
-            return match.Success ? match.Groups[1].Value.Trim() : null;
-        }
-        catch (RegexMatchTimeoutException) { return null; }
-    }
 }

@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Detection;
+namespace Cabinet.Extras.Gaming.Detection;
 
 /// <summary>
 /// Scumscan: Detects toxic behavior, harassment, and inappropriate content

@@ -3,17 +3,17 @@ using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Parsers;
+namespace Cabinet.Extras.Gaming.Parsers;
 
 /// <summary>
 /// Parser for SourceMod admin logs
 /// </summary>
-public partial class SourceModParser : BaseLogParser
+public partial class SourceModParser : GamingLogParser
 {
     public SourceModParser(ILogger<SourceModParser>? logger = null) : base(logger) { }
 
     public override string Name => "SourceMod";
-    public override string SourceType => SourceTypes.SourceMod;
+    public override string SourceType => GamingSourceTypes.SourceMod;
 
     [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}.*\[.*\]")]
     private static partial Regex SourceModLogPattern();

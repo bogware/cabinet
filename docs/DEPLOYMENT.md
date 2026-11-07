@@ -291,6 +291,10 @@ Where non-log data lives:
 
 The local metadata database is set by `Storage:MetadataConnectionString` (default `Data Source=cabinet-metadata.db`). It is per instance, so keep it on persistent storage. Compose puts it on the `cabinet-data` volume.
 
+### Gaming extension
+
+Set `Gaming:Enabled=true` (`Gaming__Enabled=true` as an environment variable) to add the L4D2, SourceMod and SteamCMD parsers and the `/api/v1/detection/*` routes. It's off by default. For the CLI, use `CABINET_Gaming__Enabled=true`.
+
 ### Retention
 
 `Storage:RetentionDays` is the only retention that deletes events. 0, the default, keeps everything. A positive value purges older events at startup and hourly. `/api/v1/retention` stores per-index definitions in memory only and doesn't enforce them.

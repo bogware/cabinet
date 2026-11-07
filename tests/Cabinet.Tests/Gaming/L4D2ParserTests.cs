@@ -1,9 +1,10 @@
 using Cabinet.Core.Models;
-using Cabinet.Parsers;
+using Cabinet.Extras.Gaming;
+using Cabinet.Extras.Gaming.Parsers;
 using FluentAssertions;
 using Xunit;
 
-namespace Cabinet.Tests.Parsers;
+namespace Cabinet.Tests.Gaming;
 
 public class L4D2ParserTests
 {
@@ -46,7 +47,7 @@ public class L4D2ParserTests
 
         // Assert
         result.Should().NotBeNull();
-        result!.SourceType.Should().Be(SourceTypes.L4D2);
+        result!.SourceType.Should().Be(GamingSourceTypes.L4D2);
         result.GetFieldString("PlayerName").Should().Be("Survivor1");
         result.GetFieldString("PlayerId").Should().Be("2");
         result.GetFieldString("SteamId").Should().Be("STEAM_1:0:12345678");

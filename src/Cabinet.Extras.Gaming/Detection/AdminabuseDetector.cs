@@ -1,7 +1,7 @@
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Detection;
+namespace Cabinet.Extras.Gaming.Detection;
 
 /// <summary>
 /// Adminabuse: Detects potential admin abuse patterns through statistical analysis

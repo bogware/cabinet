@@ -46,7 +46,7 @@ public class HelpCommand : Command
     {
         AnsiConsole.Write(new FigletText("Cabinet").Color(Color.Cyan1));
 
-        AnsiConsole.MarkupLine("[bold]High-performance log intelligence for game servers[/]\n");
+        AnsiConsole.MarkupLine("[bold]Log ingestion, search and analysis[/]\n");
 
         var table = new Table();
         table.AddColumn("[cyan]Command[/]");
@@ -69,7 +69,7 @@ public class HelpCommand : Command
         AnsiConsole.MarkupLine("  [dim]# Follow log file for errors[/]");
         AnsiConsole.MarkupLine("  cabinet tail server.log --follow --where \"error OR failed\"\n");
 
-        AnsiConsole.MarkupLine("  [dim]# Ingest L4D2 server logs[/]");
+        AnsiConsole.MarkupLine("  [dim]# Ingest server logs[/]");
         AnsiConsole.MarkupLine("  cabinet ingest /var/log/l4d2 --profile l4d2 --recursive\n");
 
         AnsiConsole.MarkupLine("  [dim]# Query for VAC bans in last 24 hours[/]");

@@ -1,9 +1,10 @@
-using Cabinet.Parsers;
+using Cabinet.Extras.Gaming;
+using Cabinet.Extras.Gaming.Parsers;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
-namespace Cabinet.Tests.Parsers;
+namespace Cabinet.Tests.Gaming;
 
 /// <summary>
 /// Log lines without an offset are read as UTC, so the same line produces the

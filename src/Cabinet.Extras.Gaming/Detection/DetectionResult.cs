@@ -1,6 +1,6 @@
 using Cabinet.Core.Models;
 
-namespace Cabinet.Detection;
+namespace Cabinet.Extras.Gaming.Detection;
 
 /// <summary>
 /// Result of a detection analysis

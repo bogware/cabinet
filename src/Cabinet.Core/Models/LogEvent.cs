@@ -37,7 +37,7 @@ public sealed class LogEvent
     public string Index { get; set; } = "main";
 
     /// <summary>
-    /// Source type as a free-form string (e.g., "SteamCMD", "SourceMod", "L4D2", "Generic", "CloudWatch", etc.)
+    /// Source type as a free-form string (e.g., "JSON", "Apache", "Generic", "CloudWatch", etc.)
     /// Converted from enum to string for extensibility — any log source can define its own type.
     /// </summary>
     public string SourceType { get; set; } = SourceTypes.Generic;
@@ -136,9 +136,6 @@ public sealed class LogEvent
 public static class SourceTypes
 {
     public const string Generic = "Generic";
-    public const string SteamCMD = "SteamCMD";
-    public const string SourceMod = "SourceMod";
-    public const string L4D2 = "L4D2";
     public const string Custom = "Custom";
     public const string CloudWatch = "CloudWatch";
     public const string CloudTrail = "CloudTrail";
@@ -147,20 +144,6 @@ public static class SourceTypes
     public const string Cef = "CEF";
     public const string Apache = "Apache";
     public const string Nginx = "Nginx";
-}
-
-/// <summary>
-/// Deprecated: Use string-based SourceTypes constants instead.
-/// Kept temporarily for backward compatibility during migration.
-/// </summary>
-[Obsolete("Use string-based SourceTypes constants instead (e.g., SourceTypes.Generic)")]
-public enum SourceType
-{
-    Generic,
-    SteamCMD,
-    SourceMod,
-    L4D2,
-    Custom
 }
 
 public enum LogSeverity

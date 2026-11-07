@@ -1,10 +1,11 @@
 using Cabinet.Core.Models;
-using Cabinet.Detection;
+using Cabinet.Extras.Gaming;
+using Cabinet.Extras.Gaming.Detection;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
-namespace Cabinet.Tests.Detection;
+namespace Cabinet.Tests.Gaming;
 
 public class HackwatchDetectorTests
 {
@@ -165,7 +166,7 @@ public class HackwatchDetectorTests
         {
             RawLine = rawLine,
             Timestamp = DateTime.UtcNow,
-            SourceType = SourceTypes.L4D2
+            SourceType = GamingSourceTypes.L4D2
         };
 
         if (playerName != null)

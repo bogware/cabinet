@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cabinet.Core\Cabinet.Core.csproj" />
+    <ProjectReference Include="..\Cabinet.Parsers\Cabinet.Parsers.csproj" />
+  </ItemGroup>
+
+</Project>

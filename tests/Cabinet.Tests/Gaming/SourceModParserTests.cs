@@ -1,9 +1,10 @@
 using Cabinet.Core.Models;
-using Cabinet.Parsers;
+using Cabinet.Extras.Gaming;
+using Cabinet.Extras.Gaming.Parsers;
 using FluentAssertions;
 using Xunit;
 
-namespace Cabinet.Tests.Parsers;
+namespace Cabinet.Tests.Gaming;
 
 public class SourceModParserTests
 {
@@ -31,7 +32,7 @@ public class SourceModParserTests
         var result = await _parser.ParseAsync(line);
 
         result.Should().NotBeNull();
-        result!.SourceType.Should().Be(SourceTypes.SourceMod);
+        result!.SourceType.Should().Be(GamingSourceTypes.SourceMod);
     }
 
     [Fact]
@@ -42,7 +43,7 @@ public class SourceModParserTests
         var result = await _parser.ParseAsync(line);
 
         result.Should().NotBeNull();
-        result!.SourceType.Should().Be(SourceTypes.SourceMod);
+        result!.SourceType.Should().Be(GamingSourceTypes.SourceMod);
     }
 
     [Fact]

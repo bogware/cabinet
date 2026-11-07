@@ -13,7 +13,7 @@ public interface ILogParser
     string Name { get; }
 
     /// <summary>
-    /// Source type this parser handles (e.g., SourceTypes.Generic, SourceTypes.L4D2)
+    /// Source type this parser handles (e.g., SourceTypes.Generic, SourceTypes.Json)
     /// </summary>
     string SourceType { get; }
 

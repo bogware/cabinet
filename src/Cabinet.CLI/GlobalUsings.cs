@@ -10,7 +10,6 @@ global using Cabinet.Core.Models;
 global using Cabinet.Parsers;
 global using Cabinet.Storage;
 global using Cabinet.Query;
-global using Cabinet.Detection;
 global using Cabinet.Alerts;
 global using Microsoft.Extensions.DependencyInjection;
 global using Microsoft.Extensions.Hosting;

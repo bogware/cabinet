@@ -8,7 +8,7 @@ using Cabinet.Core.Configuration;
 using Cabinet.Parsers;
 using Cabinet.Storage;
 using Cabinet.Query;
-using Cabinet.Detection;
+using Cabinet.Extras.Gaming;
 using Cabinet.Alerts;
 using Cabinet.AWS;
 using Microsoft.Extensions.Configuration;
@@ -24,7 +24,7 @@ class Program
     static async Task<int> Main(string[] args)
     {
         // Create root command
-        var rootCommand = new RootCommand("cabinet - High-performance log intelligence for game servers")
+        var rootCommand = new RootCommand("cabinet - log ingestion, search and analysis")
         {
             TreatUnmatchedTokensAsErrors = true
         };
@@ -60,10 +60,9 @@ class Program
 
                     // Add core services
                     services.AddCabinetCore();
-                    services.AddCabinetParsers();
+                    services.AddCabinetParsers(GamingExtension.IsEnabled(context.Configuration) ? s => s.AddGamingParsers() : null);
                     services.AddCabinetStorage();
                     services.AddCabinetQuery();
-                    services.AddCabinetDetection();
                     services.AddCabinetAlerts();
                     services.AddCabinetAWS();
                 });

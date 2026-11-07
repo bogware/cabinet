@@ -2,17 +2,17 @@ using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Parsers;
+namespace Cabinet.Extras.Gaming.Parsers;
 
 /// <summary>
 /// Parser for Left 4 Dead 2 server logs
 /// </summary>
-public partial class L4D2Parser : BaseLogParser
+public partial class L4D2Parser : GamingLogParser
 {
     public L4D2Parser(ILogger<L4D2Parser>? logger = null) : base(logger) { }
 
     public override string Name => "L4D2";
-    public override string SourceType => SourceTypes.L4D2;
+    public override string SourceType => GamingSourceTypes.L4D2;
 
     [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}")]
     private static partial Regex L4D2LogPattern();

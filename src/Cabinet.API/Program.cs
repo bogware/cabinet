@@ -6,7 +6,7 @@ using Cabinet.API.Services;
 using Cabinet.Core.Configuration;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Detection;
+using Cabinet.Extras.Gaming;
 using Cabinet.Parsers;
 using Cabinet.Query;
 using Cabinet.Storage;
@@ -62,6 +62,14 @@ try
     builder.Services.AddEndpointsApiExplorer();
 
     // Configure Swagger/OpenAPI
+    // The detection routes belong to the optional gaming extension
+    if (!GamingExtension.IsEnabled(builder.Configuration))
+    {
+        builder.Services.AddControllers().ConfigureApplicationPartManager(manager =>
+            manager.FeatureProviders.Add(new ExcludeControllersFeatureProvider(
+                typeof(Cabinet.API.Controllers.DetectionController))));
+    }
+
     builder.Services.AddSwaggerGen(options =>
     {
         options.SwaggerDoc("v1", new OpenApiInfo
@@ -465,14 +473,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     }
 
     // Parsers (order: specific first, generic last)
-    services.AddSingleton<ILogParserProvider, Cabinet.Parsers.LogParserProvider>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, L4D2Parser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, SourceModParser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, SteamCMDParser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, JsonLogParser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, CsvLogParser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, CefParser>();
-    services.AddTransient<Cabinet.Core.Interfaces.ILogParser, GenericParser>();
+    var gamingEnabled = GamingExtension.IsEnabled(configuration);
+    services.AddCabinetParsers(gamingEnabled ? s => s.AddGamingParsers() : null);
 
     // Multi-line log merger (configurable, defaults to timestamp-prefixed)
     services.AddSingleton(sp =>
@@ -488,10 +490,11 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         return new MultiLineLogMerger(MultiLinePatterns.TimestampPrefixed);
     });
 
-    // Detection
-    services.AddScoped<IScumscanDetector, ScumscanDetector>();
-    services.AddScoped<IHackwatchDetector, HackwatchDetector>();
-    services.AddScoped<IAdminabuseDetector, AdminabuseDetector>();
+    // Game moderation detectors, served by DetectionController when the extension is on
+    if (gamingEnabled)
+    {
+        services.AddGamingDetection();
+    }
 
     // Query Engine — BQL (Bog Query Language) with predicate pushdown optimization
     services.AddScoped<Cabinet.Query.Bql.BqlParser>();

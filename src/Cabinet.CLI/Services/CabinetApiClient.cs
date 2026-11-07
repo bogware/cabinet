@@ -82,35 +82,6 @@ public class CabinetApiClient : IDisposable
         return response ?? new List<SavedQuery>();
     }
 
-    // Detection Operations
-    public async Task<DetectionResponse> RunScumscanAsync(List<LogEvent> events)
-    {
-        var request = new { events };
-        var response = await PostAsync<DetectionResponse>("/api/v1/detection/scumscan", request);
-        return response ?? new DetectionResponse();
-    }
-
-    public async Task<DetectionResponse> RunHackwatchAsync(List<LogEvent> events)
-    {
-        var request = new { events };
-        var response = await PostAsync<DetectionResponse>("/api/v1/detection/hackwatch", request);
-        return response ?? new DetectionResponse();
-    }
-
-    public async Task<DetectionResponse> RunAdminabuseAsync(List<LogEvent> events)
-    {
-        var request = new { events };
-        var response = await PostAsync<DetectionResponse>("/api/v1/detection/adminabuse", request);
-        return response ?? new DetectionResponse();
-    }
-
-    public async Task<ComprehensiveAnalysisResponse> AnalyzeComprehensiveAsync(List<LogEvent> events)
-    {
-        var request = new { events };
-        var response = await PostAsync<ComprehensiveAnalysisResponse>("/api/v1/detection/analyze", request);
-        return response ?? new ComprehensiveAnalysisResponse();
-    }
-
     // Health Operations
     public async Task<HealthResponse> GetHealthAsync()
     {
@@ -223,24 +194,6 @@ public class SavedQuery
     public string? Description { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
-}
-
-public class DetectionResponse
-{
-    public string DetectionType { get; set; } = string.Empty;
-    public int TotalAnalyzed { get; set; }
-    public int TotalDetections { get; set; }
-    public List<DetectionResult> Results { get; set; } = new();
-}
-
-public class ComprehensiveAnalysisResponse
-{
-    public int TotalAnalyzed { get; set; }
-    public int TotalDetections { get; set; }
-    public List<DetectionResult> ScumscanResults { get; set; } = new();
-    public List<DetectionResult> HackwatchResults { get; set; } = new();
-    public List<DetectionResult> AdminabuseResults { get; set; } = new();
-    public RiskAssessment RiskAssessment { get; set; } = new();
 }
 
 public class RiskAssessment

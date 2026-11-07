@@ -15,7 +15,7 @@ namespace Cabinet.Tests.Services;
 /// Starts the real API process, because startup failures happen outside anything a
 /// controller or DI test can reach.
 /// </summary>
-public sealed class ApiStartupTests : IDisposable
+public sealed class ApiStartupTests : IAsyncLifetime
 {
     private readonly string _workingDirectory =
         Directory.CreateTempSubdirectory("cabinet-startup-").FullName;
@@ -148,6 +148,53 @@ public sealed class ApiStartupTests : IDisposable
 
             var other = await client.GetAsync("/api/v1/logs/stats");
             other.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Api_GamingExtension_IsOffUnlessEnabled(bool enabled)
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+        startInfo.Environment["ApiKeys__Keys__0__Key"] = "gaming-test-key";
+        startInfo.Environment["ApiKeys__Keys__0__Tier"] = "Enterprise";
+        startInfo.Environment["ApiKeys__Keys__0__Name"] = "Gaming test";
+        if (enabled)
+        {
+            startInfo.Environment["Gaming__Enabled"] = "true";
+        }
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            client.DefaultRequestHeaders.Add("X-API-Key", "gaming-test-key");
+            await WaitUntilReadyAsync(client, process);
+
+            var detection = await client.PostAsJsonAsync("/api/v1/detection/scumscan", new { events = Array.Empty<object>() });
+            detection.StatusCode.Should().Be(enabled ? HttpStatusCode.OK : HttpStatusCode.NotFound);
+
+            var ingest = await client.PostAsJsonAsync(
+                "/api/v1/logs/ingest",
+                new { Logs = new[] { "L 12/07/2024 - 10:23:45: World triggered \"Round_Start\"" } });
+            ingest.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var query = await client.PostAsJsonAsync("/api/v1/query/execute", new { query = "find Round_Start | fields SourceType" });
+            using var body = JsonDocument.Parse(await query.Content.ReadAsStringAsync());
+            body.RootElement.GetProperty("results")[0].GetProperty("SourceType").GetString()
+                .Should().Be(enabled ? "L4D2" : "Generic");
         }
         finally
         {
@@ -317,8 +364,22 @@ public sealed class ApiStartupTests : IDisposable
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        Directory.Delete(_workingDirectory, recursive: true);
+        // Windows holds files briefly after a killed process exits.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(_workingDirectory, recursive: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < 40 && ex is IOException or UnauthorizedAccessException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            }
+        }
     }
 }

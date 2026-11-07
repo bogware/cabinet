@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Cabinet.Detection;
+namespace Cabinet.Extras.Gaming.Detection;
 
 /// <summary>
 /// Hackwatch: Detects potential cheating, exploits, and suspicious patterns

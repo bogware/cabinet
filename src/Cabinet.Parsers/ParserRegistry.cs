@@ -11,6 +11,8 @@ public class ParserRegistry : IParserRegistry
 {
     private readonly ConcurrentDictionary<string, ILogParser> _parsers;
     private readonly ConcurrentDictionary<string, ILogParser> _parsersBySourceType;
+    private readonly object _orderLock = new();
+    private volatile ILogParser[] _ordered = [];
 
     public ParserRegistry()
     {
@@ -21,6 +23,14 @@ public class ParserRegistry : IParserRegistry
     public void Register(ILogParser parser)
     {
         ArgumentNullException.ThrowIfNull(parser);
+
+        lock (_orderLock)
+        {
+            var position = Array.FindIndex(_ordered, existing => existing.Name == parser.Name);
+            var updated = position >= 0 ? (ILogParser[])_ordered.Clone() : [.. _ordered, parser];
+            updated[position >= 0 ? position : updated.Length - 1] = parser;
+            _ordered = updated;
+        }
 
         _parsers[parser.Name] = parser;
         _parsersBySourceType[parser.SourceType] = parser;
@@ -38,21 +48,10 @@ public class ParserRegistry : IParserRegistry
 
     public ILogParser? FindParser(string line)
     {
-        // Try parsers in priority order (specific before generic)
-        var priorityOrder = new[]
+        // Registration order decides, as it does for ILogParserProvider
+        foreach (var parser in _ordered)
         {
-            SourceTypes.L4D2,
-            SourceTypes.SourceMod,
-            SourceTypes.SteamCMD,
-            SourceTypes.Cef,
-            SourceTypes.Json,
-            SourceTypes.Csv,
-            SourceTypes.Generic
-        };
-
-        foreach (var sourceType in priorityOrder)
-        {
-            if (_parsersBySourceType.TryGetValue(sourceType, out var parser) && parser.CanParse(line))
+            if (parser.CanParse(line))
             {
                 return parser;
             }

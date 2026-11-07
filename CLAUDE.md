@@ -50,7 +50,7 @@ Strict 4-layer dependency rule (see `docs/ARCHITECTURE.md`):
 ```
 Presentation (Cabinet.API, Cabinet.CLI, Cabinet.Agent)
         ↓
-Services (Cabinet.Query, Cabinet.Detection, Cabinet.Parsers, Cabinet.Alerts)
+Services (Cabinet.Query, Cabinet.Parsers, Cabinet.Alerts, Cabinet.Extras.Gaming)
         ↓
 Data (Cabinet.Storage [SQLite/InMemory], Cabinet.Database [Postgres/OpenSearch], Cabinet.AWS)
         ↓
@@ -59,14 +59,18 @@ Cabinet.Core  (models, interfaces, config — depends on NOTHING)
 
 Rules to preserve when adding code:
 - `Cabinet.Core` must have zero project references. Models and interfaces live here.
-- Service projects (`Query`, `Detection`, `Parsers`, `Alerts`) do **not** reference each other.
+- Service projects (`Query`, `Parsers`, `Alerts`) do **not** reference each other.
 - Data-layer projects do **not** reference each other.
-- Known exceptions to the diagram: `Cabinet.AWS` references `Cabinet.Parsers` (upward), and `Cabinet.Agent` is standalone with no project references (it forwards logs over HTTP). Don't add references to the Agent.
+- Known exceptions to the diagram: `Cabinet.AWS` references `Cabinet.Parsers` (upward), `Cabinet.Extras.Gaming` references `Cabinet.Parsers` for its base class, and `Cabinet.Agent` is standalone with no project references (it forwards logs over HTTP). Don't add references to the Agent.
 - No circular references. New services are registered via DI in `Program.cs` / `ServiceCollectionExtensions.cs`.
 
 ### Storage is pluggable behind `ILogStorage` (`Cabinet.Core/Interfaces/ILogStorage.cs`)
 
 Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQL (prod), OpenSearch (enterprise). Selection is by `Storage:Type` config (`SQLite`, `Memory`, `PostgreSQL`/`Postgres`, `OpenSearch`/`Elasticsearch`; validated at startup in `Program.cs`). If a remote backend is unreachable at startup, the API retries, then exits with a failure code; there is no fallback backend. Stores with no implementation on the selected backend use a local SQLite database (`Storage:MetadataConnectionString`, see `Infrastructure/StorageRegistration.cs`), so that metadata is per-instance. When adding a backend, implement all `ILogStorage` methods, follow the volatile + `SemaphoreSlim` init pattern (see ARCHITECTURE.md "Thread-Safety Patterns"), parameterize **all** queries, and register in `Program.cs`'s storage switch.
+
+### Optional extensions
+
+Game log parsers and moderation detectors live in `Cabinet.Extras.Gaming`, off unless `Gaming:Enabled` is set. Keep game-specific code out of Core and the other services. `DetectionController` stays in the API because extensions can't reference it, and `ExcludeControllersFeatureProvider` removes its routes when the extension is off. `api-spec.json` describes the default configuration, so it omits them. Parser order matters: a line goes to the first parser that accepts it (`AddCabinetParsers`).
 
 ### BQL query engine (`Cabinet.Query`)
 
@@ -115,7 +119,7 @@ See ARCHITECTURE.md "Thread-Safety Patterns" for canonical examples.
 
 ## Testing
 
-Tests live in `tests/Cabinet.Tests/` (`Agent/`, `CLI/`, `Controllers/`, `Core/`, `Detection/`, `Middleware/`, `Parsers/`, `Query/`, `Services/`, `Storage/`). `CONTRIBUTING.md` lists `API/`, `Alerts/`, and `Integration/`, but those directories don't exist. xUnit + FluentAssertions + Moq, AAA structure. Bug fixes need a regression test that fails without the fix. New storage backends need integration tests against the real backend (or in-memory substitute).
+Tests live in `tests/Cabinet.Tests/` (`Agent/`, `CLI/`, `Controllers/`, `Core/`, `Gaming/`, `Middleware/`, `Parsers/`, `Query/`, `Services/`, `Storage/`). `CONTRIBUTING.md` lists `API/`, `Alerts/`, and `Integration/`, but those directories don't exist. xUnit + FluentAssertions + Moq, AAA structure. Bug fixes need a regression test that fails without the fix. New storage backends need integration tests against the real backend (or in-memory substitute).
 
 Postgres and OpenSearch integration tests skip themselves unless `CABINET_TEST_POSTGRES_CONNSTR` or `CABINET_TEST_OPENSEARCH_URL` (plus optional `_USER`/`_PASS`) is set, so skipped tests in a normal run are expected. CI sets the Postgres variable against a real database.
 

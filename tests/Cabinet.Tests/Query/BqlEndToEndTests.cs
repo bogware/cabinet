@@ -56,7 +56,8 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
             events.Add(parsed);
         }
 
-        await storage.StoreBatchAsync(events);
+        var stored = await storage.StoreBatchAsync(events);
+        stored.Should().Be(events.Count, "every seeded event must be stored");
         await OnSeededAsync();
         _engine = new BqlQueryEngine(storage, new BqlParser(), new BqlOptimizer(), NullLogger<BqlQueryEngine>.Instance);
     }
@@ -387,5 +388,18 @@ public sealed class OpenSearchBqlEndToEndTests : BqlEndToEndTests
         using var client = new HttpClient();
         var response = await client.PostAsync($"{Url!.TrimEnd('/')}/{_indexPrefix}-*/_refresh", null);
         response.EnsureSuccessStatusCode();
+    }
+
+    // Each test creates its own indices. Left behind, they reach the node's shard limit,
+    // after which new indices can't be created and writes fail.
+    public override async Task DisposeAsync()
+    {
+        if (!IsAvailable)
+            return;
+
+        using var client = new HttpClient();
+        var url = Url!.TrimEnd('/');
+        (await client.DeleteAsync($"{url}/{_indexPrefix}-*")).EnsureSuccessStatusCode();
+        (await client.DeleteAsync($"{url}/_template/{_indexPrefix}-template")).EnsureSuccessStatusCode();
     }
 }

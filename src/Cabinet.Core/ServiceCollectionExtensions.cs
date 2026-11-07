@@ -27,7 +27,6 @@ namespace Cabinet.Core
             // Set defaults if not configured
             options.Storage ??= new StorageConfiguration();
             options.Ingestion ??= new IngestionConfiguration();
-            options.Detection ??= new DetectionConfiguration();
             options.Output ??= new OutputConfiguration();
         }
     }

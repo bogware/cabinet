@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Game log parsers and moderation detection moved to the optional `Cabinet.Extras.Gaming` extension, off by default. Set `Gaming:Enabled=true` to use them. `/api/v1/detection/*` returns 404 otherwise.
+- Parsers run in a fixed order: JSON, CEF, Apache, Nginx, CSV, gaming parsers if enabled, Generic. Ordinary lines mentioning words like "Steam" are no longer claimed by a game parser, and the API now parses Apache and Nginx logs.
 - `stats count` output column is now `count`, as documented, rather than `count()`.
 - A bare `... | stats count` uses the backend's count, so it isn't limited by the 100,000 event read limit. Other queries that hit that limit set `truncated: true` in the response and the `X-Result-Truncated` header.
 - Moved to .NET 10, with package versions declared centrally in `Directory.Packages.props`. Restore now audits transitive packages.
@@ -43,6 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- PostgreSQL instances starting together on a new database could crash creating the schema. Schema creation now takes a lock.
+- OpenSearch queries raise an error when shards fail instead of returning partial results.
 - BQL field names now match case-insensitively in every stage, so `stats count by host`, `fields`, `dedup`, `top` and `rename` find the fields ingestion stores. `source_type`, `raw_line` and `level` are aliases, and `message` always has a value.
 - Filters and sorts after a stage such as `head`, `eval` or `stats` now apply to that stage's output. They were moved ahead of it, giving wrong results.
 - `OR` conditions, repeated filters and `severity > n` no longer lose rows or match the wrong ones.

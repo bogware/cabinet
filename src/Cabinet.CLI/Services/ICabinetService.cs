@@ -1,6 +1,5 @@
 using Cabinet.Core.Models;
 using Cabinet.Core.Interfaces;
-using Cabinet.Detection;
 using Cabinet.Query;
 
 namespace Cabinet.CLI.Services;
@@ -24,11 +23,6 @@ public interface ICabinetService
     Task<IEnumerable<LogEvent>> ExecuteQueryAsync(string query, Dictionary<string, object>? parameters = null);
     Task<bool> ValidateQueryAsync(string query);
 
-    // Detection operations
-    Task<List<DetectionResult>> RunScumscanAsync(IEnumerable<LogEvent> events);
-    Task<List<DetectionResult>> RunHackwatchAsync(IEnumerable<LogEvent> events);
-    Task<List<DetectionResult>> RunAdminabuseAsync(IEnumerable<LogEvent> events);
-
     // Health operations
     Task<bool> CheckHealthAsync();
     Task<string> GetVersionAsync();
@@ -41,22 +35,13 @@ public class LocalCabinetService : ICabinetService
 {
     private readonly ILogStorage _storage;
     private readonly IQueryEngine _queryEngine;
-    private readonly IScumscanDetector _scumscanDetector;
-    private readonly IHackwatchDetector _hackwatchDetector;
-    private readonly IAdminabuseDetector _adminabuseDetector;
 
     public LocalCabinetService(
         ILogStorage storage,
-        IQueryEngine queryEngine,
-        IScumscanDetector scumscanDetector,
-        IHackwatchDetector hackwatchDetector,
-        IAdminabuseDetector adminabuseDetector)
+        IQueryEngine queryEngine)
     {
         _storage = storage;
         _queryEngine = queryEngine;
-        _scumscanDetector = scumscanDetector;
-        _hackwatchDetector = hackwatchDetector;
-        _adminabuseDetector = adminabuseDetector;
     }
 
     public async Task<IEnumerable<LogEvent>> GetEventsAsync(
@@ -99,48 +84,6 @@ public class LocalCabinetService : ICabinetService
         {
             return Task.FromResult(false);
         }
-    }
-
-    public async Task<List<DetectionResult>> RunScumscanAsync(IEnumerable<LogEvent> events)
-    {
-        var results = new List<DetectionResult>();
-        foreach (var evt in events)
-        {
-            var result = await _scumscanDetector.AnalyzeAsync(evt);
-            if (result != null)
-            {
-                results.Add(result);
-            }
-        }
-        return results;
-    }
-
-    public async Task<List<DetectionResult>> RunHackwatchAsync(IEnumerable<LogEvent> events)
-    {
-        var results = new List<DetectionResult>();
-        foreach (var evt in events)
-        {
-            var result = await _hackwatchDetector.AnalyzeAsync(evt);
-            if (result != null)
-            {
-                results.Add(result);
-            }
-        }
-        return results;
-    }
-
-    public async Task<List<DetectionResult>> RunAdminabuseAsync(IEnumerable<LogEvent> events)
-    {
-        var results = new List<DetectionResult>();
-        foreach (var evt in events)
-        {
-            var result = await _adminabuseDetector.AnalyzeAsync(evt);
-            if (result != null)
-            {
-                results.Add(result);
-            }
-        }
-        return results;
     }
 
     public Task<bool> CheckHealthAsync()
@@ -215,24 +158,6 @@ public class RemoteCabinetService : ICabinetService
     {
         var response = await _apiClient.ValidateQueryAsync(query);
         return response.IsValid;
-    }
-
-    public async Task<List<DetectionResult>> RunScumscanAsync(IEnumerable<LogEvent> events)
-    {
-        var response = await _apiClient.RunScumscanAsync(events.ToList());
-        return response.Results;
-    }
-
-    public async Task<List<DetectionResult>> RunHackwatchAsync(IEnumerable<LogEvent> events)
-    {
-        var response = await _apiClient.RunHackwatchAsync(events.ToList());
-        return response.Results;
-    }
-
-    public async Task<List<DetectionResult>> RunAdminabuseAsync(IEnumerable<LogEvent> events)
-    {
-        var response = await _apiClient.RunAdminabuseAsync(events.ToList());
-        return response.Results;
     }
 
     public async Task<bool> CheckHealthAsync()

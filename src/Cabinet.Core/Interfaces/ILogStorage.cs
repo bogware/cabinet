@@ -83,7 +83,7 @@ public class QueryContext
     public string? Index { get; set; }
 
     /// <summary>
-    /// Source type filter (string-based, e.g., "SteamCMD", "Generic")
+    /// Source type filter (string-based, e.g., "Apache", "Generic")
     /// </summary>
     public string? SourceType { get; set; }
 

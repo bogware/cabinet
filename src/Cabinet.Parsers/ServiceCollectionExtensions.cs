@@ -1,32 +1,39 @@
 using Cabinet.Core.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Cabinet.Parsers;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddCabinetParsers(this IServiceCollection services)
+    /// <summary>
+    /// Registers the built-in parsers. A line goes to the first parser that accepts it, so strict
+    /// formats come first and the catch-all generic parser last.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="addParsers">Registers optional parsers, which run before the generic parser.</param>
+    public static IServiceCollection AddCabinetParsers(
+        this IServiceCollection services,
+        Action<IServiceCollection>? addParsers = null)
     {
-        // Register built-in parsers (order matters — specific parsers before generic)
-        services.AddSingleton<ILogParser, L4D2Parser>();
-        services.AddSingleton<ILogParser, SourceModParser>();
-        services.AddSingleton<ILogParser, SteamCMDParser>();
         services.AddSingleton<ILogParser, JsonLogParser>();
-        services.AddSingleton<ILogParser, CsvLogParser>();
         services.AddSingleton<ILogParser, CefParser>();
         services.AddSingleton<ILogParser, ApacheLogParser>();
         services.AddSingleton<ILogParser, NginxLogParser>();
-        services.AddSingleton<ILogParser, GenericParser>(); // Generic must be last (catches all)
+        services.AddSingleton<ILogParser, CsvLogParser>();
+        addParsers?.Invoke(services);
+        services.AddSingleton<ILogParser, GenericParser>();
 
-        // Register parser registry and populate it
+        services.TryAddSingleton<ILogParserProvider, LogParserProvider>();
+
         services.AddSingleton<IParserRegistry>(provider =>
         {
             var registry = new ParserRegistry();
-            var parsers = provider.GetServices<ILogParser>();
-            foreach (var parser in parsers)
+            foreach (var parser in provider.GetServices<ILogParser>())
             {
                 registry.Register(parser);
             }
+
             return registry;
         });
 

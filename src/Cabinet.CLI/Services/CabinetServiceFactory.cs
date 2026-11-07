@@ -1,6 +1,5 @@
 using Cabinet.CLI.Configuration;
 using Cabinet.Core.Interfaces;
-using Cabinet.Detection;
 using Cabinet.Parsers;
 using Cabinet.Query;
 using Cabinet.Storage;
@@ -66,16 +65,7 @@ public static class CabinetServiceFactory
             });
 
             // Configure parsers
-            services.AddSingleton<ILogParserProvider, LogParserProvider>();
-            services.AddTransient<ILogParser, GenericParser>();
-            services.AddTransient<ILogParser, L4D2Parser>();
-            services.AddTransient<ILogParser, SourceModParser>();
-            services.AddTransient<ILogParser, SteamCMDParser>();
-
-            // Configure detection
-            services.AddScoped<IScumscanDetector, ScumscanDetector>();
-            services.AddScoped<IHackwatchDetector, HackwatchDetector>();
-            services.AddScoped<IAdminabuseDetector, AdminabuseDetector>();
+            services.AddCabinetParsers();
 
             // Configure query engine
             services.AddScoped<IQueryEngine, QueryEngine>();
@@ -84,10 +74,7 @@ public static class CabinetServiceFactory
 
             return new LocalCabinetService(
                 serviceProvider.GetRequiredService<ILogStorage>(),
-                serviceProvider.GetRequiredService<IQueryEngine>(),
-                serviceProvider.GetRequiredService<IScumscanDetector>(),
-                serviceProvider.GetRequiredService<IHackwatchDetector>(),
-                serviceProvider.GetRequiredService<IAdminabuseDetector>()
+                serviceProvider.GetRequiredService<IQueryEngine>()
             );
         }
     }
