@@ -1,17 +1,26 @@
 name: Isolate job state
 description: >-
-  Keeps tools, package caches and credentials in the job's temp directory. Self-hosted
-  runners are long-lived and shared between repositories, so nothing a job writes should
-  be visible to, or trusted from, another job on the same host.
+  Keeps tools, package caches and credentials in a directory only this job uses. Self-hosted
+  runners are long-lived and shared between repositories, so nothing a job writes should be
+  visible to, or trusted from, another job on the same host. The runner's temp directory alone
+  isn't enough, because it can hold leftovers from earlier jobs.
 
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
+        # Best effort: earlier jobs' directories, which nothing is using after this long.
+        find "$RUNNER_TEMP" -mindepth 1 -maxdepth 1 -type d -name 'cabinet-job-*' -mmin +360 \
+          -exec rm -rf {} + 2>/dev/null || true
+
+        job_dir="$RUNNER_TEMP/cabinet-job-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB-$RANDOM"
+        mkdir -p "$job_dir"
         {
-          echo "DOTNET_INSTALL_DIR=$RUNNER_TEMP/dotnet"
-          echo "DOTNET_CLI_HOME=$RUNNER_TEMP/dotnet-home"
-          echo "NUGET_PACKAGES=$RUNNER_TEMP/nuget"
-          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy"
+          echo "CABINET_JOB_DIR=$job_dir"
+          echo "DOTNET_INSTALL_DIR=$job_dir/dotnet"
+          echo "DOTNET_CLI_HOME=$job_dir/dotnet-home"
+          echo "NUGET_PACKAGES=$job_dir/nuget"
+          echo "TRIVY_CACHE_DIR=$job_dir/trivy"
+          echo "DOCKER_CONFIG=$job_dir/docker-config"
         } >> "$GITHUB_ENV"

@@ -103,6 +103,10 @@ jobs:
         path: '**/TestResults/**'
         retention-days: 30
 
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"
+
   release:
     name: Build ${{ matrix.artifact_name }}
     needs: build-and-test
@@ -193,6 +197,10 @@ jobs:
           ${{ matrix.artifact_name }}.zip
           ${{ matrix.artifact_name }}.zip.sha256
         if-no-files-found: ignore
+
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"
 
   build-deb:
     name: Build .deb packages
@@ -442,6 +450,10 @@ jobs:
           *.deb
           *.deb.sha256
 
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"
+
   create-release:
     name: Create GitHub Release
     needs: [release, build-deb]
@@ -483,6 +495,10 @@ jobs:
           artifacts/install-agent.sh
           artifacts/install-agent.ps1
 
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"
+
   docker:
     name: Docker Build & Push
     needs: build-and-test
@@ -497,9 +513,6 @@ jobs:
         persist-credentials: false
 
     - uses: ./.github/actions/isolate-job
-
-    - name: Keep registry credentials out of the runner's home directory
-      run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
     - name: Set up QEMU (for multi-platform builds)
       uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -567,3 +580,7 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
         platforms: linux/amd64,linux/arm64
+
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"

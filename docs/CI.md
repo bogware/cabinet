@@ -28,9 +28,10 @@ file it runs, including that expression. The controls that hold are:
 
 ## Job isolation on shared hosts
 
-- `.github/actions/isolate-job` puts the .NET SDK, NuGet packages and scanner cache in the job's temp
-  directory.
-- `DOCKER_CONFIG` in the image job keeps registry credentials out of the runner user's home directory.
+- `.github/actions/isolate-job` gives each job its own directory for the .NET SDK, NuGet packages,
+  scanner cache and registry credentials, removed when the job ends. It's uniquely named because the
+  runner's temp directory can hold leftovers from earlier jobs, and the .NET installer won't repair
+  a partial install it finds there.
 - `actions/checkout` runs with `persist-credentials: false`, so no token is left in `.git/config`.
 - Service containers publish random host ports, so concurrent jobs can't collide.
 - The scan image has a per-run tag and is removed afterwards.
