@@ -12,6 +12,8 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
 {
     private readonly IApiKeyService _apiKeyService;
     private const string ApiKeyHeaderName = "X-API-Key";
+    private const string HecTokenPrefix = "Splunk ";
+    private const string HecPath = "/services/collector";
 
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<ApiKeyAuthenticationOptions> options,
@@ -23,15 +25,36 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAuthentic
         _apiKeyService = apiKeyService;
     }
 
+    /// <summary>
+    /// Reads the key from X-API-Key, or from the Authorization header that Splunk HEC clients
+    /// send, which is accepted on collector routes only.
+    /// </summary>
+    private string? ReadApiKey()
+    {
+        if (Request.Headers.TryGetValue(ApiKeyHeaderName, out var apiKeyHeader))
+        {
+            return apiKeyHeader.ToString();
+        }
+
+        var authorization = Request.Headers.Authorization.ToString();
+        if (Request.Path.StartsWithSegments(HecPath)
+            && authorization.StartsWith(HecTokenPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return authorization[HecTokenPrefix.Length..].Trim();
+        }
+
+        return null;
+    }
+
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        // Only accept API key via header — never from query string (keys in URLs leak via logs, referrer headers, browser history)
-        if (!Request.Headers.TryGetValue(ApiKeyHeaderName, out var apiKeyHeader))
+        // Only accept API keys via headers — never from query string (keys in URLs leak via logs, referrer headers, browser history)
+        var apiKey = ReadApiKey();
+        if (apiKey == null)
         {
             return AuthenticateResult.Fail("API Key not provided. Use the X-API-Key header.");
         }
 
-        var apiKey = apiKeyHeader.ToString();
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             return AuthenticateResult.Fail("API Key not provided");

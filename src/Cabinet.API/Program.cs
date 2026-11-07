@@ -39,6 +39,10 @@ try
     // Use Serilog
     builder.Host.UseSerilog();
 
+    // Report lifecycle to the service manager; both are no-ops outside a service
+    builder.Host.UseSystemd();
+    builder.Host.UseWindowsService();
+
     // Add services to the container
     builder.Services.AddControllers(options =>
     {
@@ -64,11 +68,11 @@ try
         {
             Title = "Cabinet API",
             Version = "v1",
-            Description = "Enterprise Log Intelligence System API",
-            Contact = new OpenApiContact
+            Description = "Log ingestion, search and alerting API",
+            License = new OpenApiLicense
             {
-                Name = "Cabinet Team",
-                Email = "support@cabinet.io"
+                Name = "Apache-2.0",
+                Url = new Uri("https://www.apache.org/licenses/LICENSE-2.0")
             }
         });
 

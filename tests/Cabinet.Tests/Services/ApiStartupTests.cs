@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cabinet.API.Controllers;
 using FluentAssertions;
 using Xunit;
@@ -92,6 +94,109 @@ public sealed class ApiStartupTests : IDisposable
             await Task.WhenAll(stdout, stderr);
         }
     }
+
+    [Fact]
+    public async Task Api_DefaultProductionConfiguration_Starts()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
+        startInfo.ArgumentList.Add("--contentRoot");
+        startInfo.ArgumentList.Add(Path.GetDirectoryName(typeof(LogsController).Assembly.Location)!);
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(client, process);
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    [Fact]
+    public async Task Api_SplunkAuthorizationHeader_WorksOnCollectorRoutesOnly()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+        startInfo.Environment["ApiKeys__Keys__0__Key"] = "hec-test-key";
+        startInfo.Environment["ApiKeys__Keys__0__Tier"] = "Enterprise";
+        startInfo.Environment["ApiKeys__Keys__0__Name"] = "HEC test";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(client, process);
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Splunk hec-test-key");
+
+            var collector = await client.PostAsJsonAsync(
+                "/services/collector/event",
+                new { @event = "Server started", sourcetype = "syslog", host = "web-01" });
+            collector.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var other = await client.GetAsync("/api/v1/logs/stats");
+            other.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    [Fact]
+    public async Task ApiSpec_MatchesTheRunningApi()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(client, process);
+
+            var generated = await client.GetStringAsync("/swagger/v1/swagger.json");
+            var specPath = RepositoryFile("api-spec.json");
+
+            if (Environment.GetEnvironmentVariable("CABINET_UPDATE_API_SPEC") == "1")
+            {
+                await File.WriteAllTextAsync(specPath, generated.ReplaceLineEndings("\n") + "\n");
+            }
+
+            var matches = JsonNode.DeepEquals(
+                JsonNode.Parse(generated),
+                JsonNode.Parse(await File.ReadAllTextAsync(specPath)));
+            matches.Should().BeTrue(
+                "api-spec.json must describe the API; run the tests with CABINET_UPDATE_API_SPEC=1 to regenerate it");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    private static string RepositoryFile(string name, [CallerFilePath] string testFile = "") =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testFile)!, "..", "..", "..", name));
 
     [Fact]
     public async Task Api_SpoofedForwardedFor_DoesNotEvadePreAuthLimit()

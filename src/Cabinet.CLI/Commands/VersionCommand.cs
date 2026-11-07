@@ -76,7 +76,6 @@ public class HelpCommand : Command
         AnsiConsole.MarkupLine("  cabinet query \"vac banned | stats count by steamid\" --time 24h\n");
 
         AnsiConsole.MarkupLine("  [dim]# Run toxic behavior scan[/]");
-        AnsiConsole.MarkupLine("  cabinet report scumscan --last 7d\n");
 
         AnsiConsole.MarkupLine("\n[dim]For more information, visit: https://github.com/yourusername/cabinet[/]");
 

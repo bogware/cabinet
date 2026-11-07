@@ -36,7 +36,6 @@ class Program
         rootCommand.AddCommand(new TailCommand());
         rootCommand.AddCommand(new IngestCommand());
         rootCommand.AddCommand(new QueryCommand());
-        rootCommand.AddCommand(new ReportCommand());
         rootCommand.AddCommand(new DashboardCommand());
         rootCommand.AddCommand(new AWSCommand());
         rootCommand.AddCommand(new SetupWizardCommand());
