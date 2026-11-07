@@ -30,7 +30,7 @@ public sealed class SerilogAuditLogger : IAuditLogger
                 auditEvent.ResourceId ?? "-",
                 auditEvent.Success,
                 auditEvent.SourceIp ?? "-",
-                auditEvent.Description ?? "");
+                Sanitize(auditEvent.Description));
         }
         catch (Exception ex)
         {
@@ -55,4 +55,14 @@ public sealed class SerilogAuditLogger : IAuditLogger
         IReadOnlyList<AuditEvent> empty = Array.Empty<AuditEvent>();
         return Task.FromResult(empty);
     }
+
+    /// <summary>A description can quote user input, and a line break in it could forge a log line.</summary>
+    private static string Sanitize(string? text) =>
+        string.Create(text?.Length ?? 0, text ?? string.Empty, (span, source) =>
+        {
+            for (var i = 0; i < span.Length; i++)
+            {
+                span[i] = char.IsControl(source[i]) ? ' ' : source[i];
+            }
+        });
 }

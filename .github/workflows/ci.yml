@@ -80,6 +80,14 @@ jobs:
         CABINET_DB_PASSWORD: ci-validation-only
         CABINET_GRAFANA_PASSWORD: ci-validation-only
 
+    - name: Validate Kubernetes manifests
+      run: |
+        docker run --rm -v "$PWD/k8s:/k8s:ro" registry.k8s.io/kubectl:v1.31.0 kustomize /k8s > k8s-rendered.yaml
+        docker run --rm -v "$PWD/k8s-rendered.yaml:/rendered.yaml:ro" ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary /rendered.yaml
+
+    - name: Validate Prometheus rules
+      run: docker run --rm --entrypoint promtool -v "$PWD/prometheus-rules.yml:/rules.yml:ro" prom/prometheus:v2.54.1 check rules /rules.yml
+
     - name: Restore dependencies
       run: dotnet restore
 
@@ -92,6 +100,9 @@ jobs:
         CABINET_TEST_POSTGRES_CONNSTR: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Database=cabinet;Username=cabinet;Password=cabinet-ci
         CABINET_TEST_OPENSEARCH_URL: http://localhost:${{ job.services.opensearch.ports['9200'] }}
       run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
+
+    - name: PostgreSQL backup and restore drill
+      run: ./tests/EndToEnd/backup-drill.sh
 
     - name: Upload test results
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -552,7 +563,7 @@ jobs:
         image-ref: cabinet-scan:${{ github.run_id }}-${{ github.run_attempt }}
         format: 'sarif'
         output: 'trivy-results.sarif'
-        exit-code: '0'
+        exit-code: '1'
         severity: 'CRITICAL,HIGH'
 
     - name: Upload Trivy scan results

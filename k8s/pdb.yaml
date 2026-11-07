@@ -1,11 +1,7 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: cabinet-api-pdb
-  namespace: cabinet
-  labels:
-    app: cabinet
-    component: api
+  name: cabinet-api
 spec:
   minAvailable: 1
   selector:

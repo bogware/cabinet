@@ -120,7 +120,11 @@ public class HecController : ControllerBase
 
         try
         {
-            await _storage.StoreBatchAsync(events, cancellationToken);
+            using (var span = Cabinet.Core.Utilities.CabinetDiagnostics.Source.StartActivity("ingest.store"))
+            {
+                span?.SetTag("cabinet.events", events.Count);
+                await _storage.StoreBatchAsync(events, cancellationToken);
+            }
             _logger.LogDebug("HEC ingested {Count} events ({Errors} parse errors)", events.Count, parseErrors);
 
             // Invalidate cached query results so dashboards get fresh data
@@ -220,7 +224,11 @@ public class HecController : ControllerBase
 
         try
         {
-            await _storage.StoreBatchAsync(events, cancellationToken);
+            using (var span = Cabinet.Core.Utilities.CabinetDiagnostics.Source.StartActivity("ingest.store"))
+            {
+                span?.SetTag("cabinet.events", events.Count);
+                await _storage.StoreBatchAsync(events, cancellationToken);
+            }
             _logger.LogDebug("HEC raw ingested {Count} events", events.Count);
 
             // Invalidate cached query results so dashboards get fresh data

@@ -223,38 +223,27 @@ Delivery is at-least-once, and the server stores each event once.
 
 ## Kubernetes
 
-The manifests in `k8s/` are a starting point, not a working deployment. Expect to complete them before use:
+The manifests in `k8s/` deploy two API replicas and a PostgreSQL pod. `tests/EndToEnd/k8s-smoke.sh` deploys them to a throwaway kind cluster, stores and reads events, and deletes a pod.
 
-- `deployment.yaml` has no volume mounts, so the PVCs in `pvc.yaml` aren't attached, and local SQLite metadata is lost when a pod restarts.
-- `ingress.yaml` routes `/api`, `/services` and `/health`, but not the dashboard.
-- There are no Postgres or Redis manifests. Provide them yourself.
-- `deployment.yaml` sets 2 replicas and `hpa.yaml` scales from 2 to 10. Multiple replicas aren't safe, so set `replicas: 1` and leave out `hpa.yaml` and `pdb.yaml`.
-- `secret-template.yaml` holds empty values. Copy it, fill it in, and don't apply the template itself.
-
-| File | Purpose |
-|------|---------|
-| `deployment.yaml` | API deployment with probes, running as uid 1654 |
-| `service.yaml` | ClusterIP service, ConfigMap and the `cabinet` Namespace |
-| `hpa.yaml` | Horizontal Pod Autoscaler |
-| `pdb.yaml` | Pod Disruption Budget |
-| `network-policy.yaml` | Ingress and egress rules |
-| `ingress.yaml` | External access with TLS termination |
-| `pvc.yaml` | Persistent volume claims |
-| `secret-template.yaml` | Template for `cabinet-secrets` |
-
-The namespace is defined in `service.yaml`, so apply that first:
+Create the secret, then apply:
 
 ```bash
-kubectl apply -f k8s/service.yaml
-
-# Fill in secret-template.yaml as described in its header, then:
-kubectl apply -f secrets.yaml
-
-kubectl apply -f k8s/deployment.yaml -f k8s/network-policy.yaml -f k8s/ingress.yaml -f k8s/pvc.yaml
-
-kubectl -n cabinet port-forward svc/cabinet-api 8080:80
-curl http://localhost:8080/health
+kubectl create namespace cabinet
+kubectl -n cabinet create secret generic cabinet-secrets \
+  --from-literal=postgres-password="$(openssl rand -hex 24)" \
+  --from-literal=api-key-0="$(openssl rand -hex 32)"
+kubectl apply -k k8s/
 ```
+
+Before using it for real:
+
+- Set `newTag` in `kustomization.yaml` to a released version.
+- Set the host in `ingress.yaml`, and add TLS through your own issuer.
+- Replace `postgres.yaml` with a managed database or an operator. The pod included is a single point of failure with no backups.
+- `network-policy.yaml` needs a network plugin that enforces it, and assumes `ingress-nginx` and `monitoring` namespaces.
+- The Horizontal Pod Autoscaler needs metrics-server.
+
+The API key in the secret has the Admin tier. Add others with more `ApiKeys__Keys__N__*` variables.
 
 ## Configuration Reference
 
@@ -327,7 +316,7 @@ The value is the raw key, which the API hashes with SHA-256 in memory. Don't sto
 }
 ```
 
-These two keys set the per-address limit, which counts all requests from an address except `/health*` and `/metrics`. The tier limits (Basic 100/min, Professional 1,000/min, Enterprise 10,000/min) and the anonymous limit (100/min per address, rejected rather than queued) are hardcoded. The `RateLimiting:Basic`, `:Professional` and `:Enterprise` values in the shipped `appsettings` files and `IpRateLimiting` are not read. Limits are held in process memory. A Redis limiter exists in the code but isn't wired in.
+These two keys set the per-address limit, which counts all requests from an address except `/health*` and `/metrics`. The tier limits (Basic 100/min, Professional 1,000/min, Enterprise 10,000/min) can be changed with `RateLimiting:Tiers:Basic`, `:Professional` and `:Enterprise`. The Admin tier follows Enterprise. Limits count per instance.
 
 ### Reverse Proxies
 
@@ -340,6 +329,20 @@ Network__TrustedProxies__0=10.0.0.5
 ### CORS
 
 `Cors:AllowedOrigins` lists allowed origins. If the key is unset, only `http://localhost:3000` is allowed.
+
+### Tracing
+
+Set `Telemetry:OtlpEndpoint` to export OpenTelemetry traces of requests, queries and ingest to a collector:
+
+```json
+{ "Telemetry": { "OtlpEndpoint": "http://otel-collector:4317", "ServiceName": "cabinet-api" } }
+```
+
+It uses OTLP over gRPC. Set `Telemetry:OtlpProtocol` to `http` for HTTP, with the full `/v1/traces` URL. Standard `OTEL_*` variables also apply. Health checks and metrics aren't traced. Log lines carry the request's correlation ID.
+
+### Logging
+
+The `Serilog` section adjusts logging, for example `Serilog:MinimumLevel:Default`. Logs go to the console and to `logs/cabinet-api-*.log`, keeping 30 files of up to 100 MB.
 
 ### Query limits
 
@@ -415,8 +418,6 @@ OIDC JWT validation is configured under `SSO` (`Enabled`, `Provider`, `Oidc:Auth
 
 These have configuration or classes in the code but no effect, so don't rely on them:
 
-- `Encryption:*`: the service is initialized at startup, but nothing calls it. Enabling it doesn't encrypt stored data.
-- `Masking:Rules`: the masking service is registered, but never applied to results.
 - Per-index RBAC: capability checks always evaluate index `main`. There is no configuration section for RBAC users. No tier has `IndexManagement` or `UserManagement`, and `PUT /api/v1/roles/{apiKeyHash}` returns 501.
 - Hot/warm/cold tiering and S3 archival.
 - Server-side multi-line merging. Use the agent.
@@ -433,15 +434,60 @@ See also [SECURITY.md](../SECURITY.md).
 - [ ] Restrict `/metrics` at the network, since it is unauthenticated
 - [ ] Set `Cors:AllowedOrigins`
 - [ ] Set `Storage:RetentionDays` if you want events to expire
-- [ ] Use disk or database encryption if logs are sensitive
-- [ ] Ship the audit log to separate storage if you need to retain it
+- [ ] Use disk or database encryption if logs are sensitive, and field encryption and masking for what's most sensitive
+- [ ] Ship application logs, which hold audit chain heads, to separate storage
+- [ ] Schedule backups, and run a restore drill
 - [ ] Mount secrets from a secret store rather than config files
 
 The API limits request bodies to 50 MB (5 MB on HEC routes) and sends CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` and `Strict-Transport-Security` headers.
 
 ### Audit Log
 
-Security events are written to the application log as a hash-chained audit log: each event's description carries a hash derived from the previous one. The chain exists in the log output only. There is no verifier, it is not tamper-proof, and the chain head is local to each instance.
+Security events go to the metadata database as hash-chained records, as well as the log output. Each record's hash covers all its fields and the hash before it, and each process writes its own chain.
+
+- `GET /api/v1/audit` searches events. `principalId`, `action`, `startTime` and `endTime` filter them.
+- `GET /api/v1/audit/verify` checks every chain, and reports changed, removed and missing records.
+
+Both need `UserManagement`. Records older than `Audit:RetentionDays` (default 365) are removed hourly, in a way verification recognizes.
+
+This makes tampering evident rather than impossible. Someone with write access to the database could rewrite an entire chain, so every 1,000 records the current head goes to the log output too. Keep those logs somewhere else if that matters to you.
+
+### Encryption
+
+Set `Encryption:Enabled` to encrypt chosen fields with AES-256-GCM before they reach storage:
+
+```json
+{
+  "Encryption": {
+    "Enabled": true,
+    "KeyProvider": "Environment",
+    "EncryptedFields": ["card", "ssn", "secret_*"],
+    "EncryptRawLine": false
+  }
+}
+```
+
+A field's value is also removed from the raw line, so it isn't stored there in plain text. With `EncryptRawLine`, the whole line is encrypted. Queries see decrypted events, so `where` works on these fields, but `find` can't find them in storage, and with `EncryptRawLine` it can't find anything.
+
+`KeyProvider` is `Local`, which keeps a key file at `KeyFilePath` and suits one instance, or `Environment`, which reads a base64 key from `CABINET_ENCRYPTION_KEY`. Several instances must share a key. **Back the key up separately: without it the data can't be read.** Events stored before enabling it stay as they were, and there is no key rotation yet.
+
+### Field masking
+
+`Masking:Rules` masks values by the reader's role, in every read:
+
+```json
+{
+  "Masking": {
+    "Rules": [
+      { "FieldPattern": "card", "Strategy": "Partial", "ExemptRoles": ["SuperAdmin"] },
+      { "FieldPattern": "email", "Strategy": "Hash" },
+      { "FieldPattern": "*", "Strategy": "Pattern", "ValuePattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b", "Replacement": "[ssn]" }
+    ]
+  }
+}
+```
+
+A masked field's value is masked in the raw line as well, and a `ValuePattern` also applies to the line directly, which catches values no parser extracted. The stored event doesn't change. Searching for a masked value still matches, so someone can tell that a value exists, without seeing it. For data nobody should read, use encryption or don't ingest it. Scheduled searches run as the lowest role, so alerts carry masked values.
 
 ### TLS
 
@@ -480,50 +526,50 @@ The `monitoring` Compose profile provides a Prometheus scrape config and a Grafa
 
 ### SQLite
 
+The built-in service takes a consistent copy while the server runs, checks it, and keeps a checksum:
+
 ```bash
-# Online backup, safe while the server is writing
-sqlite3 cabinet.db ".backup /backups/cabinet-backup.db"
+# Take a backup now, and check one later
+curl -X POST -H "X-API-Key: $KEY" http://localhost:5000/api/v1/backups
+curl -X POST -H "X-API-Key: $KEY" http://localhost:5000/api/v1/backups/<id>/verify
 ```
 
-Do the same for `cabinet-metadata.db` and `cabinet-rbac.db` where they hold data you want to keep.
+Or set `Backup:AutoBackupEnabled`, with `Backup:AutoBackupIntervalHours`, `Backup:RetentionDays` and `Backup:ArchivePath`. `Backup:S3Bucket` also uploads each backup, using the default AWS credentials.
 
-The built-in `LocalBackupService` (`Backup:AutoBackupEnabled`) copies the file without WAL consistency and there is no restore, so use `sqlite3` instead.
+To restore, stop the server, then:
+
+```bash
+dotnet Cabinet.API.dll --restore /backups/backup-20260115-020000-ab12cd34.db.gz --force
+```
+
+It uses the configured `Storage:ConnectionString`, checks the backup before touching anything, and without `--force` won't replace a database. This restores events and all metadata, since they share the file. Copy `Encryption:KeyFilePath` separately if you use it.
 
 ### PostgreSQL
 
 ```bash
-pg_dump -h localhost -U cabinet -d cabinet -F c -f /backups/cabinet-$(date +%Y%m%d).dump
+pg_dump -h db -U cabinet -d cabinet -Fc -f /backups/cabinet-$(date +%Y%m%d).dump
 
-# Restore
-pg_restore -h localhost -U cabinet -d cabinet /backups/cabinet-20260115.dump
+# With every API instance stopped, on an empty database:
+pg_restore -h db -U cabinet -d cabinet --exit-on-error /backups/cabinet-20260115.dump
 ```
 
-In the Compose stack, Postgres isn't published to the host, so run this through the container:
+The database holds events and all shared state, including the audit log.
 
-```bash
-docker compose exec -T postgres pg_dump -U cabinet -d cabinet -F c > cabinet.dump
-```
-
-Back up the local metadata database as well, since search jobs and data models live there.
+`tests/EndToEnd/backup-drill.sh` runs this whole sequence in CI: it stores events, dumps, drops the database, restores, and checks that events, a retention policy and the audit log all came back. Copy it for your own drills. A backup you haven't restored isn't a backup.
 
 ### OpenSearch
 
+Use snapshots, into a repository registered with `path.repo` on the nodes:
+
 ```bash
-# Register snapshot repository
 curl -X PUT "http://opensearch:9200/_snapshot/cabinet-backups" -H 'Content-Type: application/json' -d '{
   "type": "fs",
   "settings": { "location": "/backups/opensearch" }
 }'
-
-# Create snapshot
 curl -X PUT "http://opensearch:9200/_snapshot/cabinet-backups/snapshot-$(date +%Y%m%d)"
 ```
 
-All metadata is in the local SQLite database with this backend, so back that up too.
-
-### Recovery
-
-See [Runbook: Disaster Recovery](#runbook-disaster-recovery).
+This path isn't drill-tested. Metadata isn't in OpenSearch, so back that up too: the SQLite file at `Storage:MetadataConnectionString`, or the database at `Storage:MetadataPostgresConnectionString`.
 
 ## Scaling
 
@@ -542,7 +588,6 @@ What stays per instance:
 
 - Rate limits, so a client's effective limit grows with the number of instances.
 - The query cache, so instances can differ for up to `Query:CacheTtlSeconds`.
-- The audit chain head.
 
 SQLite and in-memory storage serve a single instance. See [BENCHMARKS.md](BENCHMARKS.md) for measured figures.
 

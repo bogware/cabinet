@@ -25,6 +25,13 @@ dotnet test --filter "FullyQualifiedName=Cabinet.Tests.Query.BqlParserTests.Pars
 # Run the API locally
 dotnet run --project src/Cabinet.API   # Dashboard: http://localhost:5068
 
+# PostgreSQL backup drill, and deploying k8s/ to a throwaway kind cluster
+./tests/EndToEnd/backup-drill.sh
+./tests/EndToEnd/k8s-smoke.sh
+
+# Measure scale (results in docs/BENCHMARKS.md)
+dotnet run -c Release --project benchmarks/Cabinet.Benchmarks -- sqlite 1000000
+
 # Build cross-platform release artifacts + .deb packages into dist/
 ./scripts/build-release.sh 1.0.0
 
@@ -100,7 +107,7 @@ Order as wired in `Program.cs`, omitting logging, CORS, and static files:
 
 `IpRateLimitingMiddleware (pre-auth) → Authentication (API key / OIDC) → Authorization → ASP.NET rate limiter → [RequireCapability] filter → Controller`
 
-Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`; `EveryEndpoint_RequiresACapability` fails if you don't. The attribute checks a capability on any index and records the caller in the scoped `IndexAccessScope`. Reads go through `IndexRestrictedLogStorage` to enforce it, so anything reading `ILogStorage` for a caller must use `scope.Restrict(storage)`, and writes and deletes check `scope.Can(capability, index)`. Each deployment serves one organization; there is no multi-tenancy. Audit log is SHA-256 hash-chained (`TamperEvidentAuditLogger`).
+Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`; `EveryEndpoint_RequiresACapability` fails if you don't. The attribute checks a capability on any index and records the caller in the scoped `IndexAccessScope`. Reads go through `IndexRestrictedLogStorage` to enforce it, so anything reading `ILogStorage` for a caller must use `scope.Restrict(storage)`, and writes and deletes check `scope.Can(capability, index)`. Each deployment serves one organization; there is no multi-tenancy. Audit log is SHA-256 hash-chained in `IDocumentStore`, one chain per process (`TamperEvidentAuditLogger`), and masking applies in `IndexRestrictedLogStorage`.
 
 ## Code Conventions
 

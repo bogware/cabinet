@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- SQLite backups through `/api/v1/backups`, with `--restore`, and a PostgreSQL drill that runs in CI.
+- Per-index retention, enforced hourly.
+- Field encryption with `Encryption:*`, and masking by role with `Masking:Rules`, on every read and in the raw line too.
+- `GET /api/v1/audit` and `/api/v1/audit/verify`. Audit records live in the metadata database.
+- OTLP trace export with `Telemetry:OtlpEndpoint`.
+- Working Kubernetes manifests with a kustomization and a PostgreSQL pod, tested on kind.
+- Prometheus alert rules, and CI checks for them and for the manifests.
+- `RateLimiting:Tiers:*`, and a `Serilog` configuration section.
+
 - Queries read every matching event, a page at a time. `stats`, `timechart`, `chart`, `top`, `rare` and filters hold what they compute, not the events, and `sort` with `head` holds only the top rows.
 - Per-query limits (`Query:Limits`) and concurrency limits (`Query:Concurrency`, 429 when exceeded). A query over a limit stops with an explanation or is marked `truncated` or `approximate`. A regular expression that keeps timing out fails the query instead of using its whole time limit.
 - `benchmarks/Cabinet.Benchmarks` and published figures in `docs/BENCHMARKS.md`.
@@ -30,12 +39,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- `ArchiveBeforeDelete` and `MaxSizeBytes` on retention policies, which did nothing.
 - Redis, along with `Distributed:*` settings, the `distributed` setup wizard mode and the Compose service. Nothing read from it. PostgreSQL now does leader election.
 - `SqliteRbacService`, and the `cabinet-rbac.db` file with it. Roles saved in it aren't carried over.
 - The `source` parameter of `DELETE /api/v1/logs`. It was ignored, so a request meant for one source could purge everything.
 
 ### Fixed
 
+- Backups could copy a SQLite database mid-write. They now use SQLite's backup API, with an integrity check, and verification opens the database rather than only decompressing it.
+- `Backup:AutoBackupEnabled` on another backend crashed startup. It's now a warning.
+- A corrupt backup manifest was overwritten, losing older checksums.
+- The audit hash left out the description and source address, so those could be changed unnoticed.
+- The default `appsettings.json` deleted events older than 30 days, though the docs said it kept everything. It now keeps everything.
+- Log files stopped being written after 100 MB in a day. They now roll over.
+- The encryption service wrote a key file even when off, and instances starting together could fail on it.
+- Trivy findings now fail the Docker job, as they appeared to.
 - Text search means the same on every backend: every whole word, ignoring case. It used to be a phrase on SQLite, stemmed words on PostgreSQL, any word on OpenSearch and a substring in memory.
 - SQLite's full-text index wrote no rowid, so searches after a purge could return the wrong events or none. It's rebuilt on upgrade.
 - `GET /api/v1/logs` with `source` or `severity` returned nothing, and its `X-Total-Count` ignored filters.

@@ -1,0 +1,42 @@
+groups:
+  - name: cabinet
+    rules:
+      - alert: CabinetDown
+        expr: up{job="cabinet-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cabinet API instance {{ $labels.instance }} is down"
+      - alert: CabinetHighErrorRate
+        expr: |
+          sum(rate(cabinet_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(cabinet_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of Cabinet requests are failing"
+      - alert: CabinetSlowRequests
+        expr: |
+          sum(rate(cabinet_http_request_duration_seconds_sum[5m]))
+            / sum(rate(cabinet_http_request_duration_seconds_count[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cabinet requests are averaging over 2 seconds"
+      - alert: CabinetStorageErrors
+        expr: cabinet_storage_errors_total > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cabinet can't read its storage stats, so storage may be unavailable"
+      - alert: CabinetNoEventsStored
+        expr: delta(cabinet_events_total[30m]) <= 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new events for over an hour"

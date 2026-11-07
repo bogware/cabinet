@@ -185,7 +185,7 @@ API/CLI → Services → Data → Core
 - Keys don't expire automatically (must be rotated manually)
 - No delegation or scoping (key = full tier access)
 - No user identity — only client identity
-- Tier rate limits and role mappings are hardcoded
+- Role mappings for API key tiers are fixed, though `/api/v1/roles` can override any principal
 
 OIDC bearer tokens are covered in ADR-008.
 
@@ -404,15 +404,15 @@ Request → Per-address limiter → Authentication → Authorization → Rate li
 
 ### Defense Layers
 
-1. **Rate Limiting** — A per-address limit before authentication, then hardcoded per-tier limits and a per-address limit for anonymous requests. All are held in process memory. `X-Forwarded-For` is honored only from `Network:TrustedProxies`.
+1. **Rate Limiting** — A per-address limit before authentication, then per-tier limits and a per-address limit for anonymous requests. All are held in process memory. `X-Forwarded-For` is honored only from `Network:TrustedProxies`.
 2. **Authentication** — API key looked up by SHA-256 hash in a dictionary
 3. **Authorization** — Roles and capabilities checked per endpoint through `[RequireCapability]`. Checks always evaluate index `main`, so per-index RBAC is not implemented. No tier has `IndexManagement` or `UserManagement`.
-4. **Audit Logging** — Hash-chained audit log, in the log output only. There is no verifier, it is not tamper-proof, and the chain head is local to each instance.
+4. **Audit Logging** — Hash-chained records in the document store, one chain per process, covering every field. `GET /api/v1/audit/verify` checks them. It's tamper-evident, not tamper-proof.
 
 ### Not Implemented
 
-- **Field masking** — `FieldMaskingService` is registered and never applied.
-- **Encryption at rest** — `EncryptionService` is initialized at startup, and nothing calls it.
+- **Field masking** — `FieldMaskingService` masks events by role as they're read, through `IndexRestrictedLogStorage`, in fields and in the raw line.
+- **Encryption at rest** — `EncryptingLogStorage` wraps the backend and encrypts configured fields with AES-256-GCM.
 
 ## Distributed Components
 

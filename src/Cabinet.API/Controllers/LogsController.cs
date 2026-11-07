@@ -98,7 +98,11 @@ public class LogsController : ControllerBase
         var stored = 0;
         if (events.Any())
         {
-            stored = await _storage.StoreBatchAsync(events);
+            using (var span = Cabinet.Core.Utilities.CabinetDiagnostics.Source.StartActivity("ingest.store"))
+            {
+                span?.SetTag("cabinet.events", events.Count);
+                stored = await _storage.StoreBatchAsync(events);
+            }
 
             // Invalidate cached query results for this index so dashboards get fresh data
             var index = events.FirstOrDefault()?.Index ?? "main";
@@ -312,6 +316,7 @@ public class LogsController : ControllerBase
 
         var total = await _storage.GetEventCountAsync(filter, search: search);
         Response.Headers["X-Total-Count"] = total.ToString();
+        await AuditReadAsync(id: null, $"Listed {events.Count()} events");
 
         return Ok(events);
     }
@@ -331,6 +336,7 @@ public class LogsController : ControllerBase
             return Problem(detail: "Log event not found", statusCode: 404);
         }
 
+        await AuditReadAsync(id, "Read an event");
         return Ok(evt);
     }
 
@@ -397,6 +403,16 @@ public class LogsController : ControllerBase
 
         return Ok(stats);
     }
+
+    private Task AuditReadAsync(string? id, string description) => _auditLogger.LogAsync(new AuditEvent
+    {
+        PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
+        Action = AuditAction.Search,
+        ResourceType = "LogEvent",
+        ResourceId = id,
+        Description = description,
+        SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
+    });
 
     private static Dictionary<string, object> BuildFilter(
         DateTime? since = null,

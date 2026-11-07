@@ -1,4 +1,6 @@
 using Cabinet.API.Controllers;
+using Cabinet.API.Services;
+using Cabinet.Storage;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -6,157 +8,74 @@ using Xunit;
 
 namespace Cabinet.Tests.Controllers;
 
-public class RetentionControllerTests : IDisposable
+public sealed class RetentionControllerTests
 {
-    private readonly RetentionController _controller;
+    private readonly InMemoryDocumentStore _documents = new();
 
-    public RetentionControllerTests()
+    private RetentionController CreateController() => new(_documents)
     {
-        _controller = new RetentionController
-        {
-            ControllerContext = new ControllerContext
-            {
-                HttpContext = new DefaultHttpContext()
-            }
-        };
+        ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+    };
+
+    [Fact]
+    public async Task SetPolicy_ThenGetIt_FromAnyInstanceOfTheController()
+    {
+        var saved = await CreateController().SetPolicy("web", new RetentionPolicyDto { MaxAgeDays = 7 });
+        saved.Should().BeOfType<OkObjectResult>();
+
+        // A new controller, as on the next request or another instance
+        var read = await CreateController().GetPolicy("web");
+
+        var policy = read.Should().BeOfType<OkObjectResult>().Which.Value.Should().BeOfType<RetentionPolicyDto>().Subject;
+        policy.Index.Should().Be("web");
+        policy.MaxAgeDays.Should().Be(7);
     }
 
-    public void Dispose()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(3651)]
+    public async Task SetPolicy_OutOfRangeAge_IsRejected(int days)
     {
-        // Clean up the static dictionary between tests to avoid cross-test pollution.
-        // We do this by deleting all policies we may have created.
-        var result = _controller.GetPolicies();
-        if (result is OkObjectResult okResult && okResult.Value is List<RetentionPolicyDto> policies)
-        {
-            foreach (var policy in policies)
-            {
-                _controller.DeletePolicy(policy.Index);
-            }
-        }
+        var result = await CreateController().SetPolicy("web", new RetentionPolicyDto { MaxAgeDays = days });
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(400);
     }
 
     [Fact]
-    public void GetPolicies_Empty_ReturnsEmptyList()
+    public async Task SetPolicy_EmptyIndexName_IsRejected()
     {
-        var result = _controller.GetPolicies();
+        var result = await CreateController().SetPolicy(" ", new RetentionPolicyDto());
 
-        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
-        var policies = okResult.Value.Should().BeAssignableTo<List<RetentionPolicyDto>>().Subject;
-        policies.Should().BeEmpty();
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(400);
     }
 
     [Fact]
-    public void SetPolicy_ValidPolicy_ReturnsOk()
+    public async Task GetPolicy_Unknown_IsNotFound()
     {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 30, ArchiveBeforeDelete = true };
-
-        var result = _controller.SetPolicy("main", policy);
-
-        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
-        var returned = okResult.Value.Should().BeOfType<RetentionPolicyDto>().Subject;
-        returned.Index.Should().Be("main");
-        returned.MaxAgeDays.Should().Be(30);
-        returned.ArchiveBeforeDelete.Should().BeTrue();
+        (await CreateController().GetPolicy("nothing")).Should().BeOfType<NotFoundResult>();
     }
 
     [Fact]
-    public void SetPolicy_EmptyIndex_ReturnsBadRequest()
+    public async Task DeletePolicy_RemovesIt_AndAgainIsNotFound()
     {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 30 };
+        await CreateController().SetPolicy("web", new RetentionPolicyDto { MaxAgeDays = 7 });
 
-        var result = _controller.SetPolicy("", policy);
-
-        result.Should().BeOfType<ObjectResult>()
-            .Which.StatusCode.Should().Be(400);
+        (await CreateController().DeletePolicy("web")).Should().BeOfType<NoContentResult>();
+        (await CreateController().DeletePolicy("web")).Should().BeOfType<NotFoundResult>();
     }
 
     [Fact]
-    public void SetPolicy_IndexTooLong_ReturnsBadRequest()
+    public async Task GetPolicies_ReportsTotalAndPages()
     {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 30 };
+        var controller = CreateController();
+        await controller.SetPolicy("a", new RetentionPolicyDto { MaxAgeDays = 1 });
+        await controller.SetPolicy("b", new RetentionPolicyDto { MaxAgeDays = 2 });
+        await controller.SetPolicy("c", new RetentionPolicyDto { MaxAgeDays = 3 });
 
-        var result = _controller.SetPolicy(new string('x', 257), policy);
+        var result = await controller.GetPolicies(offset: 1, count: 1);
 
-        result.Should().BeOfType<ObjectResult>()
-            .Which.StatusCode.Should().Be(400);
-    }
-
-    [Fact]
-    public void SetPolicy_MaxAgeDaysTooLow_ReturnsBadRequest()
-    {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 0 };
-
-        var result = _controller.SetPolicy("main", policy);
-
-        result.Should().BeOfType<ObjectResult>()
-            .Which.StatusCode.Should().Be(400);
-    }
-
-    [Fact]
-    public void SetPolicy_MaxAgeDaysTooHigh_ReturnsBadRequest()
-    {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 3651 };
-
-        var result = _controller.SetPolicy("main", policy);
-
-        result.Should().BeOfType<ObjectResult>()
-            .Which.StatusCode.Should().Be(400);
-    }
-
-    [Fact]
-    public void GetPolicy_Found_ReturnsOk()
-    {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 60 };
-        _controller.SetPolicy("security", policy);
-
-        var result = _controller.GetPolicy("security");
-
-        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
-        var returned = okResult.Value.Should().BeOfType<RetentionPolicyDto>().Subject;
-        returned.Index.Should().Be("security");
-        returned.MaxAgeDays.Should().Be(60);
-    }
-
-    [Fact]
-    public void GetPolicy_NotFound_Returns404()
-    {
-        var result = _controller.GetPolicy("nonexistent");
-
-        result.Should().BeOfType<NotFoundResult>();
-    }
-
-    [Fact]
-    public void DeletePolicy_Existing_ReturnsNoContent()
-    {
-        var policy = new RetentionPolicyDto { MaxAgeDays = 30 };
-        _controller.SetPolicy("temp", policy);
-
-        var result = _controller.DeletePolicy("temp");
-
-        result.Should().BeOfType<NoContentResult>();
-
-        // Verify it is actually gone
-        _controller.GetPolicy("temp").Should().BeOfType<NotFoundResult>();
-    }
-
-    [Fact]
-    public void DeletePolicy_NotFound_Returns404()
-    {
-        var result = _controller.DeletePolicy("nonexistent");
-
-        result.Should().BeOfType<NotFoundResult>();
-    }
-
-    [Fact]
-    public void GetPolicies_AfterMultipleSets_ReturnsAll()
-    {
-        _controller.SetPolicy("idx1", new RetentionPolicyDto { MaxAgeDays = 30 });
-        _controller.SetPolicy("idx2", new RetentionPolicyDto { MaxAgeDays = 90 });
-
-        var result = _controller.GetPolicies();
-
-        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
-        var policies = okResult.Value.Should().BeAssignableTo<List<RetentionPolicyDto>>().Subject;
-        policies.Should().HaveCount(2);
+        result.Should().BeOfType<OkObjectResult>().Which.Value.Should().BeOfType<List<RetentionPolicyDto>>().Which.Should().ContainSingle().Which.Index.Should().Be("b");
+        controller.Response.Headers["X-Total-Count"].ToString().Should().Be("3");
     }
 }

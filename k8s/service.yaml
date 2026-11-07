@@ -2,34 +2,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cabinet-api
-  namespace: cabinet
   labels:
     app: cabinet
     component: api
 spec:
-  type: ClusterIP
-  ports:
-    - port: 80
-      targetPort: http
-      protocol: TCP
-      name: http
   selector:
     app: cabinet
     component: api
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cabinet-config
-  namespace: cabinet
-  labels:
-    app: cabinet
-data:
-  storage-type: "PostgreSQL"
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cabinet
-  labels:
-    app: cabinet
+  ports:
+    - port: 80
+      targetPort: http
+      name: http

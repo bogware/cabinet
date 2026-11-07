@@ -165,6 +165,20 @@ public class InMemoryStorage : ILogStorage
         return Task.FromResult(_events.TryGetValue(id, out var evt) ? evt : null);
     }
 
+    public Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
+    {
+        var deleted = 0;
+        foreach (var (id, logEvent) in _events)
+        {
+            if (logEvent.Index == indexName && logEvent.Timestamp < before && _events.TryRemove(id, out _))
+            {
+                deleted++;
+            }
+        }
+
+        return Task.FromResult(deleted);
+    }
+
     public Task<long> GetCountAsync(QueryContext? context = null, CancellationToken cancellationToken = default)
     {
         if (context == null)

@@ -16,6 +16,6 @@ Only the latest `main` is supported. Fixes are not backported to earlier release
 - **Restrict `/metrics` at the network.** It is unauthenticated, as are `/health`, `/health/ready` and `/health/live`.
 - **Treat API keys as secrets.** Generate them with `openssl rand -hex 32` and pass them through environment variables or a secret store. The configuration value is the raw key, which the API hashes in memory.
 - **Keep Postgres off public networks.** The Compose stack doesn't publish them to the host.
-- **Protect the data directory and database.** Encryption at rest and field masking are not implemented, so log contents are stored and returned as ingested. Use disk or database encryption if you need it.
+- **Protect the data directory and database.** Log contents are stored as ingested, apart from fields you configure for encryption, and returned as stored, apart from fields you configure for masking. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Use disk or database encryption as well.
 - **Syslog has no TLS or authentication.** It is off by default. Enable it only on a trusted network.
-- **Don't rely on the audit log as tamper-proof evidence.** It is hash-chained in the log output only, with no verifier. Ship it to separate storage if you need stronger guarantees.
+- **Keep audit chain heads elsewhere.** `/api/v1/audit/verify` detects changes and removals, but someone with write access to the database could rewrite the whole chain. The heads in the log output are what would catch that, so ship your logs to separate storage.

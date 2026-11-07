@@ -25,7 +25,7 @@ const int QueryRuns = 3;
 const int Hosts = 20;
 const int NeedleEvery = 10_000;
 
-var end = new DateTime(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc);
+var end = DateTime.UtcNow;
 var span = TimeSpan.FromDays(7);
 var databasePath = Path.Combine(Path.GetTempPath(), $"cabinet-bench-{Guid.NewGuid():N}.db");
 var openSearchPrefix = $"cabinet-bench-{Guid.NewGuid():N}";

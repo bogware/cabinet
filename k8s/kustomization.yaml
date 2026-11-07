@@ -1,0 +1,19 @@
+# kubectl create secret generic cabinet-secrets ... (see secret-template.yaml), then:
+#   kubectl apply -k k8s/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cabinet
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - serviceaccount.yaml
+  - postgres.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - network-policy.yaml
+  - hpa.yaml
+  - pdb.yaml
+images:
+  - name: ghcr.io/bogware/cabinet
+    newTag: latest

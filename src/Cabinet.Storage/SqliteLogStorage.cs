@@ -415,6 +415,18 @@ public partial class SqliteLogStorage : ILogStorage
         return await connection.ExecuteAsync(sql, new { Before = beforeTicks });
     }
 
+    public async Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync();
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        return await connection.ExecuteAsync(
+            "DELETE FROM log_events WHERE index_name = @IndexName AND timestamp < @Before",
+            new { IndexName = indexName, Before = before.Ticks });
+    }
+
     public async Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync();

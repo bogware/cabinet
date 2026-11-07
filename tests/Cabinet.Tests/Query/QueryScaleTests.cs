@@ -323,6 +323,8 @@ public sealed class QueryScaleTests
 
         public Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
+        public Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

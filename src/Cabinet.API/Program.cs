@@ -15,29 +15,42 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi.Models;
 using Serilog;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Serilog.Events;
 using System.Reflection;
 
-// Configure Serilog
-Log.Logger = new LoggerConfiguration()
+// Shared by the logger used during startup and the one configuration can adjust
+static LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
     .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
     .MinimumLevel.Override("Microsoft.AspNetCore.Authentication", LogEventLevel.Information)
     .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}")
     .WriteTo.File("logs/cabinet-api-.log",
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}",
         rollingInterval: RollingInterval.Day,
+        rollOnFileSizeLimit: true,
         retainedFileCountLimit: 30,
-        fileSizeLimitBytes: 100 * 1024 * 1024)
-    .CreateLogger();
+        fileSizeLimitBytes: 100 * 1024 * 1024);
+
+Log.Logger = ConfigureLogging(new LoggerConfiguration()).CreateLogger();
 
 try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    // Use Serilog
-    builder.Host.UseSerilog();
+    // A one-off command rather than running the server
+    if (args.Length > 0 && args[0] == "--restore")
+    {
+        await RestoreBackupAsync(args, builder.Configuration);
+        return;
+    }
+
+    // Use Serilog. A "Serilog" configuration section can change levels and add sinks.
+    builder.Host.UseSerilog((context, logging) =>
+        ConfigureLogging(logging).ReadFrom.Configuration(context.Configuration));
 
     // Report lifecycle to the service manager; both are no-ops outside a service
     builder.Host.UseSystemd();
@@ -193,7 +206,26 @@ try
     });
 
     // Add Rate Limiting
-    builder.Services.AddCabinetRateLimiting();
+    builder.Services.AddCabinetRateLimiting(builder.Configuration);
+
+    // Traces, when something is configured to receive them
+    var otlpEndpoint = builder.Configuration["Telemetry:OtlpEndpoint"];
+    if (!string.IsNullOrWhiteSpace(otlpEndpoint))
+    {
+        builder.Services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource.AddService(builder.Configuration["Telemetry:ServiceName"] ?? "cabinet-api"))
+            .WithTracing(tracing => tracing
+                .AddSource(Cabinet.Core.Utilities.CabinetDiagnostics.SourceName)
+                .AddAspNetCoreInstrumentation(options =>
+                    options.Filter = context => !context.Request.Path.StartsWithSegments("/health") && !context.Request.Path.StartsWithSegments("/metrics"))
+                .AddOtlpExporter(options =>
+                {
+                    options.Endpoint = new Uri(otlpEndpoint);
+                    options.Protocol = builder.Configuration["Telemetry:OtlpProtocol"]?.Equals("http", StringComparison.OrdinalIgnoreCase) == true
+                        ? OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf
+                        : OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+                }));
+    }
 
     // Configure CORS
     builder.Services.AddCors(options =>
@@ -386,7 +418,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         var storageType = configuration["Storage:Type"] ?? "SQLite";
         var connectionString = configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db";
 
-        return storageType.ToUpperInvariant() switch
+        ILogStorage backend = storageType.ToUpperInvariant() switch
         {
             "POSTGRESQL" or "POSTGRES" => new Cabinet.Database.Providers.PostgresLogStorage(
                 connectionString,
@@ -403,6 +435,10 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
                 sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
                 sp.GetRequiredService<ILogger<SqliteLogStorage>>())
         };
+
+        return configuration.GetValue<bool>("Encryption:Enabled")
+            ? new EncryptingLogStorage(backend, sp.GetRequiredService<EncryptionService>(), configuration.GetValue<bool>("Encryption:EncryptRawLine"))
+            : backend;
     });
 
     // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
@@ -412,12 +448,14 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.ConfigurationRbacService>();
     services.AddSingleton<IRbacService, Cabinet.API.Services.StoredRbacService>();
     services.AddHttpContextAccessor();
-    services.AddScoped<Cabinet.API.Authentication.IndexAccessScope>();
+    services.AddScoped(sp => new Cabinet.API.Authentication.IndexAccessScope { Masking = sp.GetRequiredService<FieldMaskingService>() });
     services.AddSingleton<Cabinet.API.Services.SerilogAuditLogger>();
-    services.AddSingleton<IAuditLogger>(sp =>
+    services.AddSingleton(sp =>
         new Cabinet.API.Services.TamperEvidentAuditLogger(
             sp.GetRequiredService<Cabinet.API.Services.SerilogAuditLogger>(),
+            sp.GetRequiredService<IDocumentStore>(),
             sp.GetRequiredService<ILogger<Cabinet.API.Services.TamperEvidentAuditLogger>>()));
+    services.AddSingleton<IAuditLogger>(sp => sp.GetRequiredService<Cabinet.API.Services.TamperEvidentAuditLogger>());
 
     // Field masking and encryption services
     services.AddSingleton<FieldMaskingService>(sp =>
@@ -529,47 +567,43 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.DataModelAccelerationService>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DataModelAccelerationService>());
 
-    // Local backup service — gzipped SQLite backups with manifest and retention
-    services.AddSingleton(sp =>
+    // Local backup service — consistent, verified SQLite backups. Other backends have their own tools.
+    if (StorageRegistration.ResolveBackend(configuration) == StorageBackend.Sqlite)
     {
         var backupConfig = new Cabinet.API.Services.BackupConfiguration();
         configuration.GetSection("Backup").Bind(backupConfig);
-        var connStr = configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db";
-        var dbPath = Cabinet.API.Services.LocalBackupService.ExtractDatabasePath(connStr);
-        Cabinet.AWS.Services.S3ArchiveService? s3 = null;
+        services.AddSingleton(backupConfig);
+
         if (!string.IsNullOrEmpty(backupConfig.S3Bucket))
         {
-            try
-            {
-                var s3Client = sp.GetService<Amazon.S3.IAmazonS3>();
-                if (s3Client != null)
-                {
-                    s3 = new Cabinet.AWS.Services.S3ArchiveService(
-                        s3Client,
-                        sp.GetRequiredService<ILogger<Cabinet.AWS.Services.S3ArchiveService>>(),
-                        backupConfig.S3Bucket,
-                        backupConfig.S3Prefix);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "S3 client not available, backups will be local only");
-            }
+            services.AddSingleton<Amazon.S3.IAmazonS3>(_ => new Amazon.S3.AmazonS3Client());
         }
-        return new Cabinet.API.Services.LocalBackupService(
-            backupConfig, dbPath,
-            sp.GetRequiredService<ILogger<Cabinet.API.Services.LocalBackupService>>(),
-            s3);
-    });
-    services.AddSingleton(sp =>
+
+        services.AddSingleton(sp =>
+        {
+            var connStr = configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db";
+            var dbPath = Cabinet.API.Services.LocalBackupService.ExtractDatabasePath(connStr);
+            var s3 = string.IsNullOrEmpty(backupConfig.S3Bucket)
+                ? null
+                : new Cabinet.AWS.Services.S3ArchiveService(
+                    sp.GetRequiredService<Amazon.S3.IAmazonS3>(),
+                    sp.GetRequiredService<ILogger<Cabinet.AWS.Services.S3ArchiveService>>(),
+                    backupConfig.S3Bucket,
+                    backupConfig.S3Prefix);
+            return new Cabinet.API.Services.LocalBackupService(
+                backupConfig, dbPath,
+                sp.GetRequiredService<ILogger<Cabinet.API.Services.LocalBackupService>>(),
+                s3);
+        });
+
+        if (backupConfig.AutoBackupEnabled)
+        {
+            services.AddHostedService<Cabinet.API.Services.BackupBackgroundService>();
+        }
+    }
+    else if (configuration.GetValue<bool>("Backup:AutoBackupEnabled"))
     {
-        var backupConfig = new Cabinet.API.Services.BackupConfiguration();
-        configuration.GetSection("Backup").Bind(backupConfig);
-        return backupConfig;
-    });
-    if (configuration.GetValue<bool>("Backup:AutoBackupEnabled"))
-    {
-        services.AddHostedService<Cabinet.API.Services.BackupBackgroundService>();
+        Log.Warning("Backup:AutoBackupEnabled only applies to SQLite storage, so it's ignored. See the deployment guide for this backend's backups.");
     }
 
     // SSO/OIDC claim mapping (auth schemes configured in top-level Program.cs)
@@ -585,6 +619,25 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddHostedService<RetentionBackgroundService>();
 
     services.AddSingleton<Cabinet.API.Authentication.IApiKeyService, Cabinet.API.Services.ApiKeyService>();
+}
+
+// cabinet-api --restore <backup.db.gz> [--force]
+static async Task RestoreBackupAsync(string[] args, IConfiguration configuration)
+{
+    if (StorageRegistration.ResolveBackend(configuration) != StorageBackend.Sqlite)
+    {
+        throw new InvalidOperationException("--restore is for SQLite storage. See the deployment guide for this backend.");
+    }
+
+    if (args.Length < 2)
+    {
+        throw new ArgumentException("Usage: --restore <backup.db.gz> [--force]");
+    }
+
+    var database = Cabinet.API.Services.LocalBackupService.ExtractDatabasePath(
+        configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db");
+    await Cabinet.API.Services.LocalBackupService.RestoreAsync(args[1], database, overwrite: args.Contains("--force"));
+    Log.Information("Restored {Backup} to {Database}", args[1], database);
 }
 
 void ValidateConfiguration(IConfiguration configuration)

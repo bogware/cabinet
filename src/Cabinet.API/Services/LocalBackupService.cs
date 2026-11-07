@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cabinet.AWS.Services;
+using Microsoft.Data.Sqlite;
 
 namespace Cabinet.API.Services;
 
@@ -118,15 +119,36 @@ public sealed class LocalBackupService
 
         try
         {
-            // Copy and compress the SQLite database.
-            // FileShare.ReadWrite allows SQLite WAL-mode writes to continue during copy.
-            await using (var sourceStream = new FileStream(
-                             _databasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            await using (var destStream = new FileStream(
-                             backupPath, FileMode.Create, FileAccess.Write))
-            await using (var gzipStream = new GZipStream(destStream, CompressionLevel.Optimal))
+            // SQLite's backup API gives a consistent copy, including what's still in the WAL,
+            // while the database stays in use. Copying the file wouldn't.
+            var snapshot = $"{backupPath}.snapshot";
+            var partial = $"{backupPath}.partial";
+            try
             {
-                await sourceStream.CopyToAsync(gzipStream, cancellationToken);
+                await using (var source = new SqliteConnection($"Data Source={_databasePath};Pooling=False"))
+                await using (var destination = new SqliteConnection($"Data Source={snapshot};Pooling=False"))
+                {
+                    await source.OpenAsync(cancellationToken);
+                    await destination.OpenAsync(cancellationToken);
+                    source.BackupDatabase(destination);
+                }
+
+                await CheckIntegrityAsync(snapshot, cancellationToken);
+
+                await using (var sourceStream = File.OpenRead(snapshot))
+                await using (var destStream = File.Create(partial))
+                await using (var gzipStream = new GZipStream(destStream, CompressionLevel.Optimal))
+                {
+                    await sourceStream.CopyToAsync(gzipStream, cancellationToken);
+                }
+
+                // Only a complete backup ever has the final name
+                File.Move(partial, backupPath);
+            }
+            finally
+            {
+                DeleteIfExists(snapshot);
+                DeleteIfExists(partial);
             }
 
             var fileInfo = new FileInfo(backupPath);
@@ -162,7 +184,12 @@ public sealed class LocalBackupService
 
             return entry;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            DeleteIfExists(backupPath);
+            throw;
+        }
+        catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to create backup");
 
@@ -303,13 +330,16 @@ public sealed class LocalBackupService
                 return false;
             }
 
-            // Verify the gzip can be fully decompressed
-            await using var fileStream = File.OpenRead(entry.FilePath);
-            await using var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress);
-            var buffer = new byte[8192];
-            while (await gzipStream.ReadAsync(buffer, cancellationToken) > 0)
+            // A file that decompresses isn't necessarily a database that opens, so open it
+            var unpacked = $"{entry.FilePath}.verify";
+            try
             {
-                // Just drain the stream to verify integrity
+                await DecompressAsync(entry.FilePath, unpacked, cancellationToken);
+                await CheckIntegrityAsync(unpacked, cancellationToken);
+            }
+            finally
+            {
+                DeleteIfExists(unpacked);
             }
 
             _logger.LogInformation("Backup {Id} verified successfully", backupId);
@@ -319,6 +349,74 @@ public sealed class LocalBackupService
         {
             _logger.LogWarning(ex, "Backup {Id} verification failed", backupId);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Restores a backup file to a database path, for use while nothing has the database open.
+    /// The backup is checked before anything is replaced, so a bad one leaves the database alone.
+    /// </summary>
+    /// <param name="backupFile">The <c>.db.gz</c> file.</param>
+    /// <param name="databasePath">The database to replace.</param>
+    /// <param name="overwrite">Whether replacing an existing database is intended.</param>
+    /// <param name="cancellationToken">Cancels the restore.</param>
+    public static async Task RestoreAsync(string backupFile, string databasePath, bool overwrite, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(backupFile))
+        {
+            throw new FileNotFoundException($"Backup not found: {backupFile}", backupFile);
+        }
+
+        if (File.Exists(databasePath) && !overwrite)
+        {
+            throw new InvalidOperationException($"{databasePath} already exists. Pass --force to replace it.");
+        }
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(databasePath))!;
+        Directory.CreateDirectory(directory);
+        var unpacked = $"{databasePath}.restoring";
+        try
+        {
+            await DecompressAsync(backupFile, unpacked, cancellationToken);
+            await CheckIntegrityAsync(unpacked, cancellationToken);
+
+            // WAL files from the old database would corrupt the restored one
+            DeleteIfExists($"{databasePath}-wal");
+            DeleteIfExists($"{databasePath}-shm");
+            File.Move(unpacked, databasePath, overwrite: true);
+        }
+        finally
+        {
+            DeleteIfExists(unpacked);
+        }
+    }
+
+    private static async Task DecompressAsync(string source, string destination, CancellationToken cancellationToken)
+    {
+        await using var fileStream = File.OpenRead(source);
+        await using var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress);
+        await using var output = File.Create(destination);
+        await gzipStream.CopyToAsync(output, cancellationToken);
+    }
+
+    private static async Task CheckIntegrityAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA integrity_check";
+        var result = await command.ExecuteScalarAsync(cancellationToken) as string;
+        if (result != "ok")
+        {
+            throw new InvalidDataException($"The database failed its integrity check: {result}");
+        }
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
         }
     }
 
@@ -401,7 +499,10 @@ public sealed class LocalBackupService
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Corrupt backup manifest at {Path}, starting fresh", _manifestPath);
+            // Saving over it would lose the only record of older backups' checksums
+            var saved = $"{_manifestPath}.corrupt-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            _logger.LogError(ex, "Corrupt backup manifest at {Path}, kept as {Saved}. The backup files themselves are untouched.", _manifestPath, saved);
+            File.Move(_manifestPath, saved);
             return new BackupManifest();
         }
     }

@@ -26,7 +26,8 @@ public sealed class EncryptionService : IDisposable
     /// <summary>Initialize the encryption key from the configured provider</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        if (_initialized) return;
+        // Off means off: nothing to load, and no key file to leave behind
+        if (_initialized || !_config.Enabled) return;
 
         await _initLock.WaitAsync(cancellationToken);
         try
@@ -150,11 +151,20 @@ public sealed class EncryptionService : IDisposable
         // Generate a new key — write atomically (temp + rename) to prevent corruption on crash
         var newKey = new byte[KeySize];
         RandomNumberGenerator.Fill(newKey);
-        var tempPath = keyPath + ".tmp";
+        var tempPath = $"{keyPath}.{Guid.NewGuid():N}.tmp";
         try
         {
             await File.WriteAllBytesAsync(tempPath, newKey, cancellationToken);
-            File.Move(tempPath, keyPath, overwrite: true);
+            try
+            {
+                // Not overwriting: if another instance got there first, its key is the one in use
+                File.Move(tempPath, keyPath, overwrite: false);
+            }
+            catch (IOException) when (File.Exists(keyPath))
+            {
+                File.Delete(tempPath);
+                return await File.ReadAllBytesAsync(keyPath, cancellationToken);
+            }
         }
         catch
         {

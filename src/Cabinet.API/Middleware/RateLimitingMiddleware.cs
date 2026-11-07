@@ -8,8 +8,16 @@ namespace Cabinet.API.Middleware;
 /// </summary>
 public static class RateLimitingExtensions
 {
-    public static IServiceCollection AddCabinetRateLimiting(this IServiceCollection services)
+    private static IConfiguration? _configuration;
+
+    /// <summary>Requests a minute for a tier, from <c>RateLimiting:Tiers:Name</c>.</summary>
+    private static int TierLimit(string tier, int defaultLimit) =>
+        _configuration?.GetValue($"RateLimiting:Tiers:{tier}", defaultLimit) ?? defaultLimit;
+
+    public static IServiceCollection AddCabinetRateLimiting(this IServiceCollection services, IConfiguration? configuration = null)
     {
+        _configuration = configuration;
+
         services.AddRateLimiter(options =>
         {
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
@@ -66,11 +74,11 @@ public static class RateLimitingExtensions
                 apiKey,
                 _ => new TokenBucketRateLimiterOptions
                 {
-                    TokenLimit = 10000,
+                    TokenLimit = TierLimit("Enterprise", 10000),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 100,
                     ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-                    TokensPerPeriod = 10000,
+                    TokensPerPeriod = TierLimit("Enterprise", 10000),
                     AutoReplenishment = true
                 }),
 
@@ -78,11 +86,11 @@ public static class RateLimitingExtensions
                 apiKey,
                 _ => new TokenBucketRateLimiterOptions
                 {
-                    TokenLimit = 1000,
+                    TokenLimit = TierLimit("Professional", 1000),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 50,
                     ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-                    TokensPerPeriod = 1000,
+                    TokensPerPeriod = TierLimit("Professional", 1000),
                     AutoReplenishment = true
                 }),
 

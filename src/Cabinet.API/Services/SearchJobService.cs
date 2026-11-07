@@ -175,7 +175,13 @@ public sealed class SearchJobService : BackgroundService
             using var scope = _scopeFactory.CreateScope();
 
             // The owner's access, as of when they submitted it
-            scope.ServiceProvider.GetRequiredService<IndexAccessScope>().ReadableIndexes = job.AllowedIndexes;
+            var access = scope.ServiceProvider.GetRequiredService<IndexAccessScope>();
+            access.ReadableIndexes = job.AllowedIndexes;
+            if (job.Owner != null)
+            {
+                access.Principal = await scope.ServiceProvider.GetRequiredService<IRbacService>().GetPrincipalAsync(job.Owner, stoppingToken);
+            }
+
             var queryEngine = scope.ServiceProvider.GetRequiredService<IQueryEngine>();
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);

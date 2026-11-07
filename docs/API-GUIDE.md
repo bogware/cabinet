@@ -549,7 +549,19 @@ curl -X POST http://localhost:5000/api/v1/scheduled-searches \
 
 ### Retention
 
-`/api/v1/retention` (`GET`, and `GET`, `PUT`, `DELETE` on `/{index}`) stores per-index definitions in memory only and doesn't enforce them. Retention that actually deletes events is the global `Storage:RetentionDays` setting; see [DEPLOYMENT.md](DEPLOYMENT.md#retention).
+`/api/v1/retention` sets how long an index keeps events, applied hourly. A policy replaces `Storage:RetentionDays` for that index. Reading needs `SystemHealth`, and changing needs `IndexManagement`.
+
+```bash
+curl -X PUT http://localhost:5000/api/v1/retention/web -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{"maxAgeDays": 30}'
+```
+
+### Backups
+
+`GET` and `POST /api/v1/backups`, and `POST /api/v1/backups/{id}/verify`, for SQLite storage. They need `IndexManagement`. See the deployment guide.
+
+### Audit
+
+`GET /api/v1/audit` and `GET /api/v1/audit/verify`. They need `UserManagement`. See the deployment guide.
 
 ### Field Extractions
 

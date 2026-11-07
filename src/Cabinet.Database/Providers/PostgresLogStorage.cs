@@ -239,6 +239,16 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
         return await conn2.ExecuteScalarAsync<long>(sql, parameters);
     }
 
+    public async Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+
+        return await conn.ExecuteAsync(
+            "DELETE FROM log_events WHERE index_name = @IndexName AND timestamp < @Before",
+            new { IndexName = indexName, Before = DateTime.SpecifyKind(before, DateTimeKind.Utc) });
+    }
+
     public async Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);

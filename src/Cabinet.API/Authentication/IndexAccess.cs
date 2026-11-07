@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Security.Claims;
+using Cabinet.API.Services;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 
@@ -12,6 +13,8 @@ namespace Cabinet.API.Authentication;
 /// </summary>
 public sealed class IndexAccessScope
 {
+    private FieldMaskingService? _masking;
+
     /// <summary>Patterns the caller may read, or null for every index.</summary>
     public IReadOnlyList<string>? ReadableIndexes { get; set; }
 
@@ -29,10 +32,17 @@ public sealed class IndexAccessScope
     public bool Can(Capability capability, string index) => Principal?.HasCapability(capability, index) ?? false;
 
     /// <summary>Applies this scope to storage.</summary>
-    public ILogStorage Restrict(ILogStorage storage) => new IndexRestrictedLogStorage(storage, this);
+    public ILogStorage Restrict(ILogStorage storage) => new IndexRestrictedLogStorage(storage, this, _masking);
+
+    /// <summary>Masks what this scope reads.</summary>
+    public FieldMaskingService? Masking
+    {
+        set => _masking = value;
+    }
 
     /// <summary>A key that keeps cached query results apart for callers who see different data.</summary>
-    public string CacheKey => ReadableIndexes == null ? string.Empty : string.Join(',', ReadableIndexes.Order(StringComparer.OrdinalIgnoreCase));
+    public string CacheKey =>
+        $"{Principal?.Role}|{(ReadableIndexes == null ? string.Empty : string.Join(',', ReadableIndexes.Order(StringComparer.OrdinalIgnoreCase)))}";
 }
 
 /// <summary>
@@ -43,12 +53,18 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
 {
     private readonly ILogStorage _inner;
     private readonly IndexAccessScope _scope;
+    private readonly FieldMaskingService? _masking;
 
-    public IndexRestrictedLogStorage(ILogStorage inner, IndexAccessScope scope)
+    public IndexRestrictedLogStorage(ILogStorage inner, IndexAccessScope scope, FieldMaskingService? masking = null)
     {
         _inner = inner;
         _scope = scope;
+        _masking = masking;
     }
+
+    /// <summary>Masked for the caller. A caller nobody identified gets the strictest view.</summary>
+    private LogEvent Mask(LogEvent logEvent) =>
+        _masking?.MaskEvent(logEvent, _scope.Principal?.Role ?? SystemRole.Viewer) ?? logEvent;
 
     /// <inheritdoc />
     public async IAsyncEnumerable<LogEvent> QueryAsync(QueryContext context, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -60,7 +76,7 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
 
         await foreach (var logEvent in _inner.QueryAsync(restricted, cancellationToken))
         {
-            yield return logEvent;
+            yield return Mask(logEvent);
         }
     }
 
@@ -68,7 +84,7 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
     public async Task<LogEvent?> GetByIdAsync(string id, CancellationToken cancellationToken = default)
     {
         var logEvent = await _inner.GetByIdAsync(id, cancellationToken);
-        return logEvent != null && _scope.CanRead(logEvent.Index) ? logEvent : null;
+        return logEvent != null && _scope.CanRead(logEvent.Index) ? Mask(logEvent) : null;
     }
 
     /// <inheritdoc />
@@ -107,6 +123,9 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
 
     /// <inheritdoc />
     public Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default) => _inner.PurgeOldEventsAsync(before, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default) => _inner.PurgeIndexEventsAsync(indexName, before, cancellationToken);
 
     /// <inheritdoc />
     public Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default) => _inner.DeleteByIndexAsync(indexName, cancellationToken);

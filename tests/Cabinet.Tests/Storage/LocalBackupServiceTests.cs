@@ -20,8 +20,16 @@ public class LocalBackupServiceTests : IDisposable
 
         Directory.CreateDirectory(_testDir);
 
-        // Create a dummy SQLite database file
-        File.WriteAllText(_testDbPath, "SQLite format 3\0" + new string('X', 4096));
+        CreateDatabase(_testDbPath);
+    }
+
+    private static void CreateDatabase(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE data (value BLOB); INSERT INTO data VALUES (zeroblob(100000));";
+        command.ExecuteNonQuery();
     }
 
     public void Dispose()
@@ -70,7 +78,6 @@ public class LocalBackupServiceTests : IDisposable
     public async Task CreateBackupAsync_CompressedFileIsSmaller()
     {
         // A large enough file to benefit from compression
-        File.WriteAllBytes(_testDbPath, new byte[10000]);
 
         var service = CreateService();
         var entry = await service.CreateBackupAsync();

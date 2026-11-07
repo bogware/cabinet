@@ -1,20 +1,27 @@
-using Cabinet.Core.Models;
 using Cabinet.API.Middleware;
+using Cabinet.API.Services;
+using Cabinet.Core.Interfaces;
+using Cabinet.Core.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Cabinet.API.Controllers;
 
 /// <summary>
-/// Per-index retention policy management API.
+/// Retention for individual indexes, applied hourly. An index without a policy follows
+/// <c>Storage:RetentionDays</c>.
 /// </summary>
 [ApiController]
 [Route("api/v1/retention")]
 [Authorize]
 public class RetentionController : ControllerBase
 {
-    private static readonly Dictionary<string, RetentionPolicyDto> _policies = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly object _lock = new();
+    private readonly IDocumentStore _documents;
+
+    public RetentionController(IDocumentStore documents)
+    {
+        _documents = documents;
+    }
 
     /// <summary>
     /// List all retention policies with pagination.
@@ -22,17 +29,14 @@ public class RetentionController : ControllerBase
     [HttpGet]
     [RequireCapability(Capability.SystemHealth)]
     [ProducesResponseType(typeof(List<RetentionPolicyDto>), StatusCodes.Status200OK)]
-    public IActionResult GetPolicies([FromQuery] int offset = 0, [FromQuery] int count = 100)
+    public async Task<IActionResult> GetPolicies([FromQuery] int offset = 0, [FromQuery] int count = 100, CancellationToken cancellationToken = default)
     {
         count = Math.Clamp(count, 1, 1000);
         offset = Math.Max(0, offset);
 
-        lock (_lock)
-        {
-            var all = _policies.Values.ToList();
-            Response.Headers["X-Total-Count"] = all.Count.ToString();
-            return Ok(all.Skip(offset).Take(count).ToList());
-        }
+        var all = await _documents.ListAsync<RetentionPolicyDto>(RetentionService.PoliciesCollection, cancellationToken);
+        Response.Headers["X-Total-Count"] = all.Count.ToString();
+        return Ok(all.Skip(offset).Take(count).ToList());
     }
 
     /// <summary>
@@ -42,14 +46,10 @@ public class RetentionController : ControllerBase
     [RequireCapability(Capability.SystemHealth)]
     [ProducesResponseType(typeof(RetentionPolicyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public IActionResult GetPolicy(string index)
+    public async Task<IActionResult> GetPolicy(string index, CancellationToken cancellationToken = default)
     {
-        lock (_lock)
-        {
-            if (_policies.TryGetValue(index, out var policy))
-                return Ok(policy);
-            return NotFound();
-        }
+        var policy = await _documents.GetAsync<RetentionPolicyDto>(RetentionService.PoliciesCollection, index, cancellationToken);
+        return policy == null ? NotFound() : Ok(policy);
     }
 
     /// <summary>
@@ -59,8 +59,7 @@ public class RetentionController : ControllerBase
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(RetentionPolicyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [Authorize(Policy = "RequireWritePermission")]
-    public IActionResult SetPolicy(string index, [FromBody] RetentionPolicyDto policy)
+    public async Task<IActionResult> SetPolicy(string index, [FromBody] RetentionPolicyDto policy, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(index) || index.Length > 256)
             return Problem(detail: "Index name must be 1-256 characters", statusCode: 400);
@@ -68,10 +67,7 @@ public class RetentionController : ControllerBase
             return Problem(detail: "MaxAgeDays must be between 1 and 3650", statusCode: 400);
 
         policy.Index = index;
-        lock (_lock)
-        {
-            _policies[index] = policy;
-        }
+        await _documents.PutAsync(RetentionService.PoliciesCollection, index, policy, cancellationToken);
         return Ok(policy);
     }
 
@@ -82,25 +78,8 @@ public class RetentionController : ControllerBase
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [Authorize(Policy = "RequireWritePermission")]
-    public IActionResult DeletePolicy(string index)
+    public async Task<IActionResult> DeletePolicy(string index, CancellationToken cancellationToken = default)
     {
-        lock (_lock)
-        {
-            if (!_policies.Remove(index))
-                return NotFound();
-            return NoContent();
-        }
+        return await _documents.DeleteAsync(RetentionService.PoliciesCollection, index, cancellationToken) ? NoContent() : NotFound();
     }
-}
-
-/// <summary>
-/// Retention policy configuration for a specific index.
-/// </summary>
-public class RetentionPolicyDto
-{
-    public string Index { get; set; } = string.Empty;
-    public int MaxAgeDays { get; set; } = 90;
-    public bool ArchiveBeforeDelete { get; set; } = true;
-    public long? MaxSizeBytes { get; set; }
 }

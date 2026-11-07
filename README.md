@@ -103,35 +103,35 @@ search error | sort -timestamp | head 10
 | OIDC | Available | Bearer tokens, with claims mapped to roles and index grants. Tested end to end against a local identity provider. |
 | SAML, LDAP | Not implemented | Configuration models only. |
 | Rate limiting | Available | Per address and per key, counted separately on each instance. Queries and streams also have concurrency limits. |
-| Audit log | Partial | Hash-chained in the log output only. |
-| Global retention | Available | `Storage:RetentionDays`. 0 (the default) keeps everything. |
-| Per-index retention | Not implemented | `/api/v1/retention` stores definitions in memory and doesn't enforce them. |
+| Audit log | Available | Hash-chained records in the database, searchable and checkable through `/api/v1/audit`. |
+| Global retention | Available | `Storage:RetentionDays`. 0, the default, keeps everything. |
+| Per-index retention | Available | `/api/v1/retention`, applied hourly by one instance. |
 | Log parsers | Available | JSON, CEF, Apache, Nginx, CSV, Generic. |
 | Data models | Available | Pre-aggregated summaries for `tstats`. |
-| Field extractions | Partial | CRUD only. Definitions are held in memory and aren't applied to queries. |
+| Field extractions | Partial | CRUD, shared by instances, but not applied to queries yet. |
 | Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers and on-demand moderation detection at `/api/v1/detection/*`. |
 | Security detection rules | Not implemented | Nothing runs at ingest. |
 | Health and Prometheus metrics | Available | `/health`, `/health/ready`, `/health/live`, `/metrics`. |
 | AWS CloudWatch and CloudTrail | Available | CLI only (`cabinet aws`). |
-| SQLite backup service | Partial | See below. Use `sqlite3 .backup` instead. |
-| Kubernetes manifests | Partial | A starting point, not a working deployment. |
-| Encryption at rest | Not implemented | The service is initialized, but nothing calls it. |
-| PII and field masking | Not implemented | The service is registered, but never applied. |
+| Backup and restore | Available | Verified SQLite backups with `--restore`, and a PostgreSQL drill. Both run in CI. OpenSearch uses snapshots, which aren't drill-tested. |
+| Kubernetes manifests | Available | `k8s/`, tested on a kind cluster by `tests/EndToEnd/k8s-smoke.sh`. The included PostgreSQL pod is for trying it, not for production. |
+| Encryption at rest | Available | AES-256-GCM on configured fields, or whole lines. Those values can't be searched in storage. |
+| PII and field masking | Available | Applied to every read by role, in fields and in the raw line. |
 | Hot/warm/cold tiering, S3 archival | Not implemented | |
-| Multiple API instances | Available | On PostgreSQL, sharing all state except the audit chain head. One instance at a time runs background work. |
+| Multiple API instances | Available | On PostgreSQL, sharing all state. One instance at a time runs background work. |
+| Distributed tracing | Available | OTLP export of request, query and ingest spans. |
 | Server-side multi-line merging | Not implemented | The agent merges multi-line events; the API does not. |
-| Prometheus alert rules | Not implemented | Grafana dashboard and scrape config only. |
+| Prometheus alert rules | Available | `prometheus-rules.yml`. |
 
 ## Known limitations
 
-- **Multiple instances need PostgreSQL.** With OpenSearch, set `Storage:MetadataPostgresConnectionString`. SQLite and in-memory storage serve one instance. Rate limits and the query cache are per instance.
+- **Multiple instances need PostgreSQL.** With OpenSearch, set `Storage:MetadataPostgresConnectionString`. SQLite and in-memory storage serve one instance. The query cache is per instance.
 - **Aggregates read every event through the API process.** They aren't pushed down to the database yet, so `stats` over a billion events takes a long time. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - **Agent delivery has edge cases.** Lines are lost if a file is deleted before they're read, for example during a long agent outage. If the registry file is lost, files are read again from the start under new event IDs. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#agent-behaviour).
-- **The audit log is not tamper-proof.** Events are hash-chained in log output, there is no verifier, and the chain head is local to each instance.
-- **The built-in SQLite backup** copies the database file without WAL consistency and has no restore. Use `sqlite3 cabinet.db ".backup ..."`, or `pg_dump` for PostgreSQL.
+- **The audit log is tamper-evident, not tamper-proof.** Changes, removals and truncation show up in `/api/v1/audit/verify`, but someone with database access could rewrite every record. Chain heads also go to the log output, which helps if you keep it elsewhere. Reading and verifying are slow on very large logs, since they load every record.
 - **API keys** are looked up by SHA-256 hash in a dictionary. The comparison is not constant-time.
 - **`/metrics` is unauthenticated.** Restrict it at the network. See [SECURITY.md](SECURITY.md).
-- **Tier rate limits are hardcoded**: 100, 1,000 and 10,000 requests per minute. A separate per-address limit, 300 per minute by default, applies to all non-health requests and can be changed with `RateLimiting:PreAuth:*`.
+- **Rate limits count per instance.** The tier limits default to 100, 1,000 and 10,000 requests per minute (`RateLimiting:Tiers:*`), and a per-address limit of 300 per minute applies to all non-health requests (`RateLimiting:PreAuth:*`).
 
 ## Command-line tools
 

@@ -52,6 +52,75 @@ public sealed class FieldMaskingService
         return result;
     }
 
+    /// <summary>
+    /// Masks an event for a role. The raw line usually holds the same values as the fields, so
+    /// masking only the fields would hide nothing: each value masked in a field is masked in the
+    /// line too. A rule with a value pattern also applies to the line directly, which catches
+    /// values no parser extracted. Returns the same event if nothing applies.
+    /// </summary>
+    public LogEvent MaskEvent(LogEvent logEvent, SystemRole viewerRole)
+    {
+        var rules = _rules.Where(rule => rule.Enabled && !rule.ExemptRoles.Contains(viewerRole)).ToList();
+        if (rules.Count == 0)
+        {
+            return logEvent;
+        }
+
+        var original = logEvent.Fields
+            .Where(field => field.Value != null)
+            .ToDictionary(field => field.Key, field => field.Value!.ToString() ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+        var masked = MaskFields(original, viewerRole);
+
+        var copy = new LogEvent
+        {
+            Id = logEvent.Id,
+            Timestamp = logEvent.Timestamp,
+            IndexTime = logEvent.IndexTime,
+            SourceType = logEvent.SourceType,
+            Host = logEvent.Host,
+            Severity = logEvent.Severity,
+            RawLine = logEvent.RawLine,
+            SourceFile = logEvent.SourceFile,
+            LineNumber = logEvent.LineNumber,
+            ParserName = logEvent.ParserName,
+            Index = logEvent.Index,
+            Tags = logEvent.Tags,
+        };
+
+        foreach (var field in logEvent.Fields)
+        {
+            if (!original.TryGetValue(field.Key, out var value))
+            {
+                copy.Fields[field.Key] = field.Value;
+                continue;
+            }
+
+            masked.TryGetValue(field.Key, out var replacement);
+            if (replacement == value)
+            {
+                copy.Fields[field.Key] = field.Value;
+                continue;
+            }
+
+            if (replacement != null)
+            {
+                copy.Fields[field.Key] = replacement;
+            }
+
+            if (value.Length > 0)
+            {
+                copy.RawLine = copy.RawLine.Replace(value, replacement ?? "***", StringComparison.Ordinal);
+            }
+        }
+
+        foreach (var rule in rules.Where(rule => rule.ValuePattern != null).OrderByDescending(rule => rule.Priority))
+        {
+            copy.RawLine = SafeRegexReplace(copy.RawLine, rule.ValuePattern!, rule.Replacement);
+        }
+
+        return copy;
+    }
+
     private static bool MatchesPattern(string fieldName, string pattern)
     {
         if (pattern == "*") return true;

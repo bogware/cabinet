@@ -325,6 +325,21 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
         return deleted;
     }
 
+    public async Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+
+        var response = await _client.DeleteByQueryAsync<OpenSearchLogEvent>(d => d
+            .Index($"{_indexPrefix}-*")
+            .Conflicts(Conflicts.Proceed)
+            .Query(q => q.Bool(b => b.Filter(
+                f => f.Term(t => t.Field(e => e.IndexName).Value(indexName)),
+                f => f.DateRange(r => r.Field(e => e.Timestamp).LessThan(before))))), cancellationToken);
+
+        ThrowIfFailed(response, "purge index");
+        return (int)response.Deleted;
+    }
+
     public async Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);

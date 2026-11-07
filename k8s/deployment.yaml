@@ -2,11 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cabinet-api
-  namespace: cabinet
   labels:
     app: cabinet
     component: api
 spec:
+  # Instances share PostgreSQL, and one at a time runs background work
   replicas: 2
   selector:
     matchLabels:
@@ -22,12 +22,21 @@ spec:
       labels:
         app: cabinet
         component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
     spec:
       serviceAccountName: cabinet-api
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cabinet-api
-          image: ghcr.io/bogware/cabinet:latest  # Override with specific tag in CD pipeline (e.g., kustomize set image)
+          image: ghcr.io/bogware/cabinet:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -35,51 +44,55 @@ spec:
               protocol: TCP
           env:
             - name: ASPNETCORE_ENVIRONMENT
-              value: "Production"
+              value: Production
             - name: ASPNETCORE_URLS
-              value: "http://+:8080"
+              value: http://+:8080
             - name: Storage__Type
               valueFrom:
                 configMapKeyRef:
                   name: cabinet-config
                   key: storage-type
+            - name: Storage__RetentionDays
+              valueFrom:
+                configMapKeyRef:
+                  name: cabinet-config
+                  key: retention-days
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cabinet-secrets
+                  key: postgres-password
             - name: Storage__ConnectionString
-              valueFrom:
-                secretKeyRef:
-                  name: cabinet-secrets
-                  key: storage-connection-string
-            - name: Distributed__Enabled
-              value: "true"
-            - name: Distributed__RedisConnectionString
-              valueFrom:
-                secretKeyRef:
-                  name: cabinet-secrets
-                  key: redis-connection-string
-            - name: Distributed__InstanceId
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+              value: Host=postgres;Database=cabinet;Username=cabinet;Password=$(POSTGRES_PASSWORD)
             - name: ApiKeys__Keys__0__Key
               valueFrom:
                 secretKeyRef:
                   name: cabinet-secrets
                   key: api-key-0
             - name: ApiKeys__Keys__0__Tier
-              value: "Enterprise"
+              value: Admin
             - name: ApiKeys__Keys__0__Name
-              value: "Production Key"
+              value: Cluster Admin
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 250m
+              memory: 512Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /health/live
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
@@ -87,26 +100,24 @@ spec:
             httpGet:
               path: /health/ready
               port: http
-            initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          startupProbe:
-            httpGet:
-              path: /health/live
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 12
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1654
-        fsGroup: 1654
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: cabinet-api
-  namespace: cabinet
-  labels:
-    app: cabinet
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: cabinet
+              component: api

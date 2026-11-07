@@ -52,6 +52,11 @@ public interface ILogStorage
     }
 
     /// <summary>
+    /// Delete an index's events older than a time, returning how many were deleted
+    /// </summary>
+    Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Get storage statistics
     /// </summary>
     Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default);

@@ -48,6 +48,8 @@ public sealed class BqlQueryEngine : IQueryEngine
         QueryExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        using var span = Cabinet.Core.Utilities.CabinetDiagnostics.Source.StartActivity("query.execute");
+
         // Enforce per-query timeout by linking to the caller's cancellation token
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(context.Timeout);
@@ -120,6 +122,10 @@ public sealed class BqlQueryEngine : IQueryEngine
             : null;
 
         sw.Stop();
+
+        span?.SetTag("cabinet.events_scanned", eventsScanned);
+        span?.SetTag("cabinet.rows", finalEvents.Count);
+        span?.SetTag("cabinet.truncated", budget.Truncated);
 
         return new QueryResult
         {

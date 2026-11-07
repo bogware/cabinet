@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cabinet-config
+data:
+  storage-type: PostgreSQL
+  retention-days: "0"
