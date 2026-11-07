@@ -128,8 +128,8 @@ public class BqlQueryEngineTests
 
         result.Events.Should().HaveCount(1);
         var row = (IDictionary<string, object?>)result.Events[0];
-        row.Should().ContainKey("count()");
-        ((int)row["count()"]!).Should().Be(10);
+        row.Should().ContainKey("count");
+        Convert.ToInt32(row["count"]).Should().Be(10);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class BqlQueryEngineTests
         {
             var dict = (IDictionary<string, object?>)evt;
             dict.Should().ContainKey("host");
-            dict.Should().ContainKey("count()");
+            dict.Should().ContainKey("count");
         }
     }
 

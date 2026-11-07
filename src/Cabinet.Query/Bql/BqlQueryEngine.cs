@@ -76,6 +76,25 @@ public sealed class BqlQueryEngine : IQueryEngine
         long eventsScanned = 0;
         List<dynamic> events;
 
+        // A bare count needs no events, so it isn't subject to the read limit
+        if (context.Mode != QueryMode.Direct && IsBareCount(optimized.RemainingStages, out var countColumn))
+        {
+            var count = await _storage.GetCountAsync(optimized.StorageContext, cancellationToken);
+            var countRow = new BqlRow { [countColumn] = count };
+            sw.Stop();
+            return new QueryResult
+            {
+                Events = new List<dynamic> { countRow },
+                Columns = [countColumn],
+                Statistics = new QueryStatistics
+                {
+                    EventsScanned = count,
+                    EventsMatched = 1,
+                    ExecutionTime = sw.Elapsed
+                }
+            };
+        }
+
         // Determine the effective limit for streaming — cap storage reads to avoid OOM
         var maxFetchLimit = optimized.StorageContext.Limit;
 
@@ -128,7 +147,10 @@ public sealed class BqlQueryEngine : IQueryEngine
             {
                 EventsScanned = eventsScanned,
                 EventsMatched = finalEvents.Count,
-                ExecutionTime = sw.Elapsed
+                ExecutionTime = sw.Elapsed,
+                Truncated = eventsScanned >= maxFetchLimit
+                    && optimized.RemainingStages.Count > 0
+                    && optimized.RemainingStages[0] is not LimitStage
             }
         };
     }
@@ -198,9 +220,21 @@ public sealed class BqlQueryEngine : IQueryEngine
         }
     }
 
-    internal static ExpandoObject ConvertToExpando(LogEvent evt)
+    private static bool IsBareCount(List<BqlStage> stages, out string column)
     {
-        var expando = new ExpandoObject();
+        column = string.Empty;
+        if (stages is not [StatsStage { GroupByFields.Count: 0, Aggregations: [{ Name: "count", Field: null } aggregate] }])
+        {
+            return false;
+        }
+
+        column = aggregate.OutputName;
+        return true;
+    }
+
+    internal static BqlRow ConvertToExpando(LogEvent evt)
+    {
+        var expando = new BqlRow();
         var dict = (IDictionary<string, object?>)expando;
 
         dict["Id"] = evt.Id;
@@ -213,9 +247,12 @@ public sealed class BqlQueryEngine : IQueryEngine
         dict["SourceFile"] = evt.SourceFile ?? "";
         dict["LineNumber"] = evt.LineNumber;
 
-        // Merge all custom fields
+        // Merge custom fields. Built-in columns keep their values, since names match case-insensitively.
         foreach (var field in evt.Fields)
-            dict[field.Key] = field.Value;
+            dict.TryAdd(field.Key, field.Value);
+
+        // Every event has a message, even when its parser didn't extract one
+        dict.TryAdd("Message", evt.RawLine);
 
         // Tags as comma-separated string
         if (evt.Tags.Count > 0)
@@ -288,7 +325,7 @@ public sealed class BqlQueryEngine : IQueryEngine
         var lines = await File.ReadAllLinesAsync(path, cancellationToken);
         for (var i = 0; i < lines.Length; i++)
         {
-            var expando = new ExpandoObject();
+            var expando = new BqlRow();
             var dict = (IDictionary<string, object?>)expando;
             dict["RawLine"] = lines[i];
             dict["Timestamp"] = fileTime;
@@ -561,7 +598,7 @@ internal sealed class LegacyJoinOperator : QueryOperator
                     {
                         foreach (var subEvt in kvp.Value)
                         {
-                            var expando = new System.Dynamic.ExpandoObject();
+                            var expando = new BqlRow();
                             var dict = (IDictionary<string, object?>)expando;
                             foreach (var field in subEvt)
                                 dict[field.Key] = field.Value;
@@ -594,7 +631,7 @@ internal sealed class LegacyJoinOperator : QueryOperator
 
     private static dynamic MergeEvents(IDictionary<string, object?> main, IDictionary<string, object?> sub)
     {
-        var expando = new System.Dynamic.ExpandoObject();
+        var expando = new BqlRow();
         var dict = (IDictionary<string, object?>)expando;
 
         // Copy main event fields first

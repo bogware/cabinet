@@ -53,13 +53,14 @@ public class BqlOptimizerTests
     }
 
     [Fact]
-    public void Optimize_SimpleFieldEquality_PushedDown()
+    public void Optimize_CustomFieldEquality_StaysInPipeline()
     {
+        // Backends compare JSON values by exact type and case; the pipeline doesn't.
         var query = _parser.ParseBql("find * | where status = \"200\"");
         var optimized = _optimizer.Optimize(query);
 
-        optimized.StorageContext.FieldFilters.Should().NotBeNull();
-        optimized.StorageContext.FieldFilters!["status"].Should().Be("200");
+        optimized.StorageContext.FieldFilters.Should().BeNull();
+        optimized.RemainingStages.Should().ContainSingle(s => s is WhereStage);
     }
 
     [Fact]
@@ -74,15 +75,13 @@ public class BqlOptimizerTests
     }
 
     [Fact]
-    public void Optimize_OrSameField_PushedDownAsInFilter()
+    public void Optimize_OrSameField_StaysInPipeline()
     {
         var query = _parser.ParseBql("find * | where status = 200 or status = 500");
         var optimized = _optimizer.Optimize(query);
 
-        // OR on same field pushed down as IN filter
-        optimized.StorageContext.FieldFilters.Should().NotBeNull();
-        optimized.StorageContext.FieldFilters!["status"].Should().BeOfType<object?[]>();
-        optimized.RemainingStages.Should().NotContain(s => s is WhereStage);
+        optimized.StorageContext.FieldFilters.Should().BeNull();
+        optimized.RemainingStages.Should().ContainSingle(s => s is WhereStage);
     }
 
     [Fact]
@@ -220,31 +219,56 @@ public class BqlOptimizerTests
     }
 
     [Fact]
-    public void Optimize_SearchFieldEquals_PushedAsSearchText()
+    public void Optimize_SearchFieldEquals_BecomesFieldCondition()
     {
-        // The BQL lexer tokenizes "status=200" as three tokens (status, =, 200),
-        // and the parser reconstructs them with spaces as "status = 200".
-        // Since the text contains spaces, TryPushSearch treats it as full-text
-        // search rather than a field=value filter.
         var query = _parser.ParseBql("find status=200");
         var optimized = _optimizer.Optimize(query);
 
-        optimized.StorageContext.SearchText.Should().Be("status = 200");
-        optimized.StorageContext.FieldFilters.Should().BeNull();
+        optimized.StorageContext.SearchText.Should().BeNull();
+        optimized.RemainingStages.Should().ContainSingle(s => s is WhereStage);
     }
 
     [Fact]
-    public void Optimize_AndWithOrSameField_BothPushedDown()
+    public void Optimize_AndWithOrSameField_PushesOnlyTheSeverity()
     {
-        // AND with severity + OR on same field — both pushed down
         var query = _parser.ParseBql("find * | where Severity >= 3 and (status = 200 or status = 500)");
         var optimized = _optimizer.Optimize(query);
 
-        // Severity should be pushed down
         optimized.StorageContext.MinSeverity.Should().Be(LogSeverity.Warning);
-        // OR on same field also pushed down as IN filter
-        optimized.StorageContext.FieldFilters.Should().NotBeNull();
-        optimized.StorageContext.FieldFilters!["status"].Should().BeOfType<object?[]>();
-        optimized.RemainingStages.Should().NotContain(s => s is WhereStage);
+        optimized.StorageContext.FieldFilters.Should().BeNull();
+        optimized.RemainingStages.Should().ContainSingle(s => s is WhereStage);
+    }
+
+    [Theory]
+    [InlineData("find * | head 5 | where severity >= 4")]
+    [InlineData("find * | eval x = 1 | where severity >= 4")]
+    [InlineData("find * | stats count by host | where severity >= 4")]
+    public void Optimize_FilterAfterNonFilterStage_IsNotPushed(string bql)
+    {
+        var optimized = _optimizer.Optimize(_parser.ParseBql(bql));
+
+        optimized.StorageContext.MinSeverity.Should().BeNull();
+        optimized.RemainingStages.Should().Contain(s => s is WhereStage);
+    }
+
+    [Fact]
+    public void Optimize_SortOnOtherField_StaysInPipeline()
+    {
+        var optimized = _optimizer.Optimize(_parser.ParseBql("find * | sort by host asc"));
+
+        optimized.RemainingStages.Should().ContainSingle(s => s is SortStage);
+        optimized.StorageContext.SortField.Should().Be("Timestamp");
+    }
+
+    [Fact]
+    public void Optimize_DirectMode_PushesNothing()
+    {
+        var optimized = _optimizer.Optimize(
+            _parser.ParseBql("find error | where severity >= 4"),
+            new QueryExecutionContext { Query = "find error", Mode = QueryMode.Direct, Path = "app.log" });
+
+        optimized.StorageContext.SearchText.Should().BeNull();
+        optimized.StorageContext.MinSeverity.Should().BeNull();
+        optimized.RemainingStages.Should().HaveCount(2);
     }
 }

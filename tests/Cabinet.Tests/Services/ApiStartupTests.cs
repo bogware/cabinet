@@ -272,7 +272,7 @@ public sealed class ApiStartupTests : IDisposable
             query.StatusCode.Should().Be(HttpStatusCode.OK);
 
             using var body = JsonDocument.Parse(await query.Content.ReadAsStringAsync());
-            body.RootElement.GetProperty("results")[0].GetProperty("count()").GetInt32().Should().Be(1);
+            body.RootElement.GetProperty("results")[0].GetProperty("count").GetInt32().Should().Be(1);
 
             var dashboards = await client.GetAsync("/api/v1/dashboards");
             dashboards.StatusCode.Should().Be(HttpStatusCode.OK);

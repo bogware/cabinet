@@ -76,7 +76,7 @@ Hand-written recursive-descent parser (~3000 lines in `Bql/BqlParser.cs`) — no
 Text → BqlLexer → BqlParser → AST → BqlOptimizer (predicate pushdown) → BqlQueryEngine → Results
 ```
 
-The optimizer pushes filters (search text, severity, field equality, time range, simple sort) into `QueryContext` so storage backends handle them natively; the rest runs as pipeline stages. Query results flow as `ExpandoObject` because BQL stages (`eval`, `rename`, `rex`, `stats`) mutate schema at runtime — this is a known perf bottleneck for large result sets (ADR-004 / PERF-01).
+The optimizer pushes only the leading run of filters, and only predicates every backend evaluates exactly like the pipeline (search text, `severity >=`, `host =`, `source_type =`, time range, sort by time); everything else runs as pipeline stages. Don't push a predicate unless backends match pipeline semantics; `BqlEndToEndTests` runs the same queries on all four backends. Rows are `BqlRow`, a dictionary with case-insensitive field names and aliases, because stages (`eval`, `rename`, `rex`, `stats`) change the schema at runtime. Materializing rows is a known bottleneck for large results (ADR-004 / PERF-01). Queries reading more than `QueryContext.MaxLimit` events set `Statistics.Truncated`.
 
 ### Identity & auth
 

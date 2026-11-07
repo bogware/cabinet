@@ -104,9 +104,10 @@ public class LogsController : ControllerBase
             }
         }
 
+        var stored = 0;
         if (events.Any())
         {
-            await _storage.StoreBatchAsync(events);
+            stored = await _storage.StoreBatchAsync(events);
 
             // Invalidate cached query results for this index so dashboards get fresh data
             var index = events.FirstOrDefault()?.Index ?? "main";
@@ -119,14 +120,14 @@ public class LogsController : ControllerBase
             PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
             Action = AuditAction.Ingest,
             ResourceType = "LogEvent",
-            Description = $"Ingested {events.Count} events into index '{targetIndex}'",
+            Description = $"Ingested {stored} events into index '{targetIndex}'",
             SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString()
         });
 
         return Ok(new IngestResponse
         {
             TotalReceived = request.Logs.Count,
-            TotalIngested = events.Count,
+            TotalIngested = stored,
             Errors = errors
         });
     }

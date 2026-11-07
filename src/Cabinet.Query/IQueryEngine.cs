@@ -61,6 +61,12 @@ public class QueryStatistics
     public long EventsMatched { get; set; }
     public TimeSpan ExecutionTime { get; set; }
     public Dictionary<string, long>? FieldCardinality { get; set; }
+
+    /// <summary>
+    /// True when more events matched than the engine could read, so filters and aggregates
+    /// only saw the newest portion and their results may be incomplete.
+    /// </summary>
+    public bool Truncated { get; set; }
 }
 
 public class QueryParseException : Exception

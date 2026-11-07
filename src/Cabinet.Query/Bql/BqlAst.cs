@@ -272,6 +272,11 @@ public sealed class AggregateFunction
     public string? Field { get; }
     public string? Alias { get; set; }
 
+    /// <summary>
+    /// Column name in the output: the alias, else <c>count</c> or <c>avg(duration)</c>.
+    /// </summary>
+    public string OutputName => Alias ?? (Field == null ? Name : $"{Name}({Field})");
+
     public AggregateFunction(string name, string? field = null)
     {
         Name = name.ToLowerInvariant();

@@ -67,11 +67,11 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
             // B-tree indexes for common filters
             await conn.ExecuteAsync(@"
-                CREATE INDEX IF NOT EXISTS idx_log_events_source_type ON log_events (source_type)");
+                CREATE INDEX IF NOT EXISTS idx_log_events_source_type ON log_events (lower(source_type))");
             await conn.ExecuteAsync(@"
                 CREATE INDEX IF NOT EXISTS idx_log_events_severity ON log_events (severity)");
             await conn.ExecuteAsync(@"
-                CREATE INDEX IF NOT EXISTS idx_log_events_server_id ON log_events (server_id)
+                CREATE INDEX IF NOT EXISTS idx_log_events_server_id ON log_events (lower(server_id))
                 WHERE server_id IS NOT NULL");
 
             // B-tree index on index_name for per-index queries
@@ -309,14 +309,7 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
                 {
                     foreach (var (key, value) in fields)
                     {
-                        evt.SetField(key, value.ValueKind switch
-                        {
-                            JsonValueKind.String => value.GetString(),
-                            JsonValueKind.Number => value.TryGetInt64(out var l) ? l : value.GetDouble(),
-                            JsonValueKind.True => true,
-                            JsonValueKind.False => false,
-                            _ => value.ToString()
-                        });
+                        evt.SetField(key, JsonFieldValue.Unwrap(value));
                     }
                 }
             }
@@ -389,7 +382,7 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
         if (!string.IsNullOrEmpty(context.SourceType))
         {
-            sb.Append(" AND source_type = @SourceType");
+            sb.Append(" AND lower(source_type) = lower(@SourceType)");
             p.Add("SourceType", context.SourceType);
         }
 
@@ -401,7 +394,7 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
         if (!string.IsNullOrWhiteSpace(context.Host))
         {
-            sb.Append(" AND server_id = @Host");
+            sb.Append(" AND lower(server_id) = lower(@Host)");
             p.Add("Host", context.Host);
         }
 

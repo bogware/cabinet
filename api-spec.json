@@ -6674,6 +6674,9 @@
           "timestamp": {
             "type": "string",
             "format": "date-time"
+          },
+          "truncated": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

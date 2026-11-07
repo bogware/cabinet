@@ -33,11 +33,9 @@ public partial class SqliteLogStorage : ILogStorage
         _logger = logger;
 
         // Enable connection pooling via Cache=Shared for concurrent read performance.
-        // WAL mode + shared cache allows multiple readers without locking.
-        var connStr = _config.ConnectionString;
-        if (!connStr.Contains("Cache=", StringComparison.OrdinalIgnoreCase))
-            connStr += ";Cache=Shared";
-        _connectionString = connStr;
+        // WAL mode lets readers and a writer run concurrently. Shared cache must stay off: it
+        // makes an open reader block writers with SQLITE_LOCKED, which fails ingest.
+        _connectionString = _config.ConnectionString;
     }
 
     private async Task EnsureInitializedAsync()
@@ -267,7 +265,7 @@ public partial class SqliteLogStorage : ILogStorage
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to store batch of {Count} events", eventList.Count);
-            return 0;
+            throw;
         }
     }
 
@@ -443,13 +441,13 @@ public partial class SqliteLogStorage : ILogStorage
             sql.Append(" AND timestamp <= @EndTime");
 
         if (!string.IsNullOrEmpty(context.SourceType))
-            sql.Append(" AND source_type = @SourceType");
+            sql.Append(" AND source_type = @SourceType COLLATE NOCASE");
 
         if (context.MinSeverity.HasValue)
             sql.Append(" AND severity >= @MinSeverity");
 
         if (!string.IsNullOrEmpty(context.Host))
-            sql.Append(" AND server_id = @Host");
+            sql.Append(" AND server_id = @Host COLLATE NOCASE");
 
         if (!string.IsNullOrEmpty(context.Index))
             sql.Append(" AND index_name = @IndexName");
@@ -519,13 +517,13 @@ public partial class SqliteLogStorage : ILogStorage
             sql.Append(" AND timestamp <= @EndTime");
 
         if (!string.IsNullOrEmpty(context.SourceType))
-            sql.Append(" AND source_type = @SourceType");
+            sql.Append(" AND source_type = @SourceType COLLATE NOCASE");
 
         if (context.MinSeverity.HasValue)
             sql.Append(" AND severity >= @MinSeverity");
 
         if (!string.IsNullOrEmpty(context.Host))
-            sql.Append(" AND server_id = @Host");
+            sql.Append(" AND server_id = @Host COLLATE NOCASE");
 
         if (!string.IsNullOrEmpty(context.Index))
             sql.Append(" AND index_name = @IndexName");
@@ -654,12 +652,12 @@ public partial class SqliteLogStorage : ILogStorage
         var fieldsJson = reader.IsDBNull(8) ? null : reader.GetString(8);
         if (!string.IsNullOrEmpty(fieldsJson))
         {
-            var fields = JsonSerializer.Deserialize<Dictionary<string, object?>>(fieldsJson);
+            var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(fieldsJson);
             if (fields != null)
             {
                 foreach (var field in fields)
                 {
-                    logEvent.Fields[field.Key] = field.Value;
+                    logEvent.Fields[field.Key] = JsonFieldValue.Unwrap(field.Value);
                 }
             }
         }

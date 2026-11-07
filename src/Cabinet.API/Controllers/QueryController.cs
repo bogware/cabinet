@@ -119,7 +119,8 @@ public class QueryController : ControllerBase
                 : result.Events.Cast<object>().ToList();
 
             // Add truncation header so clients know results were capped
-            if (wasTruncated)
+            var truncated = wasTruncated || result.Statistics?.Truncated == true;
+            if (truncated)
                 Response.Headers["X-Result-Truncated"] = "true";
 
             // Audit log the query
@@ -818,6 +819,11 @@ public class QueryResponse
     public int Count { get; set; }
     public int ExecutionTimeMs { get; set; }
     public DateTime Timestamp { get; set; }
+
+    /// <summary>
+    /// True when more events matched than could be read, so results may be incomplete.
+    /// </summary>
+    public bool Truncated { get; set; }
 }
 
 public class ValidationResponse

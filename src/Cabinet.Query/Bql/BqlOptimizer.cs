@@ -1,14 +1,36 @@
+using System.Text.RegularExpressions;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 
 namespace Cabinet.Query.Bql;
 
 /// <summary>
-/// Optimizes a BQL AST by extracting predicates that can be pushed down to the storage layer.
-/// This avoids fetching all events and filtering in-memory — the storage backend handles filtering.
+/// Moves filtering into the storage layer where that can't change a query's answer.
+/// <para>
+/// Two rules keep it correct. Only the leading run of filters is pushed, because a filter after
+/// <c>head</c>, <c>eval</c> or <c>stats</c> applies to that stage's output, not to stored events.
+/// And a predicate is only pushed when every backend evaluates it exactly as the pipeline would;
+/// anything else stays in the pipeline.
+/// </para>
 /// </summary>
 public sealed class BqlOptimizer
 {
+    private const int MaxSearchFilterLength = 2048;
+
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+
+    private static readonly Regex QuotedText = new("\"[^\"]*\"", RegexOptions.None, RegexTimeout);
+
+    private static readonly Regex FieldComparison = new(
+        @"(?<![\w.])[A-Za-z_][\w.]*\s*(==|!=|>=|<=|=|>|<)",
+        RegexOptions.None,
+        RegexTimeout);
+
+    private static readonly Regex BareEqualityValue = new(
+        @"(?<field>(?<![\w.])[A-Za-z_][\w.]*)\s*(?<op>==|!=|=)\s*(?<value>[A-Za-z_][\w.\-]*)",
+        RegexOptions.None,
+        RegexTimeout);
+
     /// <summary>
     /// Optimize a BQL query: extract predicates pushable to storage, leave the rest as pipeline stages.
     /// </summary>
@@ -39,10 +61,19 @@ public sealed class BqlOptimizer
 
         var remainingStages = new List<BqlStage>();
 
-        foreach (var stage in query.Stages)
+        // Direct mode reads a file rather than storage, so nothing can be pushed.
+        var canPush = executionContext?.Mode != QueryMode.Direct;
+
+        foreach (var original in query.Stages)
         {
-            if (!TryPushDown(stage, storageContext))
-                remainingStages.Add(stage);
+            var stage = RewriteFieldSearch(original);
+
+            if (canPush && TryPushDown(stage, storageContext))
+                continue;
+
+            // Filters commute with each other. Anything else changes what later stages see.
+            canPush = canPush && stage is WhereStage or SearchStage;
+            remainingStages.Add(stage);
         }
 
         // Set a reasonable fetch limit with upper bound to prevent OOM.
@@ -69,9 +100,6 @@ public sealed class BqlOptimizer
             computedLimit = (int)Math.Min((long)(executionContext?.Limit ?? 100) * 20, maxFetchLimit);
         }
 
-        // Never increase beyond an already-set limit (e.g., from a pushed-down stage or default).
-        // storageContext.Limit defaults to 10K — only increase if the computed limit requires it,
-        // and never decrease below what was already set unless explicitly computed lower.
         storageContext.Limit = computedLimit;
 
         return new OptimizedQuery
@@ -80,6 +108,36 @@ public sealed class BqlOptimizer
             RemainingStages = remainingStages,
             OriginalQuery = query
         };
+    }
+
+    /// <summary>
+    /// Turns SPL-style <c>search status=500</c> or <c>search a=1 OR b=2</c> into the equivalent
+    /// <c>where</c>. Bare values are strings, as in SPL. Text that doesn't parse as a condition
+    /// stays a text search.
+    /// </summary>
+    private static BqlStage RewriteFieldSearch(BqlStage stage)
+    {
+        if (stage is not SearchStage search || search.SearchText.Length > MaxSearchFilterLength)
+            return stage;
+
+        var withoutQuotedText = QuotedText.Replace(search.SearchText, "\"\"");
+        if (!FieldComparison.IsMatch(withoutQuotedText))
+            return stage;
+
+        var condition = BareEqualityValue.Replace(search.SearchText, match =>
+            match.Groups["field"].Value.Equals("severity", StringComparison.OrdinalIgnoreCase)
+                ? match.Value
+                : $"{match.Groups["field"].Value} {match.Groups["op"].Value} \"{match.Groups["value"].Value}\"");
+
+        try
+        {
+            var parsed = new BqlParser().ParseBql($"* | where {condition}");
+            return parsed.Stages.OfType<WhereStage>().LastOrDefault() ?? stage;
+        }
+        catch (QueryParseException)
+        {
+            return stage;
+        }
     }
 
     /// <summary>
@@ -94,11 +152,11 @@ public sealed class BqlOptimizer
                 return TryPushSearch(search, ctx);
 
             case WhereStage where:
-                return TryPushWhere(where, ctx);
+                return TryPushCondition(where.Condition, ctx);
 
-            case SortStage sort when sort.Fields.Count == 1:
-                // Simple single-field sort can be pushed to storage
-                ctx.SortField = sort.Fields[0].Field;
+            case SortStage sort when sort.Fields.Count == 1 && IsTimestampField(sort.Fields[0].Field):
+                // Backends sort natively only on time. Other sorts run in the pipeline.
+                ctx.SortField = "Timestamp";
                 ctx.SortDescending = sort.Fields[0].Descending;
                 return true;
 
@@ -107,161 +165,64 @@ public sealed class BqlOptimizer
         }
     }
 
+    private static bool IsTimestampField(string field) =>
+        field.Equals("timestamp", StringComparison.OrdinalIgnoreCase)
+        || field.Equals("_time", StringComparison.OrdinalIgnoreCase);
+
     private static bool TryPushSearch(SearchStage search, QueryContext ctx)
     {
         var text = search.SearchText.Trim();
-        if (text == "*") return true; // Wildcard, no filter needed
-
-        // Check for SPL-style field=value in search text
-        if (text.Contains('=') && !text.Contains(' '))
-        {
-            var eqIdx = text.IndexOf('=');
-            var field = text[..eqIdx].Trim();
-            var value = text[(eqIdx + 1)..].Trim().Trim('"');
-
-            // Push as field filter
-            ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            ctx.FieldFilters[field] = value;
+        if (text == "*")
             return true;
-        }
 
-        // Push as full-text search
+        // A second search term can't share the single storage search slot
+        if (ctx.SearchText != null)
+            return false;
+
         ctx.SearchText = text.Trim('"');
         return true;
     }
 
-    private static bool TryPushWhere(WhereStage where, QueryContext ctx)
-    {
-        // Try to extract simple comparisons that map directly to QueryContext fields
-        if (TryExtractSimpleFilter(where.Condition, ctx))
-            return true;
-
-        // Complex expressions (AND/OR/NOT, nested) stay in the pipeline
-        return false;
-    }
-
-    private static bool TryExtractSimpleFilter(BqlExpression expr, QueryContext ctx)
-    {
-        if (expr is ComparisonExpression comp &&
-            comp.Left is FieldExpression field &&
-            comp.Right is LiteralExpression literal)
-        {
-            var fieldName = field.Name.ToLowerInvariant();
-
-            // Severity filter: severity >= warning
-            if (fieldName == "severity" && comp.Operator is ">=" or ">" &&
-                literal.Value is int or long or double)
-            {
-                var severityVal = Convert.ToInt32(literal.Value);
-                ctx.MinSeverity = (LogSeverity)severityVal;
-                return true;
-            }
-
-            // SourceType filter: sourcetype = "L4D2"
-            if (fieldName is "sourcetype" or "source_type" && comp.Operator is "=" or "==" &&
-                literal.Value is string sourceStr)
-            {
-                ctx.SourceType = sourceStr;
-                return true;
-            }
-
-            // Host filter: host = "server-1"
-            if (fieldName is "host" or "serverid" or "server_id" or "server" && comp.Operator is "=" or "==" &&
-                literal.Value is string hostStr)
-            {
-                ctx.Host = hostStr;
-                return true;
-            }
-
-            // Generic field=value (equality only) — use original field name for storage lookup
-            if (comp.Operator is "=" or "==")
-            {
-                ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                ctx.FieldFilters[field.Name] = literal.Value;
-                return true;
-            }
-        }
-
-        // AND: try to push each side independently. If both are pushed, remove the WHERE.
-        // If only one side is pushed, still push it (storage filters it) but keep the WHERE
-        // so the unpushed side still applies in the pipeline. This is safe because pushed
-        // predicates are AND'd with unpushed ones — pushing a subset only narrows results.
-        if (expr is LogicalExpression logical && logical.Operator == "AND")
-        {
-            var leftPushed = TryExtractSimpleFilter(logical.Left, ctx);
-            var rightPushed = TryExtractSimpleFilter(logical.Right, ctx);
-
-            // If both pushed, the entire WHERE can be removed
-            if (leftPushed && rightPushed) return true;
-
-            // If at least one pushed, keep the WHERE for the unpushed side.
-            // The pushed side is still applied at storage level (reducing fetch volume).
-            return false;
-        }
-
-        // OR: push down same-field equality predicates as an IN-style filter.
-        // e.g., host="web-01" OR host="web-02" → FieldFilters["host"] = string[]{"web-01","web-02"}
-        // Storage backends that support array values in FieldFilters will treat them as IN queries.
-        if (expr is LogicalExpression orExpr && orExpr.Operator == "OR")
-        {
-            var orValues = new List<(string field, object? value)>();
-            if (TryCollectOrEqualities(orExpr, orValues) && orValues.Count > 0)
-            {
-                // Same-field OR → push as array filter
-                var fieldName = orValues[0].field;
-                if (orValues.All(v => string.Equals(v.field, fieldName, StringComparison.OrdinalIgnoreCase)))
-                {
-                    ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                    ctx.FieldFilters[fieldName] = orValues.Select(v => v.value).ToArray();
-                    return true;
-                }
-
-                // Multi-field OR: group by field and push each group as an array filter.
-                // e.g., host="web-01" OR sourcetype="nginx" OR host="web-02"
-                // → FieldFilters["host"] = ["web-01","web-02"], FieldFilters["sourcetype"] = ["nginx"]
-                // This is only safe because each field group is OR'd, and storage backends
-                // evaluate multi-field filters with AND semantics (which is stricter than OR).
-                // We keep the WHERE in the pipeline to ensure correct OR semantics.
-                var groups = orValues
-                    .GroupBy(v => v.field, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                if (groups.Count > 1 && groups.All(g => g.Count() >= 1))
-                {
-                    ctx.FieldFilters ??= new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var group in groups)
-                    {
-                        var values = group.Select(v => v.value).ToArray();
-                        ctx.FieldFilters[group.Key] = values.Length == 1 ? values[0] : values;
-                    }
-                    // Keep WHERE in pipeline — AND between fields is stricter than OR,
-                    // but narrows fetch volume. The pipeline WHERE ensures correctness.
-                    return false;
-                }
-            }
-        }
-
-        return false;
-    }
-
     /// <summary>
-    /// Recursively collect field=value equalities from an OR tree.
-    /// Returns false if any branch is not a simple field=literal comparison.
+    /// Pushes what it can of a condition. Returns true only if the whole condition was pushed,
+    /// so a partly pushed AND stays in the pipeline for the remainder.
     /// </summary>
-    private static bool TryCollectOrEqualities(BqlExpression expr, List<(string field, object? value)> results)
+    private static bool TryPushCondition(BqlExpression expr, QueryContext ctx)
     {
-        if (expr is LogicalExpression logical && logical.Operator == "OR")
+        if (expr is LogicalExpression { Operator: "AND" } and)
         {
-            return TryCollectOrEqualities(logical.Left, results) &&
-                   TryCollectOrEqualities(logical.Right, results);
+            var leftPushed = TryPushCondition(and.Left, ctx);
+            var rightPushed = TryPushCondition(and.Right, ctx);
+            return leftPushed && rightPushed;
         }
 
-        if (expr is ComparisonExpression comp &&
-            comp.Operator is "=" or "==" &&
-            comp.Left is FieldExpression field &&
-            comp.Right is LiteralExpression literal)
+        return expr is ComparisonExpression { Left: FieldExpression field, Right: LiteralExpression literal } comparison
+            && TryPushComparison(field.Name.ToLowerInvariant(), comparison.Operator, literal.Value, ctx);
+    }
+
+    private static bool TryPushComparison(string field, string op, object? value, QueryContext ctx)
+    {
+        if (field == "severity" && op is ">=" or ">" && value is int or long or double)
         {
-            results.Add((field.Name, literal.Value));
+            var numeric = Convert.ToDouble(value);
+            var minimum = op == ">" ? (int)Math.Floor(numeric) + 1 : (int)Math.Ceiling(numeric);
+            ctx.MinSeverity = (LogSeverity)Math.Max(minimum, (int)(ctx.MinSeverity ?? 0));
+            return true;
+        }
+
+        if (op is not ("=" or "==") || value is not string text)
+            return false;
+
+        // A second, conflicting value stays in the pipeline, which correctly matches nothing.
+        if (field is "sourcetype" or "source_type" && ctx.SourceType == null)
+        {
+            ctx.SourceType = text;
+            return true;
+        }
+
+        if (field is "host" && ctx.Host == null)
+        {
+            ctx.Host = text;
             return true;
         }
 

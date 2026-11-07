@@ -76,7 +76,7 @@ public class InMemoryStorage : ILogStorage
 
         if (!string.IsNullOrEmpty(context.SourceType))
         {
-            query = query.Where(e => e.SourceType == context.SourceType);
+            query = query.Where(e => string.Equals(e.SourceType, context.SourceType, StringComparison.OrdinalIgnoreCase));
         }
 
         if (context.MinSeverity.HasValue)
@@ -86,7 +86,7 @@ public class InMemoryStorage : ILogStorage
 
         if (!string.IsNullOrWhiteSpace(context.Host))
         {
-            query = query.Where(e => e.Host == context.Host);
+            query = query.Where(e => string.Equals(e.Host, context.Host, StringComparison.OrdinalIgnoreCase));
         }
 
         if (!string.IsNullOrEmpty(context.Index))
@@ -176,7 +176,7 @@ public class InMemoryStorage : ILogStorage
 
         if (!string.IsNullOrEmpty(context.SourceType))
         {
-            query = query.Where(e => e.SourceType == context.SourceType);
+            query = query.Where(e => string.Equals(e.SourceType, context.SourceType, StringComparison.OrdinalIgnoreCase));
         }
 
         if (context.MinSeverity.HasValue)
@@ -186,7 +186,7 @@ public class InMemoryStorage : ILogStorage
 
         if (!string.IsNullOrWhiteSpace(context.Host))
         {
-            query = query.Where(e => e.Host == context.Host);
+            query = query.Where(e => string.Equals(e.Host, context.Host, StringComparison.OrdinalIgnoreCase));
         }
 
         if (!string.IsNullOrEmpty(context.Index))

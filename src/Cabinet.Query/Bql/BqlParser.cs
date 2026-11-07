@@ -1705,9 +1705,9 @@ internal sealed class LegacyStatsOperator : QueryOperator
         if (_groupByFields.Count == 0)
         {
             // No grouping — always produce a single row (even if empty set)
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             foreach (var agg in _aggregations)
-                row[agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})"] = ComputeAggregate(agg, events);
+                row[agg.OutputName] = ComputeAggregate(agg, events);
             return Task.FromResult<IEnumerable<dynamic>>(new[] { (dynamic)row });
         }
 
@@ -1729,14 +1729,14 @@ internal sealed class LegacyStatsOperator : QueryOperator
         {
             // Materialize group once — avoids re-enumeration per aggregation function
             var groupList = group.ToList();
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             var first = (IDictionary<string, object?>)groupList[0];
 
             foreach (var field in _groupByFields)
                 row[field] = first.TryGetValue(field, out var v) ? v : null;
 
             foreach (var agg in _aggregations)
-                row[agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})"] = ComputeAggregate(agg, groupList);
+                row[agg.OutputName] = ComputeAggregate(agg, groupList);
 
             results.Add(row);
         }
@@ -1947,7 +1947,7 @@ internal sealed class LegacyTopOperator : QueryOperator
 
         var results = groups.Select(g =>
         {
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             row[_field] = g.Key;
             row["count"] = g.Count();
             return (dynamic)row;
@@ -1969,7 +1969,7 @@ internal sealed class LegacyTableOperator : QueryOperator
         var result = input.Select(evt =>
         {
             var dict = (IDictionary<string, object?>)evt;
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             foreach (var field in _fields)
             {
                 if (dict.TryGetValue(field, out var val))
@@ -2137,7 +2137,7 @@ internal sealed class LegacyTimechartOperator : QueryOperator
 
                 foreach (var sub in subGroups)
                 {
-                    var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                    var row = new BqlRow();
                     row["_time"] = bucket.Key;
                     row[_byField] = sub.Key;
                     row[_aggregation] = ComputeAgg(sub.Select(x => x.Event).ToList());
@@ -2146,7 +2146,7 @@ internal sealed class LegacyTimechartOperator : QueryOperator
             }
             else
             {
-                var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                var row = new BqlRow();
                 row["_time"] = bucket.Key;
                 row[_aggregation] = ComputeAgg(bucket.Select(x => x.Event).ToList());
                 results.Add(row);
@@ -2284,7 +2284,7 @@ internal sealed class LegacyTransactionOperator : QueryOperator
 
     private dynamic BuildTransaction(List<(dynamic Event, DateTime Timestamp)> txnEvents)
     {
-        var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+        var row = new BqlRow();
         var firstDict = (IDictionary<string, object?>)txnEvents[0].Event;
 
         // Copy fields from first event
@@ -2338,7 +2338,7 @@ internal sealed class LegacyEventStatsOperator : QueryOperator
             var aggValues = new Dictionary<string, object?>();
             foreach (var agg in _aggregations)
             {
-                var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                var key = agg.OutputName;
                 aggValues[key] = LegacyStatsOperator.ComputeAggregate(agg, events);
             }
             foreach (var evt in events)
@@ -2363,7 +2363,7 @@ internal sealed class LegacyEventStatsOperator : QueryOperator
                 var aggValues = new Dictionary<string, object?>();
                 foreach (var agg in _aggregations)
                 {
-                    var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                    var key = agg.OutputName;
                     aggValues[key] = LegacyStatsOperator.ComputeAggregate(agg, groupEvents);
                 }
                 foreach (var evt in groupEvents)
@@ -2428,7 +2428,7 @@ internal sealed class LegacyStreamStatsOperator : QueryOperator
             // Compute running aggregations over the (now bounded) window
             foreach (var agg in _aggregations)
             {
-                var key = agg.Alias ?? $"{agg.Name}({agg.Field ?? ""})";
+                var key = agg.OutputName;
                 dict[key] = LegacyStatsOperator.ComputeAggregate(agg, window);
             }
         }
@@ -2576,7 +2576,7 @@ internal sealed class LegacyMakeResultsOperator : QueryOperator
         var now = DateTime.UtcNow;
         for (var i = 0; i < _count; i++)
         {
-            var expando = new System.Dynamic.ExpandoObject();
+            var expando = new BqlRow();
             var dict = (IDictionary<string, object?>)expando;
             dict["_time"] = now;
             dict["Timestamp"] = now;
@@ -2618,7 +2618,7 @@ internal sealed class LegacyMvExpandOperator : QueryOperator
             foreach (var v in values)
             {
                 if (count++ >= _limit) break;
-                var newExpando = new System.Dynamic.ExpandoObject();
+                var newExpando = new BqlRow();
                 var newDict = (IDictionary<string, object?>)newExpando;
                 foreach (var kvp in dict) newDict[kvp.Key] = kvp.Value;
                 newDict[_field] = v;
@@ -2721,7 +2721,7 @@ internal sealed class LegacyAddColTotalsOperator : QueryOperator
         }
 
         // Append totals row
-        var totalRow = new System.Dynamic.ExpandoObject();
+        var totalRow = new BqlRow();
         var totalDict = (IDictionary<string, object?>)totalRow;
         totalDict[_labelField] = "TOTALS";
         foreach (var kvp in totals) totalDict[kvp.Key] = kvp.Value;
@@ -2757,7 +2757,7 @@ internal sealed class LegacyRareOperator : QueryOperator
 
         var results = groups.Select(g =>
         {
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             row[_field] = g.Key;
             row["count"] = g.Count();
             row["percent"] = 0.0; // filled in below
@@ -2877,7 +2877,7 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
         var results = new List<dynamic>();
         foreach (var kvp in fieldStats.OrderBy(f => f.Key))
         {
-            var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var row = new BqlRow();
             row["field"] = kvp.Key;
             row["count"] = kvp.Value.ValueCount;
             row["distinct_count"] = kvp.Value.DistinctValues.Count;
@@ -2941,7 +2941,7 @@ internal sealed class LegacyXyseriesOperator : QueryOperator
 
             if (!rowGroups.TryGetValue(rowKey, out var row))
             {
-                row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                row = new BqlRow();
                 row[_rowField] = rowKey;
                 rowGroups[rowKey] = row;
             }
@@ -2982,7 +2982,7 @@ internal sealed class LegacyUntableOperator : QueryOperator
             {
                 if (string.Equals(kvp.Key, _rowField, StringComparison.OrdinalIgnoreCase)) continue;
 
-                var row = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+                var row = new BqlRow();
                 row[_rowField] = rowValue;
                 row[_colField] = kvp.Key;
                 row[_valField] = kvp.Value;
@@ -3019,7 +3019,7 @@ internal sealed class LegacyInputLookupOperator : QueryOperator
         var results = new List<dynamic>();
         foreach (var row in lookup.Rows)
         {
-            var expando = (IDictionary<string, object?>)new System.Dynamic.ExpandoObject();
+            var expando = new BqlRow();
             foreach (var kvp in row)
             {
                 expando[kvp.Key] = kvp.Value;
