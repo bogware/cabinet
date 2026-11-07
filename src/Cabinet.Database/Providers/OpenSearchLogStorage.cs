@@ -14,6 +14,8 @@ namespace Cabinet.Database.Providers;
 /// </summary>
 public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 {
+    private const int SearchPageSize = 1000;
+
     private readonly ILogger<OpenSearchLogStorage> _logger;
     private readonly OpenSearchClient _client;
     private readonly string _indexPrefix;
@@ -157,6 +159,13 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
             return b;
         }, cancellationToken);
 
+        if (!bulkResponse.IsValid && !bulkResponse.Errors)
+        {
+            throw new InvalidOperationException(
+                $"OpenSearch bulk request failed: {bulkResponse.ServerError?.ToString() ?? bulkResponse.OriginalException?.Message}",
+                bulkResponse.OriginalException);
+        }
+
         if (bulkResponse.Errors)
         {
             var errorCount = bulkResponse.ItemsWithErrors.Count();
@@ -181,19 +190,55 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
     {
         await EnsureInitializedAsync(cancellationToken);
 
+        // OpenSearch rejects from + size beyond index.max_result_window (10,000 by default),
+        // so read in pages with search_after. Skipped rows have to be read and discarded.
         var searchDescriptor = BuildSearchDescriptor(context);
-        var response = await _client.SearchAsync<OpenSearchLogEvent>(searchDescriptor, cancellationToken);
+        var toSkip = context.Skip;
+        var toReturn = context.Limit;
+        IReadOnlyCollection<object>? after = null;
 
-        if (!response.IsValid)
+        while (toReturn > 0)
         {
-            _logger.LogWarning("OpenSearch query failed: {Error}", response.OriginalException?.Message);
-            yield break;
-        }
+            var pageSize = Math.Min(SearchPageSize, toSkip + toReturn);
+            var cursor = after;
+            var response = await _client.SearchAsync<OpenSearchLogEvent>(s =>
+            {
+                searchDescriptor(s);
+                s.From(null).Size(pageSize);
+                if (cursor != null)
+                {
+                    s.SearchAfter(cursor.ToArray());
+                }
 
-        foreach (var hit in response.Hits)
-        {
-            if (cancellationToken.IsCancellationRequested) yield break;
-            yield return MapFromDocument(hit.Source);
+                return s;
+            }, cancellationToken);
+
+            ThrowIfFailed(response, "query");
+
+            var hits = response.Hits.ToList();
+            foreach (var hit in hits)
+            {
+                if (toSkip > 0)
+                {
+                    toSkip--;
+                    continue;
+                }
+
+                if (toReturn == 0)
+                {
+                    yield break;
+                }
+
+                toReturn--;
+                yield return MapFromDocument(hit.Source);
+            }
+
+            if (hits.Count < pageSize)
+            {
+                yield break;
+            }
+
+            after = hits[^1].Sorts;
         }
     }
 
@@ -206,6 +251,8 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
             .Index($"{_indexPrefix}-*")
             .Query(q => q.Term(t => t.Field(f => f.Id).Value(id)))
             .Size(1), cancellationToken);
+
+        ThrowIfFailed(response, "lookup");
 
         if (!response.IsValid || !response.Hits.Any())
             return null;
@@ -221,6 +268,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
         {
             var countResponse = await _client.CountAsync<OpenSearchLogEvent>(c => c
                 .Index($"{_indexPrefix}-*"), cancellationToken);
+            ThrowIfFailed(countResponse, "count");
             return countResponse.Count;
         }
 
@@ -233,6 +281,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
             return s;
         }, cancellationToken);
 
+        ThrowIfFailed(response, "count");
         return response.Total;
     }
 
@@ -246,6 +295,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                 .Field(f => f.Timestamp)
                 .LessThan(before))), cancellationToken);
 
+        ThrowIfFailed(response, "purge");
         var deleted = (int)response.Deleted;
         _logger.LogInformation("Purged {Count} events older than {Before}", deleted, before);
         return deleted;
@@ -318,6 +368,16 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
             await InitializeAsync(cancellationToken);
     }
 
+    private static void ThrowIfFailed(IResponse response, string operation)
+    {
+        if (!response.IsValid)
+        {
+            throw new InvalidOperationException(
+                $"OpenSearch {operation} failed: {response.ServerError?.Error?.Reason ?? response.OriginalException?.Message}",
+                response.OriginalException);
+        }
+    }
+
     private string GetCurrentIndexName() => GetIndexNameForDate(DateTime.UtcNow);
 
     private string GetIndexNameForDate(DateTime timestamp) =>
@@ -349,7 +409,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 
             if (!string.IsNullOrEmpty(context.SourceType))
             {
-                queries.Add(q => q.Term(t => t.Field(f => f.SourceType).Value(context.SourceType)));
+                queries.Add(q => q.Term(t => t.Field(f => f.SourceType).Value(context.SourceType).CaseInsensitive()));
             }
 
             if (context.MinSeverity.HasValue)
@@ -359,7 +419,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 
             if (!string.IsNullOrWhiteSpace(context.Host))
             {
-                queries.Add(q => q.Term(t => t.Field(f => f.Host).Value(context.Host)));
+                queries.Add(q => q.Term(t => t.Field(f => f.Host).Value(context.Host).CaseInsensitive()));
             }
 
             if (!string.IsNullOrEmpty(context.Index))
@@ -409,12 +469,9 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                 "sourcetype" or "source_type" => "sourceType",
                 _ => "timestamp"
             };
-            s.Sort(so => context.SortDescending
+            s.Sort(so => (context.SortDescending
                 ? so.Descending(sortField)
-                : so.Ascending(sortField));
-
-            s.From(context.Skip);
-            s.Size(context.Limit);
+                : so.Ascending(sortField)).Ascending("id"));
 
             return s;
         };

@@ -56,6 +56,15 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         _storage?.Dispose();
     }
 
+    /// <summary>Makes stored events searchable now rather than at the next refresh interval.</summary>
+    private static async Task RefreshAsync()
+    {
+        var url = Environment.GetEnvironmentVariable("CABINET_TEST_OPENSEARCH_URL")!.TrimEnd('/');
+        using var client = new HttpClient();
+        var response = await client.PostAsync($"{url}/{TestIndexPrefix}-*/_refresh", null);
+        response.EnsureSuccessStatusCode();
+    }
+
     private void SkipIfNotAvailable()
     {
         Skip.If(!_isAvailable, "OpenSearch not available. Set CABINET_TEST_OPENSEARCH_URL to enable.");
@@ -71,7 +80,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         stored.Should().BeTrue();
 
         // Wait for refresh
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var retrieved = await _storage.GetByIdAsync(evt.Id);
         retrieved.Should().NotBeNull();
@@ -100,7 +109,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         var evt1 = CreateEvent("Login successful for admin");
         var evt2 = CreateEvent("System shutdown initiated");
         await _storage!.StoreBatchAsync(new[] { evt1, evt2 });
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var context = new QueryContext { SearchText = "Login", Limit = 100 };
         var results = new List<LogEvent>();
@@ -121,7 +130,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         var old = CreateEvent("Old OS event", timestamp: now.AddHours(-48));
         var recent = CreateEvent("Recent OS event", timestamp: now.AddMinutes(-1));
         await _storage!.StoreBatchAsync(new[] { old, recent });
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var context = new QueryContext
         {
@@ -147,7 +156,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         var info = CreateEvent("OS Info", severity: LogSeverity.Info);
         var error = CreateEvent("OS Error", severity: LogSeverity.Error);
         await _storage!.StoreBatchAsync(new[] { info, error });
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var context = new QueryContext
         {
@@ -174,7 +183,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         tagged.Tags.Add("security");
         var untagged = CreateEvent("OS untagged event");
         await _storage!.StoreBatchAsync(new[] { tagged, untagged });
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var context = new QueryContext
         {
@@ -200,7 +209,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
             .Select(i => CreateEvent($"OS count test {i}"))
             .ToList();
         await _storage!.StoreBatchAsync(events);
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var count = await _storage.GetCountAsync();
         count.Should().BeGreaterOrEqualTo(5);
@@ -212,7 +221,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         SkipIfNotAvailable();
 
         await _storage!.StoreAsync(CreateEvent("OS stats test"));
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var stats = await _storage.GetStatsAsync();
         stats.TotalEvents.Should().BeGreaterThan(0);
@@ -228,7 +237,7 @@ public class OpenSearchLogStorageIntegrationTests : IAsyncLifetime, IDisposable
         var testEvt = CreateEvent("OS test event");
         testEvt.Index = "test";
         await _storage!.StoreBatchAsync(new[] { mainEvt, testEvt });
-        await Task.Delay(1500);
+        await RefreshAsync();
 
         var context = new QueryContext { Index = "test", Limit = 100 };
         var results = new List<LogEvent>();
