@@ -27,7 +27,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: cabinet-api
-          image: ghcr.io/draxios/cabinet:latest  # Override with specific tag in CD pipeline (e.g., kustomize set image)
+          image: ghcr.io/bogware/cabinet:latest  # Override with specific tag in CD pipeline (e.g., kustomize set image)
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

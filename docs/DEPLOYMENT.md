@@ -70,7 +70,7 @@ cd /opt/cabinet && dotnet Cabinet.API.dll
 
 ```bash
 # Clone and start
-git clone https://github.com/draxios/cabinet.git
+git clone https://github.com/bogware/cabinet.git
 cd cabinet
 docker-compose up -d
 

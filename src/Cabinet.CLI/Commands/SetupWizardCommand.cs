@@ -1007,7 +1007,7 @@ internal sealed class SetupWizard
             var serviceContent = $"""
                 [Unit]
                 Description=Cabinet Log Forwarding Agent
-                Documentation=https://github.com/draxios/cabinet
+                Documentation=https://github.com/bogware/cabinet
                 After=network-online.target
                 Wants=network-online.target
 
@@ -1634,7 +1634,7 @@ internal sealed class SetupWizard
         }
 
         AnsiConsole.WriteLine();
-        AnsiConsole.Write(new Rule("[dim]https://github.com/draxios/cabinet[/]").RuleStyle("dim"));
+        AnsiConsole.Write(new Rule("[dim]https://github.com/bogware/cabinet[/]").RuleStyle("dim"));
     }
 
     #endregion

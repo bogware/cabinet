@@ -134,7 +134,7 @@ Maintainer: Cabinet Team <cabinet@example.com>
 Description: Cabinet Log Intelligence System - ${component^} component
  Cabinet is a log management and intelligence system designed as a
  Splunk replacement. This package contains the $component component.
-Homepage: https://github.com/draxios/cabinet
+Homepage: https://github.com/bogware/cabinet
 CTLEOF
 
             # DEBIAN/postinst
@@ -181,7 +181,7 @@ PRERMEOF
                 cat > "$deb_dir/lib/systemd/system/cabinet-api.service" <<SVCEOF
 [Unit]
 Description=Cabinet API Server - Log Intelligence System
-Documentation=https://github.com/draxios/cabinet
+Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
 
@@ -240,7 +240,7 @@ PRERMEOF
                 cat > "$deb_dir/lib/systemd/system/cabinet-agent.service" <<SVCEOF
 [Unit]
 Description=Cabinet Log Forwarding Agent
-Documentation=https://github.com/draxios/cabinet
+Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
 

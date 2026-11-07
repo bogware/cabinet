@@ -122,7 +122,7 @@ if [[ "$BINARY_FOUND" = false ]]; then
     echo "  After installation, copy the binary for your platform ($RID) to:"
     echo "    $INSTALL_DIR/api/"
     echo ""
-    echo "  Download from: https://github.com/draxios/cabinet/releases"
+    echo "  Download from: https://github.com/bogware/cabinet/releases"
     echo ""
 fi
 
@@ -220,7 +220,7 @@ if [[ -d /etc/systemd/system ]]; then
     cat > /etc/systemd/system/cabinet-api.service <<SVCEOF
 [Unit]
 Description=Cabinet API Server - Log Intelligence System
-Documentation=https://github.com/draxios/cabinet
+Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
 

@@ -33,6 +33,8 @@ jobs:
       run: dotnet build --configuration Release --no-restore
 
     - name: Test
+      env:
+        TZ: America/Chicago
       run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
 
     - name: Upload test results
@@ -208,7 +210,7 @@ jobs:
         Description: Cabinet Log Intelligence System - API Server
          Cabinet is a log management and intelligence system designed as a
          Splunk replacement. This package contains the API server and CLI.
-        Homepage: https://github.com/draxios/cabinet
+        Homepage: https://github.com/bogware/cabinet
         EOF
         # Remove leading whitespace from control file
         sed -i 's/^        //' $PKG_DIR/DEBIAN/control
@@ -248,7 +250,7 @@ jobs:
         cat > $PKG_DIR/lib/systemd/system/cabinet-api.service <<SVCEOF
         [Unit]
         Description=Cabinet API Server - Log Intelligence System
-        Documentation=https://github.com/draxios/cabinet
+        Documentation=https://github.com/bogware/cabinet
         After=network-online.target
         Wants=network-online.target
 
@@ -303,7 +305,7 @@ jobs:
         Description: Cabinet Log Forwarding Agent
          Cabinet Agent is a lightweight log forwarder that monitors log files
          and sends events to a Cabinet API server for indexing and search.
-        Homepage: https://github.com/draxios/cabinet
+        Homepage: https://github.com/bogware/cabinet
         EOF
         sed -i 's/^        //' $PKG_DIR/DEBIAN/control
 
@@ -336,7 +338,7 @@ jobs:
         cat > $PKG_DIR/lib/systemd/system/cabinet-agent.service <<SVCEOF
         [Unit]
         Description=Cabinet Log Forwarding Agent
-        Documentation=https://github.com/draxios/cabinet
+        Documentation=https://github.com/bogware/cabinet
         After=network-online.target
         Wants=network-online.target
 

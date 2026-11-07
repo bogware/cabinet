@@ -29,7 +29,7 @@ Be respectful and constructive. We're building software together — treat other
 
 ```bash
 # Clone the repository
-git clone https://github.com/draxios/cabinet.git
+git clone https://github.com/bogware/cabinet.git
 cd cabinet
 
 # Restore dependencies
@@ -310,6 +310,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture docum
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/draxios/cabinet/discussions) for general questions
-- Open an [Issue](https://github.com/draxios/cabinet/issues) for bugs or feature requests
+- Open a [GitHub Discussion](https://github.com/bogware/cabinet/discussions) for general questions
+- Open an [Issue](https://github.com/bogware/cabinet/issues) for bugs or feature requests
 - See [README.md](README.md) for project overview and quick start

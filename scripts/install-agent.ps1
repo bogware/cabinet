@@ -79,7 +79,7 @@ elseif (Test-Path ".\cabinet-agent.exe") {
 }
 else {
     Write-Host "  NOTE: No cabinet-agent.exe found." -ForegroundColor Yellow
-    Write-Host "  Download from: https://github.com/draxios/cabinet/releases"
+    Write-Host "  Download from: https://github.com/bogware/cabinet/releases"
 }
 
 # ─── Generate configuration ───────────────────────────────────────────

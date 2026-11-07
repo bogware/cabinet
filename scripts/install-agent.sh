@@ -94,7 +94,7 @@ fi
 
 echo ""
 echo "NOTE: Copy the cabinet-agent binary for your platform ($RID) to $INSTALL_DIR/"
-echo "      Download from: https://github.com/draxios/cabinet/releases"
+echo "      Download from: https://github.com/bogware/cabinet/releases"
 echo ""
 
 # Generate default configuration if not present
@@ -169,7 +169,7 @@ if [[ -d /etc/systemd/system ]]; then
     cat > /etc/systemd/system/cabinet-agent.service <<SVCEOF
 [Unit]
 Description=Cabinet Log Forwarding Agent
-Documentation=https://github.com/draxios/cabinet
+Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
 

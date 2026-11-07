@@ -1,6 +1,6 @@
 [Unit]
 Description=Cabinet Log Forwarding Agent
-Documentation=https://github.com/draxios/cabinet
+Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
 

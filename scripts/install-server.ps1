@@ -115,7 +115,7 @@ if (-not $binaryFound) {
     Write-Host "  After installation, copy the binary for win-x64 to:"
     Write-Host "    $InstallDir\api\"
     Write-Host ""
-    Write-Host "  Download from: https://github.com/draxios/cabinet/releases" -ForegroundColor Cyan
+    Write-Host "  Download from: https://github.com/bogware/cabinet/releases" -ForegroundColor Cyan
     Write-Host ""
 }
 
