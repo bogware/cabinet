@@ -11,7 +11,7 @@ Cabinet is an enterprise-grade log intelligence system — a modern, open-source
 ### Docker (fastest)
 
 ```bash
-git clone https://github.com/draxios/cabinet.git && cd cabinet
+git clone https://github.com/bogware/cabinet.git && cd cabinet
 docker-compose up -d
 # Dashboard: http://localhost:8080
 # API: http://localhost:8080/api/v1
@@ -36,7 +36,7 @@ Cabinet ships as self-contained single-file binaries for all major platforms. No
 
 ```bash
 # Download from GitHub Releases
-wget https://github.com/draxios/cabinet/releases/latest/download/cabinet-api_1.0.0_amd64.deb
+wget https://github.com/bogware/cabinet/releases/latest/download/cabinet-api_1.0.0_amd64.deb
 
 # Install — creates systemd service, cabinet user, directory structure
 sudo dpkg -i cabinet-api_1.0.0_amd64.deb
@@ -54,7 +54,7 @@ ARM64 (Raspberry Pi, AWS Graviton): use `cabinet-api_1.0.0_arm64.deb`
 
 ```bash
 # Download installer
-wget https://github.com/draxios/cabinet/releases/latest/download/install-server.sh
+wget https://github.com/bogware/cabinet/releases/latest/download/install-server.sh
 
 # Install with interactive setup wizard
 sudo ./install-server.sh --run-wizard
@@ -94,7 +94,7 @@ The installer:
 
 ```bash
 # Download the binary
-wget https://github.com/draxios/cabinet/releases/latest/download/cabinet-osx-arm64.tar.gz
+wget https://github.com/bogware/cabinet/releases/latest/download/cabinet-osx-arm64.tar.gz
 tar xzf cabinet-osx-arm64.tar.gz
 
 # Run directly
@@ -163,7 +163,7 @@ docker run -d \
   -v /var/log:/var/log:ro \
   -e Agent__Output__ServerUrl=http://cabinet:8080 \
   -e Agent__Output__ApiKey=your-key \
-  ghcr.io/draxios/cabinet-agent
+  ghcr.io/bogware/cabinet-agent
 ```
 
 ### Agent Features
@@ -517,3 +517,7 @@ cabinet/
 ### Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+Cabinet is licensed under the [Apache License 2.0](LICENSE).
