@@ -15,13 +15,13 @@ public class DashboardEscapingTests
 {
     private static string DashboardPath([CallerFilePath] string testFile = "") =>
         Path.GetFullPath(Path.Combine(
-            Path.GetDirectoryName(testFile)!, "..", "..", "..", "src", "Cabinet.API", "wwwroot", "index.html"));
+            Path.GetDirectoryName(testFile)!, "..", "..", "..", "src", "Cabinet.API", "wwwroot", "app.js"));
 
     private static string Html => File.ReadAllText(DashboardPath());
 
     private static string Esc(string? value)
     {
-        var function = Regex.Match(Html, @"function esc\(s\) \{.*?\n    \}", RegexOptions.Singleline);
+        var function = Regex.Match(Html, @"function esc\(s\) \{.*?\n\}", RegexOptions.Singleline);
         function.Success.Should().BeTrue("the dashboard should define esc()");
 
         var engine = new Engine();

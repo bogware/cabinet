@@ -12,7 +12,7 @@
             --bg-hover: #292e36;
             --text-primary: #c9d1d9;
             --text-secondary: #8b949e;
-            --text-muted: #6e7681;
+            --text-muted: #8b949e;
             --accent: #58a6ff;
             --accent-hover: #79c0ff;
             --success: #3fb950;
@@ -330,7 +330,7 @@
             --bg-hover: #d0d7de;
             --text-primary: #1f2328;
             --text-secondary: #656d76;
-            --text-muted: #8b949e;
+            --text-muted: #656d76;
             --accent: #0969da;
             --accent-hover: #0550ae;
             --success: #1a7f37;
@@ -342,9 +342,78 @@
         body.light .toast-success { background: #dafbe1; border-color: var(--success); color: var(--success); }
         body.light .toast-error { background: #ffebe9; border-color: var(--error); color: var(--error); }
         body.light .toast-info { background: #ddf4ff; border-color: var(--accent); color: var(--accent); }
+        /* Chart colors: selected for each theme, and checked for contrast and colorblind separation */
+        :root {
+            --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+            --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+            --chart-surface: var(--bg-secondary); --chart-grid: #30363d; --chart-crosshair: #8b949e;
+        }
+        body.light {
+            --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+            --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+            --chart-grid: #e6e8eb; --chart-crosshair: #656d76;
+        }
+        .chart-plot { position: relative; }
+        .chart-svg { display: block; touch-action: pan-y; }
+        .chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .chart-axis { font-size: 11px; fill: var(--text-secondary); }
+        .chart-note { font-size: 12px; color: var(--text-secondary); margin: 8px 0; }
+        .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+        .chart-legend li { display: flex; align-items: center; gap: 6px; }
+        .chart-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
+        .chart-tooltip { position: absolute; z-index: 5; pointer-events: none; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+        .chart-tooltip[hidden] { display: none; }
+        .chart-tooltip-title { color: var(--text-secondary); margin-bottom: 4px; }
+        .chart-tooltip-row { display: flex; align-items: center; gap: 6px; }
+        .chart-tooltip-row strong { margin-left: auto; padding-left: 12px; font-weight: 600; }
+        .chart-bars { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+        .chart-bar-row { display: grid; grid-template-columns: minmax(80px, 180px) 1fr minmax(48px, auto); align-items: center; gap: 8px; font-size: 12px; }
+        .chart-bar-row:hover { background: var(--bg-tertiary); }
+        .chart-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--text-secondary); }
+        .chart-bar-track { display: block; height: 18px; }
+        .chart-bar { display: block; height: 100%; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 1px; }
+        .chart-bar-value { font-variant-numeric: tabular-nums; }
+        .chart-stat { padding: 16px 0; text-align: center; }
+        .chart-stat-value { font-size: 40px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+        .chart-stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+        .chart-data { margin-top: 8px; font-size: 12px; }
+        .chart-data summary { cursor: pointer; color: var(--text-secondary); }
+        .chart-table { overflow-x: auto; }
+        .chart-table table { width: 100%; font-size: 12px; }
+        .dash-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; margin-top: 12px; }
+        .dash-panel { border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--bg-secondary); min-width: 0; }
+        .dash-panel h4 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+        .dash-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+        .panel-row { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+        .panel-row-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
+        .panel-row-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+        .panel-preview { margin-top: 8px; }
+        .modal-wide { max-width: 720px; width: 95vw; max-height: 90vh; overflow-y: auto; }
+        .modal-subhead { font-size: 13px; margin: 12px 0 6px; }
+        .form-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .check-label { display: flex; align-items: center; gap: 6px; font-weight: 400; }
+        .check-label input { width: auto; }
+        .page-note { font-size: 12px; color: var(--text-secondary); margin: 8px 0; }
+
+        /* Keyboard and assistive technology */
+        .skip-link { position: absolute; left: -9999px; top: 4px; z-index: 1000; background: var(--bg-secondary); color: var(--accent); padding: 8px 12px; border-radius: 6px; }
+        .skip-link:focus { left: 4px; }
+        .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        button.nav-item { width: 100%; background: none; border: none; font: inherit; text-align: left; }
+        .menu-button { display: none; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); padding: 4px 8px; font: inherit; cursor: pointer; }
+        tr.clickable:focus-visible { outline-offset: -2px; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
-            .sidebar { display: none; }
+            .sidebar { display: none; position: fixed; z-index: 100; top: 0; bottom: 0; left: 0; }
+            .sidebar.open { display: flex; }
+            .menu-button { display: inline-block; }
+            .dash-panel { grid-column: 1 / -1 !important; }
+            .panel-row-grid, .form-row { grid-template-columns: 1fr; }
             .cards { grid-template-columns: repeat(2, 1fr); }
             .field-sidebar { display: none !important; }
             .drawer { width: 100vw; }
@@ -354,66 +423,71 @@
 </head>
 <body>
     <!-- Sidebar -->
-    <nav class="sidebar">
+    <a class="skip-link" href="#mainContent">Skip to content</a>
+    <nav class="sidebar" id="sidebar" aria-label="Main">
         <div class="sidebar-brand"><span>Cabinet</span></div>
         <div class="sidebar-nav">
             <div class="nav-section">Search</div>
-            <div class="nav-item active" data-page="search">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04Z"/></svg>
+            <button type="button" class="nav-item active" data-page="search" aria-current="page">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04Z"/></svg>
                 Search
-            </div>
-            <div class="nav-item" data-page="livetail">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.75 1.5a.75.75 0 0 0-1.5 0v5.19L5.22 4.66a.75.75 0 0 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l2.5-2.5a.75.75 0 1 0-1.06-1.06L8.75 6.69ZM3.5 10.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 15h6.5A2.75 2.75 0 0 0 14 12.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="livetail">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.75 1.5a.75.75 0 0 0-1.5 0v5.19L5.22 4.66a.75.75 0 0 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l2.5-2.5a.75.75 0 1 0-1.06-1.06L8.75 6.69ZM3.5 10.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 15h6.5A2.75 2.75 0 0 0 14 12.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25Z"/></svg>
                 Live Tail
-            </div>
-            <div class="nav-item" data-page="saved">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="saved">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
                 Saved Queries
-            </div>
-            <div class="nav-item" data-page="jobs">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.379 5.227A.25.25 0 0 0 6 5.442v5.117a.25.25 0 0 0 .379.214l4.264-2.559a.25.25 0 0 0 0-.428Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="jobs">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.379 5.227A.25.25 0 0 0 6 5.442v5.117a.25.25 0 0 0 .379.214l4.264-2.559a.25.25 0 0 0 0-.428Z"/></svg>
                 Search Jobs
-            </div>
+            </button>
             <div class="nav-section">Monitor</div>
-            <div class="nav-item" data-page="dashboards">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM1.5 6.5v7.75c0 .138.112.25.25.25H6.5V6.5Zm8 8h4.75a.25.25 0 0 0 .25-.25V6.5H9.5Zm5-9.5V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25V5Z"/></svg>
+            <button type="button" class="nav-item" data-page="dashboards">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM1.5 6.5v7.75c0 .138.112.25.25.25H6.5V6.5Zm8 8h4.75a.25.25 0 0 0 .25-.25V6.5H9.5Zm5-9.5V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25V5Z"/></svg>
                 Dashboards
-            </div>
-            <div class="nav-item" data-page="health">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm3.28 5.78a.75.75 0 0 0-1.06-1.06L7 7.94 5.78 6.72a.75.75 0 0 0-1.06 1.06l1.75 1.75a.75.75 0 0 0 1.06 0l3.75-3.75Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="health">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm3.28 5.78a.75.75 0 0 0-1.06-1.06L7 7.94 5.78 6.72a.75.75 0 0 0-1.06 1.06l1.75 1.75a.75.75 0 0 0 1.06 0l3.75-3.75Z"/></svg>
                 System Health
-            </div>
+            </button>
             <div class="nav-section">Alerting</div>
-            <div class="nav-item" data-page="alerts">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5c-1.736 0-3.369.676-4.596 1.903A6.47 6.47 0 0 0 1.5 8c0 1.736.676 3.369 1.904 4.597A6.47 6.47 0 0 0 8 14.5a6.47 6.47 0 0 0 4.596-1.903A6.47 6.47 0 0 0 14.5 8a6.47 6.47 0 0 0-1.904-4.597A6.47 6.47 0 0 0 8 1.5ZM8 9.5a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5A.75.75 0 0 1 8 9.5Zm1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>
+            <button type="button" class="nav-item" data-page="alerts">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5c-1.736 0-3.369.676-4.596 1.903A6.47 6.47 0 0 0 1.5 8c0 1.736.676 3.369 1.904 4.597A6.47 6.47 0 0 0 8 14.5a6.47 6.47 0 0 0 4.596-1.903A6.47 6.47 0 0 0 14.5 8a6.47 6.47 0 0 0-1.904-4.597A6.47 6.47 0 0 0 8 1.5ZM8 9.5a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5A.75.75 0 0 1 8 9.5Zm1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>
                 Alerts
-            </div>
-            <div class="nav-item" data-page="schedules">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25a.75.75 0 0 0-1.5 0v3.5c0 .199.079.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="rules">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.5 2.5v5c0 3.9 2.7 7.2 6.5 8.5 3.8-1.3 6.5-4.6 6.5-8.5v-5L8 0Zm0 1.6 5 1.9v4c0 3-2 5.6-5 6.8-3-1.2-5-3.8-5-6.8v-4l5-1.9Z"/></svg>
+                Detections
+            </button>
+            <button type="button" class="nav-item" data-page="schedules">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25a.75.75 0 0 0-1.5 0v3.5c0 .199.079.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94Z"/></svg>
                 Scheduled Searches
-            </div>
+            </button>
             <div class="nav-section">Knowledge</div>
-            <div class="nav-item" data-page="extractions">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M.838 1.7a.75.75 0 0 1 .162 1.05A6.49 6.49 0 0 0 0 6.5a6.49 6.49 0 0 0 1 3.75.75.75 0 0 1-1.212.888A7.99 7.99 0 0 1 0 6.5a7.99 7.99 0 0 1-1.788-4.638.75.75 0 0 1 1.05-.162ZM14 6.5a6.49 6.49 0 0 0-1-3.75.75.75 0 0 1 1.212-.888A7.99 7.99 0 0 1 16 6.5a7.99 7.99 0 0 1-1.788 4.638.75.75 0 0 1-1.212-.888A6.49 6.49 0 0 0 14 6.5ZM4.25 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5ZM3.5 8.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1-.75-.75Zm1.5 3a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"/></svg>
+            <button type="button" class="nav-item" data-page="extractions">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.838 1.7a.75.75 0 0 1 .162 1.05A6.49 6.49 0 0 0 0 6.5a6.49 6.49 0 0 0 1 3.75.75.75 0 0 1-1.212.888A7.99 7.99 0 0 1 0 6.5a7.99 7.99 0 0 1-1.788-4.638.75.75 0 0 1 1.05-.162ZM14 6.5a6.49 6.49 0 0 0-1-3.75.75.75 0 0 1 1.212-.888A7.99 7.99 0 0 1 16 6.5a7.99 7.99 0 0 1-1.788 4.638.75.75 0 0 1-1.212-.888A6.49 6.49 0 0 0 14 6.5ZM4.25 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5ZM3.5 8.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1-.75-.75Zm1.5 3a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"/></svg>
                 Field Extractions
-            </div>
-            <div class="nav-item" data-page="knowledge">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.74 3.74 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.623-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.75 4.75v5.324a3.75 3.75 0 0 1 1.994-.574H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="knowledge">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.74 3.74 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.623-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.75 4.75v5.324a3.75 3.75 0 0 1 1.994-.574H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"/></svg>
                 Knowledge
-            </div>
+            </button>
             <div class="nav-section">Admin</div>
-            <div class="nav-item" data-page="ingest">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14ZM11.78 4.72a.75.75 0 1 1-1.06 1.06L8.75 3.81V9.5a.75.75 0 0 1-1.5 0V3.81L5.28 5.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25Z"/></svg>
+            <button type="button" class="nav-item" data-page="ingest">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14ZM11.78 4.72a.75.75 0 1 1-1.06 1.06L8.75 3.81V9.5a.75.75 0 0 1-1.5 0V3.81L5.28 5.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25Z"/></svg>
                 Ingest Logs
-            </div>
-            <div class="nav-item" data-page="indexes">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75C0 1.784.784 1 1.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM4 5h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 5Zm0 3h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 8Zm0 3h4a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 11Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="indexes">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75C0 1.784.784 1 1.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM4 5h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 5Zm0 3h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 8Zm0 3h4a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 11Z"/></svg>
                 Indexes
-            </div>
-            <div class="nav-item" data-page="settings">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.022.078.281.834a1.18 1.18 0 0 0 1.402.756l.849-.21c.652-.163 1.31.098 1.727.563.5.56.91 1.197 1.2 1.891a1.37 1.37 0 0 1-.498 1.576l-.69.5a1.18 1.18 0 0 0 0 1.94l.69.5c.484.35.733.98.498 1.576a7.1 7.1 0 0 1-1.2 1.89 1.37 1.37 0 0 1-1.727.564l-.849-.21a1.18 1.18 0 0 0-1.402.756l-.281.834c-.17.646-.716 1.195-1.459 1.26a8.4 8.4 0 0 1-1.402 0c-.743-.065-1.289-.614-1.459-1.26l-.281-.834a1.18 1.18 0 0 0-1.402-.756l-.849.21c-.652.163-1.31-.098-1.727-.563a7.1 7.1 0 0 1-1.2-1.891 1.37 1.37 0 0 1 .498-1.576l.69-.5a1.18 1.18 0 0 0 0-1.94l-.69-.5A1.37 1.37 0 0 1 .28 4.862a7.1 7.1 0 0 1 1.2-1.89c.417-.466 1.075-.727 1.727-.564l.849.21a1.18 1.18 0 0 0 1.402-.756l.281-.834C5.856.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm0 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
+            </button>
+            <button type="button" class="nav-item" data-page="settings">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.022.078.281.834a1.18 1.18 0 0 0 1.402.756l.849-.21c.652-.163 1.31.098 1.727.563.5.56.91 1.197 1.2 1.891a1.37 1.37 0 0 1-.498 1.576l-.69.5a1.18 1.18 0 0 0 0 1.94l.69.5c.484.35.733.98.498 1.576a7.1 7.1 0 0 1-1.2 1.89 1.37 1.37 0 0 1-1.727.564l-.849-.21a1.18 1.18 0 0 0-1.402.756l-.281.834c-.17.646-.716 1.195-1.459 1.26a8.4 8.4 0 0 1-1.402 0c-.743-.065-1.289-.614-1.459-1.26l-.281-.834a1.18 1.18 0 0 0-1.402-.756l-.849.21c-.652.163-1.31-.098-1.727-.563a7.1 7.1 0 0 1-1.2-1.891 1.37 1.37 0 0 1 .498-1.576l.69-.5a1.18 1.18 0 0 0 0-1.94l-.69-.5A1.37 1.37 0 0 1 .28 4.862a7.1 7.1 0 0 1 1.2-1.89c.417-.466 1.075-.727 1.727-.564l.849.21a1.18 1.18 0 0 0 1.402-.756l.281-.834C5.856.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm0 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
                 Settings
-            </div>
+            </button>
         </div>
         <div class="sidebar-footer">
             Cabinet v1.0 &middot; <a href="/swagger">API Docs</a>
@@ -423,19 +497,20 @@
     <!-- Main Content -->
     <div class="main">
         <div class="topbar">
+            <button type="button" class="menu-button" id="menuButton" data-click="toggleSidebar" aria-controls="sidebar" aria-expanded="false" aria-label="Menu">&#9776;</button>
             <div class="topbar-left" id="pageTitle">Search</div>
             <div class="topbar-right">
                 <div class="status" id="healthStatus"><span class="dot" id="healthDot"></span><span id="healthText">Connecting...</span></div>
-                <button class="api-key-btn" onclick="toggleTheme()" id="themeBtn" title="Toggle light/dark theme">Theme</button>
-                <button class="api-key-btn" onclick="changeApiKey()">API Key</button>
+                <button class="api-key-btn" data-click="toggleTheme" id="themeBtn" title="Toggle light/dark theme">Theme</button>
+                <button class="api-key-btn" data-click="changeApiKey">API Key</button>
             </div>
         </div>
-        <div class="content">
+        <div class="content" id="mainContent" tabindex="-1">
             <!-- ===== SEARCH PAGE ===== -->
             <div class="page active" id="page-search">
                 <div class="search-bar" style="position:relative">
-                    <input type="text" id="queryInput" placeholder="Enter BQL query (e.g. find errors from last 24h | stats count by host)" spellcheck="false" autocomplete="off">
-                    <select id="timeRange">
+                    <input type="text" id="queryInput" aria-label="Query" placeholder="Enter BQL query (e.g. find errors from last 24h | stats count by host)" spellcheck="false" autocomplete="off">
+                    <select id="timeRange" aria-label="Time range">
                         <option value="">All time</option>
                         <option value="15m">Last 15m</option>
                         <option value="1h">Last 1h</option>
@@ -444,8 +519,8 @@
                         <option value="7d">Last 7d</option>
                         <option value="30d">Last 30d</option>
                     </select>
-                    <button class="btn btn-primary" id="searchBtn" onclick="executeQuery()">Search</button>
-                    <button class="btn btn-secondary" onclick="saveCurrentQuery()" title="Save query">Save</button>
+                    <button class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
+                    <button class="btn btn-secondary" data-click="saveCurrentQuery" title="Save query">Save</button>
                     <div class="suggestions" id="querySuggestions"></div>
                 </div>
                 <div id="queryHistory" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
@@ -457,9 +532,9 @@
                     <div class="card"><div class="label">Events Scanned</div><div class="value" id="scannedCount">-</div></div>
                 </div>
                 <div class="tabs" id="resultTabs">
-                    <div class="tab active" onclick="switchResultTab('table', this)">Events</div>
-                    <div class="tab" onclick="switchResultTab('json', this)">Raw JSON</div>
-                    <div class="tab" onclick="switchResultTab('chart', this)">Chart</div>
+                    <div class="tab active" data-click="switchResultTab" data-args='["table", "$this"]'>Events</div>
+                    <div class="tab" data-click="switchResultTab" data-args='["json", "$this"]'>Raw JSON</div>
+                    <div class="tab" data-click="switchResultTab" data-args='["chart", "$this"]'>Chart</div>
                 </div>
                 <div class="search-layout">
                     <div class="search-main">
@@ -467,8 +542,8 @@
                             <div class="panel-header">
                                 <span id="resultsInfo">Enter a query to search logs</span>
                                 <div style="display:flex;gap:6px;align-items:center">
-                                    <button class="btn btn-secondary btn-sm" onclick="exportResults()" id="exportBtn" style="display:none">Export CSV</button>
-                                    <button class="btn btn-secondary btn-sm" onclick="toggleFieldSidebar()" title="Toggle field sidebar">Fields</button>
+                                    <button class="btn btn-secondary btn-sm" data-click="exportResults" id="exportBtn" style="display:none">Export CSV</button>
+                                    <button class="btn btn-secondary btn-sm" data-click="toggleFieldSidebar" title="Toggle field sidebar">Fields</button>
                                 </div>
                             </div>
                             <div id="resultView-table" class="scroll-y">
@@ -479,9 +554,9 @@
                                 <div id="chartContainer">Run a stats/timechart query to see chart visualization</div>
                             </div>
                             <div class="pagination hide" id="resultsPagination">
-                                <button class="btn btn-secondary btn-sm" onclick="prevPage()">&laquo; Prev</button>
+                                <button class="btn btn-secondary btn-sm" data-click="prevPage">&laquo; Prev</button>
                                 <span id="pageInfo">Page 1</span>
-                                <button class="btn btn-secondary btn-sm" onclick="nextPage()">Next &raquo;</button>
+                                <button class="btn btn-secondary btn-sm" data-click="nextPage">Next &raquo;</button>
                             </div>
                         </div>
                     </div>
@@ -496,7 +571,7 @@
             <div class="page" id="page-saved">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
                     <h3>Saved Queries</h3>
-                    <button class="btn btn-secondary btn-sm" onclick="loadSavedQueries()">Refresh</button>
+                    <button class="btn btn-secondary btn-sm" data-click="loadSavedQueries">Refresh</button>
                 </div>
                 <div class="panel">
                     <div class="scroll-y-sm">
@@ -513,8 +588,8 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
                     <h3>Dashboards</h3>
                     <div style="display:flex;gap:6px">
-                        <button class="btn btn-primary btn-sm" onclick="showDashboardModal()">+ New Dashboard</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadDashboards()">Refresh</button>
+                        <button class="btn btn-primary btn-sm" data-click="showDashboardModal">+ New Dashboard</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadDashboards">Refresh</button>
                     </div>
                 </div>
                 <div id="dashboardsList" class="health-grid"></div>
@@ -524,7 +599,7 @@
             <div class="page" id="page-health">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
                     <h3>System Health</h3>
-                    <button class="btn btn-secondary btn-sm" onclick="loadHealthDetails()">Refresh</button>
+                    <button class="btn btn-secondary btn-sm" data-click="loadHealthDetails">Refresh</button>
                 </div>
                 <div class="cards" id="healthCards">
                     <div class="card"><div class="label">Status</div><div class="value" id="sysStatus">-</div></div>
@@ -548,7 +623,7 @@
                     <textarea id="ingestInput" rows="10" style="width:100%; padding:12px; font-size:12px; font-family:'SF Mono','Fira Code',monospace; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); outline:none; resize:vertical;" placeholder="2024-01-15 10:30:00 [ERROR] Connection failed to database&#10;2024-01-15 10:30:01 [WARN] Retrying connection...&#10;2024-01-15 10:30:02 [INFO] Connection restored"></textarea>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center">
-                    <button class="btn btn-primary" onclick="ingestLogs()">Ingest</button>
+                    <button class="btn btn-primary" data-click="ingestLogs">Ingest</button>
                     <select id="ingestFormat" style="padding:8px 12px; font-size:13px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary);">
                         <option value="lines">Raw lines</option>
                         <option value="json">JSON array</option>
@@ -566,8 +641,8 @@
                         <select id="tailIndex" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
                             <option value="main">main</option>
                         </select>
-                        <button class="btn btn-primary btn-sm" id="tailStartBtn" onclick="toggleTail()">Start</button>
-                        <button class="btn btn-secondary btn-sm" onclick="clearTail()">Clear</button>
+                        <button class="btn btn-primary btn-sm" id="tailStartBtn" data-click="toggleTail">Start</button>
+                        <button class="btn btn-secondary btn-sm" data-click="clearTail">Clear</button>
                         <span id="tailCount" style="font-size:12px;color:var(--text-secondary)">0 events</span>
                     </div>
                 </div>
@@ -581,8 +656,8 @@
                 <div class="toolbar">
                     <h3>Search Jobs</h3>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" onclick="showJobModal()">+ New Job</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadJobs()">Refresh</button>
+                        <button class="btn btn-primary btn-sm" data-click="showJobModal">+ New Job</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadJobs">Refresh</button>
                     </div>
                 </div>
                 <div class="panel"><div class="scroll-y"><table>
@@ -596,18 +671,19 @@
                 <div class="toolbar">
                     <h3>Alerts</h3>
                     <div class="toolbar-actions">
-                        <select id="alertSevFilter" onchange="loadAlerts()" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
+                        <select id="alertSevFilter" aria-label="Filter by severity" data-change="loadAlerts" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
                             <option value="">All Severities</option>
                             <option value="Critical">Critical</option>
+                            <option value="Error">Error</option>
                             <option value="Warning">Warning</option>
                             <option value="Info">Info</option>
                         </select>
-                        <select id="alertAckFilter" onchange="loadAlerts()" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
+                        <select id="alertAckFilter" aria-label="Filter by status" data-change="loadAlerts" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
                             <option value="">All</option>
                             <option value="false">Unacknowledged</option>
                             <option value="true">Acknowledged</option>
                         </select>
-                        <button class="btn btn-secondary btn-sm" onclick="loadAlerts()">Refresh</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadAlerts">Refresh</button>
                     </div>
                 </div>
                 <div class="panel"><div class="scroll-y"><table>
@@ -616,13 +692,29 @@
                 </table></div></div>
             </div>
 
+            <!-- ===== DETECTION RULES PAGE ===== -->
+            <div class="page" id="page-rules">
+                <div class="toolbar">
+                    <h3>Detections</h3>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary btn-sm" data-click="showRuleModal">+ New Rule</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadRules">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note">Rules run on every event as it's ingested, and what they find appears under Alerts. The built-in rules are off until you turn them on.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Fires on</th><th scope="col">Technique</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="rulesBody"></tbody>
+                </table></div></div>
+            </div>
+
             <!-- ===== SCHEDULED SEARCHES PAGE ===== -->
             <div class="page" id="page-schedules">
                 <div class="toolbar">
                     <h3>Scheduled Searches</h3>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" onclick="showScheduleModal()">+ New Schedule</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadSchedules()">Refresh</button>
+                        <button class="btn btn-primary btn-sm" data-click="showScheduleModal">+ New Schedule</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadSchedules">Refresh</button>
                     </div>
                 </div>
                 <div class="panel"><div class="scroll-y"><table>
@@ -636,8 +728,8 @@
                 <div class="toolbar">
                     <h3>Field Extractions</h3>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" onclick="showExtractionModal()">+ New Extraction</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadExtractions()">Refresh</button>
+                        <button class="btn btn-primary btn-sm" data-click="showExtractionModal">+ New Extraction</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadExtractions">Refresh</button>
                     </div>
                 </div>
                 <div class="panel"><div class="scroll-y"><table>
@@ -651,14 +743,14 @@
                 <div class="toolbar">
                     <h3>Knowledge Objects</h3>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" id="knowledgeAddBtn" onclick="showKnowledgeModal()">+ New</button>
-                        <button class="btn btn-secondary btn-sm" onclick="loadKnowledgeCurrent()">Refresh</button>
+                        <button class="btn btn-primary btn-sm" id="knowledgeAddBtn" data-click="showKnowledgeModal">+ New</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadKnowledgeCurrent">Refresh</button>
                     </div>
                 </div>
                 <div class="tabs" id="knowledgeTabs">
-                    <div class="tab active" onclick="switchKnowledgeTab('lookups',this)">Lookups</div>
-                    <div class="tab" onclick="switchKnowledgeTab('macros',this)">Macros</div>
-                    <div class="tab" onclick="switchKnowledgeTab('aliases',this)">Field Aliases</div>
+                    <div class="tab active" data-click="switchKnowledgeTab" data-args='["lookups", "$this"]'>Lookups</div>
+                    <div class="tab" data-click="switchKnowledgeTab" data-args='["macros", "$this"]'>Macros</div>
+                    <div class="tab" data-click="switchKnowledgeTab" data-args='["aliases", "$this"]'>Field Aliases</div>
                 </div>
                 <div class="panel"><div class="scroll-y">
                     <table id="knowledgeTable-lookups">
@@ -686,33 +778,33 @@
                             <label>API Key</label>
                             <div style="display:flex;gap:6px">
                                 <input type="password" id="settingsApiKey" placeholder="Enter API key">
-                                <button class="btn btn-secondary btn-sm" onclick="toggleApiKeyVisibility()" title="Show/hide">Show</button>
+                                <button class="btn btn-secondary btn-sm" data-click="toggleApiKeyVisibility" title="Show/hide">Show</button>
                             </div>
                         </div>
                         <div class="form-group">
                             <label>Server URL</label>
                             <input type="text" id="settingsServerUrl" value="" placeholder="http://localhost:5000" readonly style="color:var(--text-muted)">
                         </div>
-                        <button class="btn btn-primary btn-sm" onclick="saveApiSettings()">Save</button>
+                        <button class="btn btn-primary btn-sm" data-click="saveApiSettings">Save</button>
                     </div>
                     <div class="health-item">
                         <div class="hi-header"><span class="hi-name">Display</span></div>
                         <div class="form-group" style="margin-top:10px">
                             <label>Results per page</label>
-                            <select id="settingsPageSize" onchange="saveDisplaySettings()">
+                            <select id="settingsPageSize" data-change="saveDisplaySettings">
                                 <option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
                             </select>
                         </div>
                         <div class="form-group">
                             <label>Default time range</label>
-                            <select id="settingsTimeRange" onchange="saveDisplaySettings()">
+                            <select id="settingsTimeRange" data-change="saveDisplaySettings">
                                 <option value="">All time</option><option value="15m">15 minutes</option><option value="1h">1 hour</option>
                                 <option value="4h" selected>4 hours</option><option value="24h">24 hours</option><option value="7d">7 days</option>
                             </select>
                         </div>
                         <div class="form-group">
                             <label>Timestamp format</label>
-                            <select id="settingsTsFormat" onchange="saveDisplaySettings()">
+                            <select id="settingsTsFormat" data-change="saveDisplaySettings">
                                 <option value="relative">Relative (2m ago)</option>
                                 <option value="local" selected>Local time</option>
                                 <option value="utc">UTC</option>
@@ -725,7 +817,7 @@
                         <div id="retentionList" style="margin-top:10px">
                             <div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">Loading...</div>
                         </div>
-                        <button class="btn btn-secondary btn-sm" onclick="showRetentionModal()" style="margin-top:8px">+ Add Policy</button>
+                        <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">+ Add Policy</button>
                     </div>
                     <div class="health-item">
                         <div class="hi-header"><span class="hi-name">Roles &amp; Access</span></div>
@@ -740,7 +832,7 @@
             <div class="page" id="page-indexes">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
                     <h3>Indexes</h3>
-                    <button class="btn btn-secondary btn-sm" onclick="loadIndexes()">Refresh</button>
+                    <button class="btn btn-secondary btn-sm" data-click="loadIndexes">Refresh</button>
                 </div>
                 <div id="indexesList" class="health-grid"></div>
             </div>
@@ -758,24 +850,24 @@
             <label>Query</label>
             <input type="text" id="saveQueryText" readonly style="color:var(--text-secondary)">
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeSaveModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="confirmSaveQuery()">Save</button>
+                <button class="btn btn-secondary" data-click="closeSaveModal">Cancel</button>
+                <button class="btn btn-primary" data-click="confirmSaveQuery">Save</button>
             </div>
         </div>
     </div>
 
     <!-- Event Detail Drawer -->
-    <div class="drawer-bg" id="drawerBg" onclick="closeDrawer()"></div>
+    <div class="drawer-bg" id="drawerBg" data-click="closeDrawer"></div>
     <div class="drawer" id="eventDrawer">
         <div class="drawer-header">
             <h3>Event Detail</h3>
-            <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+            <button class="drawer-close" data-click="closeDrawer">&times;</button>
         </div>
         <div class="drawer-body" id="drawerBody"></div>
     </div>
 
     <!-- Toast Container -->
-    <div class="toast-container" id="toastContainer"></div>
+    <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
     <!-- Schedule Modal -->
     <div class="modal-bg" id="scheduleModal">
@@ -796,8 +888,8 @@
             </div>
             <div class="form-group"><label>Enabled</label><label class="toggle"><input type="checkbox" id="schedEnabled" checked><span class="toggle-slider"></span></label></div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('scheduleModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveSchedule()">Save</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["scheduleModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveSchedule">Save</button>
             </div>
         </div>
     </div>
@@ -811,8 +903,8 @@
             <div class="form-group"><label>Regex Pattern</label><textarea id="extPattern" placeholder="(?&lt;ip&gt;\d+\.\d+\.\d+\.\d+)"></textarea></div>
             <div class="form-group"><label>Priority</label><input type="number" id="extPriority" value="100" min="0" max="1000"></div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('extractionModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveExtraction()">Save</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["extractionModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveExtraction">Save</button>
             </div>
         </div>
     </div>
@@ -838,8 +930,8 @@
                 <div class="form-group"><label>Alias</label><input type="text" id="kmAliasAlias" placeholder="source_address"></div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('knowledgeModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveKnowledge()">Save</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["knowledgeModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveKnowledge">Save</button>
             </div>
         </div>
     </div>
@@ -854,23 +946,72 @@
                 <div class="form-group"><label>Max Results</label><input type="number" id="jobMaxResults" value="10000" min="1" max="100000"></div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('jobModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="createJob()">Create Job</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["jobModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="createJob">Create Job</button>
             </div>
         </div>
     </div>
 
     <!-- Dashboard Modal -->
     <div class="modal-bg" id="dashboardModal">
-        <div class="modal">
+        <div class="modal modal-wide">
             <h3 id="dashboardModalTitle">New Dashboard</h3>
             <input type="hidden" id="dashboardEditId">
             <div class="form-group"><label>Title</label><input type="text" id="dashTitle" placeholder="My Dashboard"></div>
+            <div class="form-group"><label for="dashRefresh">Refresh</label><select id="dashRefresh">
+                <option value="0">Off</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option><option value="300">Every 5 minutes</option>
+            </select></div>
             <div class="form-group"><label>Description</label><textarea id="dashDescription" placeholder="Dashboard description"></textarea></div>
+            <h4 class="modal-subhead">Panels</h4>
+            <div id="panelEditorList"></div>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="addPanelRow">+ Add panel</button>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('dashboardModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveDashboard()">Save</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["dashboardModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveDashboard">Save</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Detection Rule Modal -->
+    <div class="modal-bg" id="ruleModal">
+        <div class="modal modal-wide">
+            <h3 id="ruleModalTitle">New Rule</h3>
+            <input type="hidden" id="ruleEditId">
+            <div class="form-group"><label for="ruleName">Name</label><input type="text" id="ruleName"></div>
+            <div class="form-group"><label for="ruleSeverity">Severity</label><select id="ruleSeverity">
+                <option>Info</option><option selected>Warning</option><option>Error</option><option>Critical</option>
+            </select></div>
+            <div class="form-group"><label for="rulePattern">Pattern</label><input type="text" id="rulePattern" placeholder="A regular expression the raw line has to match"></div>
+            <div class="form-group"><label for="ruleCondition">Condition</label><input type="text" id="ruleCondition" placeholder='BQL, such as severity >= error and host = "db1"'></div>
+            <div class="form-group"><label for="ruleExtract">Extract</label><input type="text" id="ruleExtract" placeholder="A regular expression whose named groups become fields"></div>
+            <div class="form-group"><label for="ruleGroupBy">Count by field</label><input type="text" id="ruleGroupBy" placeholder="Optional, such as src_ip"></div>
+            <div class="form-row">
+                <div class="form-group"><label for="ruleThreshold">Matches needed</label><input type="number" id="ruleThreshold" min="1" value="1"></div>
+                <div class="form-group"><label for="ruleWindow">Within seconds</label><input type="number" id="ruleWindow" min="1" value="300"></div>
+                <div class="form-group"><label for="ruleCooldown">Quiet for seconds after firing</label><input type="number" id="ruleCooldown" min="0" value="300"></div>
+            </div>
+            <div class="form-group"><label for="ruleDescription">Description</label><textarea id="ruleDescription"></textarea></div>
+            <h4 class="modal-subhead">Try it</h4>
+            <div class="form-group"><label for="ruleTestLine">A log line</label><input type="text" id="ruleTestLine"></div>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="testRule">Test</button>
+            <p id="ruleTestResult" class="page-note" role="status"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["ruleModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveRule">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sign in -->
+    <div class="modal-bg" id="loginModal">
+        <div class="modal">
+            <h3 id="loginTitle">Sign in to Cabinet</h3>
+            <form id="loginForm">
+                <div class="form-group"><label for="loginKey">API key</label><input type="password" id="loginKey" autocomplete="current-password" required></div>
+                <div class="form-group"><label class="check-label"><input type="checkbox" id="loginRemember"> Remember on this device</label></div>
+                <p id="loginError" class="page-note" role="alert"></p>
+                <div class="modal-actions"><button class="btn btn-primary" type="submit">Sign in</button></div>
+            </form>
         </div>
     </div>
 
@@ -882,1479 +1023,13 @@
             <div class="form-group"><label>Max Age (days)</label><input type="number" id="retMaxAge" value="90" min="1"></div>
             <div class="form-group"><label>Archive Before Delete</label><label class="toggle"><input type="checkbox" id="retArchive"><span class="toggle-slider"></span></label></div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeModal('retentionModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveRetention()">Save</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["retentionModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveRetention">Save</button>
             </div>
         </div>
     </div>
 
-    <script>
-    /* ===== State ===== */
-    let API_KEY = localStorage.getItem('cabinet_api_key') || '';
-    let lastResults = null;
-    let currentPage = 'search';
-
-    if (!API_KEY) {
-        API_KEY = prompt('Enter your Cabinet API key:', 'dev-enterprise-key') || 'dev-enterprise-key';
-        localStorage.setItem('cabinet_api_key', API_KEY);
-    }
-
-    /* ===== Navigation ===== */
-    document.querySelectorAll('.nav-item[data-page]').forEach(item => {
-        item.addEventListener('click', () => navigate(item.dataset.page));
-    });
-
-    const VALID_PAGES = ['search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings'];
-    function navigate(page) {
-        if (!VALID_PAGES.includes(page)) return;
-        currentPage = page;
-        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-        if (navItem) navItem.classList.add('active');
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        const pageEl = document.getElementById('page-' + page);
-        if (pageEl) pageEl.classList.add('active');
-        const titles = { search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
-        document.getElementById('pageTitle').textContent = titles[page] || page;
-        // Update URL without reload
-        const url = page === 'search' ? '/' : '/#' + page;
-        if (window.location.hash !== '#' + page) history.pushState({ page }, titles[page], url);
-        // Stop live tail if leaving that page
-        if (page !== 'livetail' && tailEventSource) { tailEventSource.close(); tailEventSource = null; document.getElementById('tailDot').style.display = 'none'; document.getElementById('tailStartBtn').textContent = 'Start'; }
-        // Load data for page
-        if (page === 'saved') loadSavedQueries();
-        if (page === 'dashboards') loadDashboards();
-        if (page === 'health') loadHealthDetails();
-        if (page === 'indexes') loadIndexes();
-        if (page === 'alerts') loadAlerts();
-        if (page === 'schedules') loadSchedules();
-        if (page === 'extractions') loadExtractions();
-        if (page === 'knowledge') loadKnowledgeCurrent();
-        if (page === 'settings') loadSettings();
-        if (page === 'livetail') loadTailIndexes();
-        if (page === 'jobs') loadJobs();
-    }
-
-    /* ===== API Helper ===== */
-    async function api(method, path, body) {
-        const opts = { method, headers: { 'X-API-Key': API_KEY, 'Accept': 'application/json' } };
-        if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-        const res = await fetch(path, opts);
-        if (!res.ok) {
-            let msg = `HTTP ${res.status}`;
-            try { const err = await res.json(); msg = err.detail || err.title || msg; } catch {}
-            throw new Error(msg);
-        }
-        const ct = res.headers.get('content-type') || '';
-        if (ct.includes('json')) return res.json();
-        return res.text();
-    }
-
-    /* ===== Query History ===== */
-    let queryHistory = JSON.parse(localStorage.getItem('cabinet_query_history') || '[]');
-
-    function addToHistory(q) {
-        queryHistory = queryHistory.filter(h => h !== q);
-        queryHistory.unshift(q);
-        if (queryHistory.length > 20) queryHistory = queryHistory.slice(0, 20);
-        localStorage.setItem('cabinet_query_history', JSON.stringify(queryHistory));
-        renderQueryHistory();
-    }
-
-    function renderQueryHistory() {
-        const el = document.getElementById('queryHistory');
-        el.innerHTML = '';
-        queryHistory.slice(0, 6).forEach(q => {
-            const chip = document.createElement('span');
-            chip.className = 'time-chip';
-            chip.textContent = q.length > 40 ? q.slice(0, 40) + '...' : q;
-            chip.title = q;
-            chip.onclick = () => { document.getElementById('queryInput').value = q; executeQuery(); };
-            el.appendChild(chip);
-        });
-    }
-
-    /* ===== Query Suggestions ===== */
-    const builtinSuggestions = [
-        { text: 'find * | stats count by host', cat: 'template' },
-        { text: 'find * | stats count by severity', cat: 'template' },
-        { text: 'find * | where severity >= 4', cat: 'template' },
-        { text: 'find * | top 10 host', cat: 'template' },
-        { text: 'find * | timechart span=1h count', cat: 'template' },
-        { text: 'find * | stats avg(duration) by source', cat: 'template' },
-        { text: 'find * | rare host', cat: 'template' },
-        { text: 'find * | dedup host | table host, severity, timestamp', cat: 'template' },
-        { text: 'find * | fieldsummary', cat: 'template' },
-        { text: '| stats count by', cat: 'pipe' },
-        { text: '| where ', cat: 'pipe' },
-        { text: '| eval ', cat: 'pipe' },
-        { text: '| sort by timestamp desc', cat: 'pipe' },
-        { text: '| head 10', cat: 'pipe' },
-        { text: '| timechart span=1h count', cat: 'pipe' },
-        { text: '| rex "(?<field>\\w+)"', cat: 'pipe' },
-        { text: '| rename ', cat: 'pipe' },
-        { text: '| table ', cat: 'pipe' },
-        { text: '| transaction ', cat: 'pipe' },
-        { text: '| fillnull value=0', cat: 'pipe' },
-    ];
-
-    function showSuggestions(query) {
-        const el = document.getElementById('querySuggestions');
-        if (!query) { el.classList.remove('show'); return; }
-        const q = query.toLowerCase();
-        const matches = builtinSuggestions.filter(s => s.text.toLowerCase().includes(q) || q.endsWith('|') || q.endsWith('| '));
-        const histMatches = queryHistory.filter(h => h.toLowerCase().includes(q) && h !== query).slice(0, 3).map(h => ({ text: h, cat: 'history' }));
-        const all = [...histMatches, ...matches].slice(0, 8);
-        if (all.length === 0) { el.classList.remove('show'); return; }
-        el.innerHTML = '';
-        all.forEach((s, i) => {
-            const div = document.createElement('div');
-            div.className = 'suggestion-item';
-            div.innerHTML = `<span class="sg-text">${esc(s.text)}</span><span class="sg-cat">${s.cat}</span>`;
-            div.onclick = () => {
-                if (s.cat === 'pipe' && query.trim()) {
-                    document.getElementById('queryInput').value = query.trim().replace(/\|\s*$/, '') + ' ' + s.text.trim();
-                } else {
-                    document.getElementById('queryInput').value = s.text;
-                }
-                el.classList.remove('show');
-                document.getElementById('queryInput').focus();
-            };
-            el.appendChild(div);
-        });
-        el.classList.add('show');
-    }
-
-    /* ===== Search ===== */
-    const queryInput = document.getElementById('queryInput');
-    queryInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { document.getElementById('querySuggestions').classList.remove('show'); executeQuery(); }
-        if (e.key === 'Escape') document.getElementById('querySuggestions').classList.remove('show');
-    });
-    queryInput.addEventListener('input', e => showSuggestions(e.target.value));
-    queryInput.addEventListener('focus', e => { if (e.target.value) showSuggestions(e.target.value); });
-    document.addEventListener('click', e => { if (!e.target.closest('.search-bar')) document.getElementById('querySuggestions').classList.remove('show'); });
-
-    async function executeQuery() {
-        const q = document.getElementById('queryInput').value.trim();
-        if (!q) return;
-        const btn = document.getElementById('searchBtn');
-        const errEl = document.getElementById('searchError');
-        btn.disabled = true; errEl.style.display = 'none';
-
-        const timeRange = document.getElementById('timeRange').value;
-        let query = q;
-        if (timeRange && !q.toLowerCase().includes('from last')) {
-            query = q + ' from last ' + timeRange;
-        }
-
-        try {
-            const data = await api('POST', '/api/v1/query/execute', { query });
-            lastResults = data;
-            renderResults(data);
-            document.getElementById('exportBtn').style.display = '';
-            addToHistory(q);
-        } catch (e) {
-            errEl.textContent = e.message; errEl.style.display = 'block';
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    let resultPage = 0;
-    let resultPageSize = 100;
-
-    function renderResults(data) {
-        resultPage = 0;
-        resultPageSize = parseInt(localStorage.getItem('cabinet_page_size')) || 100;
-        document.getElementById('resultCount').textContent = fmt(data.count);
-        document.getElementById('execTime').textContent = data.executionTimeMs + 'ms';
-        document.getElementById('scannedCount').textContent = data.eventsScanned ? fmt(data.eventsScanned) : '-';
-        document.getElementById('resultsInfo').textContent = `${fmt(data.count)} results in ${data.executionTimeMs}ms`;
-        document.getElementById('resultView-json').textContent = JSON.stringify(data.results, null, 2);
-
-        renderResultPage(data.results);
-        renderSimpleChart(data.results);
-
-        // Build field sidebar if visible
-        if (document.getElementById('fieldSidebar').classList.contains('show')) {
-            buildFieldSidebar(data.results);
-        }
-    }
-
-    function renderResultPage(results) {
-        const thead = document.getElementById('tableHead');
-        const tbody = document.getElementById('tableBody');
-        thead.innerHTML = ''; tbody.innerHTML = '';
-
-        if (!results || results.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:32px;color:var(--text-secondary)">No results found</td></tr>';
-            document.getElementById('resultsPagination').classList.add('hide');
-            return;
-        }
-
-        const cols = Object.keys(results[0]).filter(k => !k.startsWith('_'));
-        const hr = document.createElement('tr');
-        cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; hr.appendChild(th); });
-        thead.appendChild(hr);
-
-        const start = resultPage * resultPageSize;
-        const end = Math.min(start + resultPageSize, results.length);
-        const totalPages = Math.ceil(results.length / resultPageSize);
-
-        for (let i = start; i < end; i++) {
-            const row = document.createElement('tr');
-            row.className = 'clickable';
-            row.onclick = () => showEventDetail(results[i]);
-            cols.forEach(c => {
-                const td = document.createElement('td');
-                const val = results[i][c];
-                if (c.toLowerCase() === 'timestamp' || c === 'Timestamp') {
-                    td.textContent = fmtTime(val);
-                } else {
-                    td.textContent = val != null ? String(val) : '';
-                }
-                td.title = val != null ? String(val) : '';
-                if (c.toLowerCase() === 'severity') td.className = sevClass(val);
-                row.appendChild(td);
-            });
-            tbody.appendChild(row);
-        }
-
-        const pgEl = document.getElementById('resultsPagination');
-        if (totalPages > 1) {
-            pgEl.classList.remove('hide');
-            document.getElementById('pageInfo').textContent = `Page ${resultPage + 1} of ${totalPages} (${fmt(results.length)} total)`;
-        } else {
-            pgEl.classList.add('hide');
-        }
-    }
-
-    function nextPage() {
-        if (!lastResults || !lastResults.results) return;
-        const totalPages = Math.ceil(lastResults.results.length / resultPageSize);
-        if (resultPage < totalPages - 1) { resultPage++; renderResultPage(lastResults.results); }
-    }
-    function prevPage() {
-        if (resultPage > 0) { resultPage--; renderResultPage(lastResults.results); }
-    }
-
-    function renderSimpleChart(results) {
-        const container = document.getElementById('chartContainer');
-        if (!results || results.length === 0) {
-            container.innerHTML = '<p>No data to chart</p>'; return;
-        }
-        // Simple bar chart for aggregation results (stats count by X)
-        const keys = Object.keys(results[0]);
-        const numericKeys = keys.filter(k => !k.startsWith('_') && typeof results[0][k] === 'number');
-        const labelKey = keys.find(k => !k.startsWith('_') && typeof results[0][k] === 'string') || keys[0];
-        if (numericKeys.length === 0) {
-            container.innerHTML = '<p style="color:var(--text-secondary)">Run a stats query (e.g. <code>| stats count by host</code>) to see chart</p>'; return;
-        }
-        const valueKey = numericKeys[0];
-        const maxVal = Math.max(...results.slice(0, 20).map(r => Number(r[valueKey]) || 0), 1);
-        let html = '<div style="text-align:left; max-width:600px; margin:0 auto;">';
-        html += `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">${esc(valueKey)} by ${esc(labelKey)}</div>`;
-        results.slice(0, 20).forEach(r => {
-            const val = Number(r[valueKey]) || 0;
-            const pct = Math.max((val / maxVal) * 100, 1);
-            const label = r[labelKey] != null ? String(r[labelKey]) : '(empty)';
-            html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">`;
-            html += `<span style="width:120px;font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(label)}">${esc(label)}</span>`;
-            html += `<div style="flex:1;height:20px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden">`;
-            html += `<div style="width:${pct}%;height:100%;background:var(--accent);border-radius:3px;transition:width 0.3s"></div></div>`;
-            html += `<span style="width:60px;font-size:12px;color:var(--text-secondary)">${fmt(val)}</span>`;
-            html += `</div>`;
-        });
-        if (results.length > 20) html += `<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Showing top 20 of ${results.length}</div>`;
-        html += '</div>';
-        container.innerHTML = html;
-    }
-
-    function switchResultTab(tab, el) {
-        document.querySelectorAll('#resultTabs .tab').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-        ['table', 'json', 'chart'].forEach(t => {
-            document.getElementById('resultView-' + t).classList.toggle('hide', t !== tab);
-        });
-    }
-
-    function exportResults() {
-        if (!lastResults || !lastResults.results || lastResults.results.length === 0) return;
-        const results = lastResults.results;
-        const keys = Object.keys(results[0]).filter(k => !k.startsWith('_'));
-        let csv = keys.join(',') + '\n';
-        results.forEach(r => {
-            csv += keys.map(k => {
-                const v = r[k] != null ? String(r[k]) : '';
-                return v.includes(',') || v.includes('"') || v.includes('\n') ? '"' + v.replace(/"/g, '""') + '"' : v;
-            }).join(',') + '\n';
-        });
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'cabinet-export-' + new Date().toISOString().slice(0, 19).replace(/:/g, '') + '.csv';
-        a.click();
-    }
-
-    /* ===== Saved Queries ===== */
-    async function loadSavedQueries() {
-        const tbody = document.getElementById('savedQueriesBody');
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/query/saved');
-            const queries = Array.isArray(data) ? data : (data.data || []);
-            if (queries.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-secondary)">No saved queries yet</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            queries.forEach(q => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td style="font-weight:500">${esc(q.name)}</td>
-                    <td style="max-width:300px" title="${esc(q.query)}">${esc(q.query)}</td>
-                    <td style="color:var(--text-secondary)">${q.createdAt ? new Date(q.createdAt).toLocaleDateString() : '-'}</td>
-                    <td style="white-space:nowrap"><button class="btn btn-secondary btn-sm run-btn">Run</button> <button class="btn btn-danger btn-sm del-btn">Del</button></td>`;
-                tr.querySelector('.run-btn').onclick = () => runSavedQuery(q.query);
-                tr.querySelector('.del-btn').onclick = () => deleteSavedQuery(q.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-        }
-    }
-
-    function runSavedQuery(query) {
-        navigate('search');
-        document.getElementById('queryInput').value = query;
-        executeQuery();
-    }
-
-    async function deleteSavedQuery(id) {
-        if (!confirm('Delete this saved query?')) return;
-        try {
-            await api('DELETE', '/api/v1/query/saved/' + id);
-            toast('Saved query deleted', 'success');
-            loadSavedQueries();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    function saveCurrentQuery() {
-        const q = document.getElementById('queryInput').value.trim();
-        if (!q) return;
-        document.getElementById('saveQueryText').value = q;
-        document.getElementById('saveQueryName').value = '';
-        document.getElementById('saveQueryDesc').value = '';
-        document.getElementById('saveModal').classList.add('show');
-        document.getElementById('saveQueryName').focus();
-    }
-
-    function closeSaveModal() { document.getElementById('saveModal').classList.remove('show'); }
-
-    async function confirmSaveQuery() {
-        const name = document.getElementById('saveQueryName').value.trim();
-        const query = document.getElementById('saveQueryText').value;
-        const description = document.getElementById('saveQueryDesc').value.trim();
-        if (!name) { toast('Please enter a name', 'error'); return; }
-        try {
-            await api('POST', '/api/v1/query/saved', { name, query, description });
-            closeSaveModal();
-            toast('Query saved', 'success');
-        } catch (e) { toast('Failed to save: ' + e.message, 'error'); }
-    }
-
-    /* ===== Dashboards ===== */
-    async function loadDashboards() {
-        const el = document.getElementById('dashboardsList');
-        el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
-        try {
-            const data = await api('GET', '/api/v1/dashboards');
-            const dashboards = Array.isArray(data) ? data : (data.data || []);
-            if (dashboards.length === 0) {
-                el.innerHTML = '<div class="empty-state"><h3>No Dashboards</h3><p>Click "+ New Dashboard" to create one</p></div>';
-                return;
-            }
-            el.innerHTML = '';
-            dashboards.forEach(d => {
-                const div = document.createElement('div');
-                div.className = 'health-item';
-                const panelCount = d.panels ? d.panels.length : 0;
-                div.innerHTML = `<div class="hi-header"><span class="hi-name">${esc(d.title || d.name || 'Untitled')}</span>
-                    <span class="hi-status healthy">${panelCount} panels</span></div>
-                    <div class="hi-detail">${esc(d.description || 'No description')}</div>
-                    <div class="hi-detail" style="margin-top:4px">Created: ${d.createdAt ? new Date(d.createdAt).toLocaleDateString() : '-'}</div>
-                    <div id="dash-panels-${esc(d.id)}" style="margin-top:8px"></div>
-                    <div style="margin-top:8px;display:flex;gap:6px">
-                        <button class="btn btn-secondary btn-sm view-btn">View Panels</button>
-                        <button class="btn btn-secondary btn-sm edit-btn">Edit</button>
-                        <button class="btn btn-danger btn-sm del-btn">Del</button>
-                    </div>`;
-                div.querySelector('.view-btn').onclick = () => viewDashboardPanels(d);
-                div.querySelector('.edit-btn').onclick = () => editDashboard(d);
-                div.querySelector('.del-btn').onclick = () => deleteDashboard(d.id);
-                el.appendChild(div);
-            });
-        } catch (e) {
-            el.innerHTML = `<div class="empty-state" style="color:var(--error)">${esc(e.message)}</div>`;
-        }
-    }
-
-    function showDashboardModal() {
-        document.getElementById('dashboardEditId').value = '';
-        document.getElementById('dashboardModalTitle').textContent = 'New Dashboard';
-        document.getElementById('dashTitle').value = '';
-        document.getElementById('dashDescription').value = '';
-        openModal('dashboardModal');
-        document.getElementById('dashTitle').focus();
-    }
-
-    function editDashboard(d) {
-        document.getElementById('dashboardEditId').value = d.id || '';
-        document.getElementById('dashboardModalTitle').textContent = 'Edit Dashboard';
-        document.getElementById('dashTitle').value = d.title || d.name || '';
-        document.getElementById('dashDescription').value = d.description || '';
-        openModal('dashboardModal');
-    }
-
-    async function saveDashboard() {
-        const id = document.getElementById('dashboardEditId').value;
-        const body = {
-            title: document.getElementById('dashTitle').value.trim(),
-            description: document.getElementById('dashDescription').value.trim()
-        };
-        if (!body.title) { toast('Title is required', 'error'); return; }
-        try {
-            if (id) await api('PUT', '/api/v1/dashboards/' + id, body);
-            else await api('POST', '/api/v1/dashboards', body);
-            closeModal('dashboardModal');
-            toast(id ? 'Dashboard updated' : 'Dashboard created', 'success');
-            loadDashboards();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteDashboard(id) {
-        if (!confirm('Delete this dashboard?')) return;
-        try {
-            await api('DELETE', '/api/v1/dashboards/' + id);
-            toast('Dashboard deleted', 'success');
-            loadDashboards();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function viewDashboardPanels(d) {
-        const container = document.getElementById('dash-panels-' + d.id);
-        if (!container) return;
-        if (container.innerHTML) { container.innerHTML = ''; return; } // toggle off
-        const panels = d.panels || [];
-        if (panels.length === 0) { container.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:4px">No panels defined</div>'; return; }
-        container.innerHTML = '<div style="text-align:center;padding:8px"><span class="spinner"></span> Running panel queries...</div>';
-        let html = '';
-        for (const panel of panels) {
-            html += `<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;background:var(--bg-tertiary)">`;
-            html += `<div style="font-size:12px;font-weight:500;margin-bottom:6px">${esc(panel.title || 'Untitled Panel')}</div>`;
-            if (panel.query) {
-                try {
-                    const result = await api('POST', '/api/v1/query/execute', { query: panel.query });
-                    const rows = result.results || [];
-                    if (rows.length > 0) {
-                        const keys = Object.keys(rows[0]).filter(k => !k.startsWith('_')).slice(0, 5);
-                        html += '<table style="width:100%;font-size:11px"><thead><tr>';
-                        keys.forEach(k => html += `<th style="padding:3px 6px">${esc(k)}</th>`);
-                        html += '</tr></thead><tbody>';
-                        rows.slice(0, 10).forEach(r => {
-                            html += '<tr>';
-                            keys.forEach(k => html += `<td style="padding:3px 6px">${esc(String(r[k] ?? ''))}</td>`);
-                            html += '</tr>';
-                        });
-                        html += '</tbody></table>';
-                        if (rows.length > 10) html += `<div style="font-size:10px;color:var(--text-muted);margin-top:4px">${rows.length} total results</div>`;
-                    } else {
-                        html += '<div style="font-size:11px;color:var(--text-secondary)">No results</div>';
-                    }
-                } catch (e) {
-                    html += `<div style="font-size:11px;color:var(--error)">${esc(e.message)}</div>`;
-                }
-            } else {
-                html += '<div style="font-size:11px;color:var(--text-muted)">No query defined</div>';
-            }
-            html += '</div>';
-        }
-        container.innerHTML = html;
-    }
-
-    /* ===== Health ===== */
-    async function loadHealthDetails() {
-        try {
-            const data = await api('GET', '/api/health/status');
-            document.getElementById('sysStatus').textContent = data.status || 'Unknown';
-            document.getElementById('sysStatus').className = 'value ' + (data.status === 'Healthy' ? 'success' : data.status === 'Degraded' ? 'warning' : 'error');
-
-            if (data.services) {
-                const hc = document.getElementById('healthChecks');
-                hc.innerHTML = '';
-                Object.entries(data.services).forEach(([name, svc]) => {
-                    const div = document.createElement('div');
-                    div.className = 'health-item';
-                    const status = (svc.status || 'unknown').toLowerCase();
-                    const cls = status === 'healthy' ? 'healthy' : status === 'degraded' ? 'degraded' : 'unhealthy';
-                    div.innerHTML = `<div class="hi-header"><span class="hi-name">${esc(name)}</span>
-                        <span class="hi-status ${cls}">${esc(svc.status || 'unknown')}</span></div>
-                        <div class="hi-detail">${esc(svc.message || '')}</div>`;
-                    hc.appendChild(div);
-                });
-            }
-
-            if (data.features) {
-                const hf = document.getElementById('healthFeatures');
-                hf.innerHTML = '';
-                Object.entries(data.features).forEach(([name, enabled]) => {
-                    const div = document.createElement('div');
-                    div.className = 'health-item';
-                    div.innerHTML = `<div class="hi-header"><span class="hi-name">${esc(name)}</span>
-                        <span class="hi-status ${enabled ? 'healthy' : 'degraded'}">${enabled ? 'Enabled' : 'Disabled'}</span></div>`;
-                    hf.appendChild(div);
-                });
-            }
-        } catch (e) {
-            document.getElementById('sysStatus').textContent = 'Error';
-            document.getElementById('sysStatus').className = 'value error';
-        }
-
-        // Version/uptime
-        try {
-            const ver = await api('GET', '/api/health/version');
-            document.getElementById('sysUptime').textContent = ver.version || '-';
-            document.getElementById('sysMem').textContent = ver.environment || '-';
-            document.getElementById('sysStorage').textContent = ver.apiVersion || '-';
-        } catch {}
-    }
-
-    /* ===== Ingest ===== */
-    async function ingestLogs() {
-        const input = document.getElementById('ingestInput').value.trim();
-        if (!input) return;
-        const ingestFmt = document.getElementById('ingestFormat').value;
-        const errEl = document.getElementById('ingestError');
-        const okEl = document.getElementById('ingestSuccess');
-        errEl.style.display = 'none'; okEl.style.display = 'none';
-        document.getElementById('ingestSpinner').classList.remove('hide');
-
-        try {
-            let logs;
-            if (ingestFmt === 'json') {
-                logs = JSON.parse(input);
-                if (!Array.isArray(logs)) logs = [logs];
-                logs = logs.map(l => typeof l === 'string' ? l : JSON.stringify(l));
-            } else {
-                logs = input.split('\n').filter(l => l.trim());
-            }
-            const data = await api('POST', '/api/v1/logs/ingest', { logs });
-            okEl.textContent = `Ingested ${data.totalIngested || logs.length} of ${data.totalReceived || logs.length} events`;
-            okEl.style.display = 'block';
-            toast(`Ingested ${data.totalIngested || logs.length} events`, 'success');
-            if (data.errors && data.errors.length > 0) {
-                errEl.textContent = 'Warnings: ' + data.errors.join('; ');
-                errEl.style.display = 'block';
-            }
-        } catch (e) {
-            errEl.textContent = e.message; errEl.style.display = 'block';
-        } finally {
-            document.getElementById('ingestSpinner').classList.add('hide');
-        }
-    }
-
-    /* ===== Indexes ===== */
-    async function loadIndexes() {
-        const el = document.getElementById('indexesList');
-        el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
-        try {
-            const data = await api('GET', '/api/v1/indexes');
-            const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
-            if (indexes.length === 0) {
-                el.innerHTML = '<div class="empty-state"><h3>No Indexes</h3><p>Ingest some logs to create indexes</p></div>';
-                return;
-            }
-            el.innerHTML = '';
-            indexes.forEach(idx => {
-                const div = document.createElement('div');
-                div.className = 'health-item';
-                const name = typeof idx === 'string' ? idx : (idx.name || idx.index || 'unknown');
-                const count = typeof idx === 'object' ? (idx.eventCount || idx.count || '-') : '-';
-                div.innerHTML = `<div class="hi-header"><span class="hi-name">${esc(name)}</span>
-                    <span class="hi-status healthy">${count === '-' ? '' : fmt(count) + ' events'}</span></div>`;
-                el.appendChild(div);
-            });
-        } catch (e) {
-            el.innerHTML = `<div class="empty-state" style="color:var(--error)">${esc(e.message)}</div>`;
-        }
-    }
-
-    /* ===== Alerts ===== */
-    async function loadAlerts() {
-        const tbody = document.getElementById('alertsBody');
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const sev = document.getElementById('alertSevFilter').value;
-            const ack = document.getElementById('alertAckFilter').value;
-            let url = '/api/v1/alerts?count=100';
-            if (sev) url += '&severity=' + sev;
-            if (ack) url += '&acknowledged=' + ack;
-            const data = await api('GET', url);
-            const alerts = Array.isArray(data) ? data : (data.data || []);
-            if (alerts.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-secondary)">No alerts found</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            alerts.forEach(a => {
-                const tr = document.createElement('tr');
-                const acked = a.acknowledged || a.isAcknowledged;
-                tr.innerHTML = `<td>${fmtTime(a.triggeredAt || a.timestamp || a.createdAt)}</td>
-                    <td>${sevBadge(a.severity)}</td>
-                    <td style="font-weight:500">${esc(a.ruleName || a.rule || '-')}</td>
-                    <td style="max-width:300px" title="${esc(a.message || '')}">${esc(a.message || '-')}</td>
-                    <td>${acked ? '<span class="badge badge-success">Ack</span>' : '<span class="badge badge-warning">Open</span>'}</td>
-                    <td>${!acked ? '<button class="btn btn-secondary btn-sm ack-btn">Acknowledge</button>' : ''}</td>`;
-                if (!acked) { const btn = tr.querySelector('.ack-btn'); if (btn) btn.onclick = () => ackAlert(a.id); }
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-        }
-    }
-
-    async function ackAlert(id) {
-        try {
-            await api('POST', '/api/v1/alerts/' + id + '/acknowledge');
-            toast('Alert acknowledged', 'success');
-            loadAlerts();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    /* ===== Scheduled Searches ===== */
-    async function loadSchedules() {
-        const tbody = document.getElementById('schedulesBody');
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/scheduled-searches');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-secondary)">No scheduled searches</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            items.forEach(s => {
-                const tr = document.createElement('tr');
-                const enabled = s.enabled !== false;
-                tr.innerHTML = `<td style="font-weight:500">${esc(s.name)}</td>
-                    <td style="max-width:220px;font-family:'SF Mono','Fira Code',monospace;font-size:11px" title="${esc(s.query)}">${esc(s.query)}</td>
-                    <td style="font-family:monospace;font-size:11px">${esc(s.cronExpression || s.cron || '-')}</td>
-                    <td>${esc(s.timeRange || '-')}</td>
-                    <td>${enabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-muted">Disabled</span>'}</td>
-                    <td style="white-space:nowrap">
-                        <button class="btn btn-secondary btn-sm toggle-btn" title="${enabled ? 'Disable' : 'Enable'}">${enabled ? 'Disable' : 'Enable'}</button>
-                        <button class="btn btn-secondary btn-sm edit-btn">Edit</button>
-                        <button class="btn btn-danger btn-sm del-btn">Del</button>
-                    </td>`;
-                tr.querySelector('.toggle-btn').onclick = () => toggleSchedule(s.id, !enabled);
-                tr.querySelector('.edit-btn').onclick = () => editSchedule(s.id);
-                tr.querySelector('.del-btn').onclick = () => deleteSchedule(s.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-        }
-    }
-
-    function showScheduleModal(edit) {
-        document.getElementById('scheduleEditId').value = '';
-        document.getElementById('scheduleModalTitle').textContent = 'New Scheduled Search';
-        document.getElementById('schedName').value = '';
-        document.getElementById('schedQuery').value = '';
-        document.getElementById('schedCron').value = '*/5 * * * *';
-        document.getElementById('schedRange').value = '-5m';
-        document.getElementById('schedCondition').value = 'when_count_gt';
-        document.getElementById('schedThreshold').value = '100';
-        document.getElementById('schedEnabled').checked = true;
-        openModal('scheduleModal');
-    }
-
-    async function editSchedule(id) {
-        try {
-            const s = await api('GET', '/api/v1/scheduled-searches/' + id);
-            document.getElementById('scheduleEditId').value = id;
-            document.getElementById('scheduleModalTitle').textContent = 'Edit Scheduled Search';
-            document.getElementById('schedName').value = s.name || '';
-            document.getElementById('schedQuery').value = s.query || '';
-            document.getElementById('schedCron').value = s.cronExpression || s.cron || '';
-            document.getElementById('schedRange').value = s.timeRange || '-5m';
-            if (s.alertAction) {
-                document.getElementById('schedCondition').value = s.alertAction.condition || 'when_count_gt';
-                document.getElementById('schedThreshold').value = s.alertAction.threshold || 100;
-            }
-            document.getElementById('schedEnabled').checked = s.enabled !== false;
-            openModal('scheduleModal');
-        } catch (e) { toast('Failed to load: ' + e.message, 'error'); }
-    }
-
-    async function saveSchedule() {
-        const id = document.getElementById('scheduleEditId').value;
-        const body = {
-            name: document.getElementById('schedName').value.trim(),
-            query: document.getElementById('schedQuery').value.trim(),
-            cronExpression: document.getElementById('schedCron').value.trim(),
-            timeRange: document.getElementById('schedRange').value.trim(),
-            enabled: document.getElementById('schedEnabled').checked,
-            alertAction: {
-                condition: document.getElementById('schedCondition').value,
-                threshold: parseInt(document.getElementById('schedThreshold').value) || 100,
-                severity: 3
-            }
-        };
-        if (!body.name || !body.query) { toast('Name and query are required', 'error'); return; }
-        try {
-            if (id) await api('PUT', '/api/v1/scheduled-searches/' + id, body);
-            else await api('POST', '/api/v1/scheduled-searches', body);
-            closeModal('scheduleModal');
-            toast(id ? 'Schedule updated' : 'Schedule created', 'success');
-            loadSchedules();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function toggleSchedule(id, enable) {
-        try {
-            await api('POST', '/api/v1/scheduled-searches/' + id + '/' + (enable ? 'enable' : 'disable'));
-            toast('Schedule ' + (enable ? 'enabled' : 'disabled'), 'success');
-            loadSchedules();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteSchedule(id) {
-        if (!confirm('Delete this scheduled search?')) return;
-        try {
-            await api('DELETE', '/api/v1/scheduled-searches/' + id);
-            toast('Deleted', 'success');
-            loadSchedules();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    /* ===== Field Extractions ===== */
-    async function loadExtractions() {
-        const tbody = document.getElementById('extractionsBody');
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/field-extractions');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-secondary)">No field extractions configured</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            items.forEach(e => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td style="font-weight:500">${esc(e.name)}</td>
-                    <td style="font-family:'SF Mono','Fira Code',monospace;font-size:11px;max-width:300px" title="${esc(e.pattern)}">${esc(e.pattern)}</td>
-                    <td>${e.priority || 100}</td>
-                    <td style="white-space:nowrap">
-                        <button class="btn btn-secondary btn-sm edit-btn">Edit</button>
-                        <button class="btn btn-danger btn-sm del-btn">Del</button>
-                    </td>`;
-                tr.querySelector('.edit-btn').onclick = () => editExtraction(e.id);
-                tr.querySelector('.del-btn').onclick = () => deleteExtraction(e.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-        }
-    }
-
-    function showExtractionModal() {
-        document.getElementById('extractionEditId').value = '';
-        document.getElementById('extractionModalTitle').textContent = 'New Field Extraction';
-        document.getElementById('extName').value = '';
-        document.getElementById('extPattern').value = '';
-        document.getElementById('extPriority').value = '100';
-        openModal('extractionModal');
-    }
-
-    async function editExtraction(id) {
-        try {
-            const e = await api('GET', '/api/v1/field-extractions/' + id);
-            document.getElementById('extractionEditId').value = id;
-            document.getElementById('extractionModalTitle').textContent = 'Edit Field Extraction';
-            document.getElementById('extName').value = e.name || '';
-            document.getElementById('extPattern').value = e.pattern || '';
-            document.getElementById('extPriority').value = e.priority || 100;
-            openModal('extractionModal');
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function saveExtraction() {
-        const id = document.getElementById('extractionEditId').value;
-        const body = {
-            name: document.getElementById('extName').value.trim(),
-            pattern: document.getElementById('extPattern').value.trim(),
-            priority: parseInt(document.getElementById('extPriority').value) || 100
-        };
-        if (!body.name || !body.pattern) { toast('Name and pattern are required', 'error'); return; }
-        try {
-            if (id) await api('PUT', '/api/v1/field-extractions/' + id, body);
-            else await api('POST', '/api/v1/field-extractions', body);
-            closeModal('extractionModal');
-            toast(id ? 'Extraction updated' : 'Extraction created', 'success');
-            loadExtractions();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteExtraction(id) {
-        if (!confirm('Delete this field extraction?')) return;
-        try {
-            await api('DELETE', '/api/v1/field-extractions/' + id);
-            toast('Deleted', 'success');
-            loadExtractions();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    /* ===== Knowledge Objects ===== */
-    let activeKnowledgeTab = 'lookups';
-
-    function switchKnowledgeTab(tab, el) {
-        activeKnowledgeTab = tab;
-        document.querySelectorAll('#knowledgeTabs .tab').forEach(t => t.classList.remove('active'));
-        el.classList.add('active');
-        ['lookups','macros','aliases'].forEach(t => {
-            const tbl = document.getElementById('knowledgeTable-' + t);
-            if (tbl) tbl.classList.toggle('hide', t !== tab);
-        });
-        loadKnowledgeCurrent();
-    }
-
-    function loadKnowledgeCurrent() {
-        if (activeKnowledgeTab === 'lookups') loadLookups();
-        else if (activeKnowledgeTab === 'macros') loadMacros();
-        else loadAliases();
-    }
-
-    async function loadLookups() {
-        const tbody = document.getElementById('lookupsBody');
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/knowledge/lookups');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-secondary)">No lookups</td></tr>'; return; }
-            tbody.innerHTML = '';
-            items.forEach(l => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td style="font-weight:500">${esc(l.name)}</td>
-                    <td style="color:var(--text-secondary)">${esc(l.description || '-')}</td>
-                    <td>${(l.columns || []).length}</td><td>${(l.rows || []).length}</td>
-                    <td><button class="btn btn-danger btn-sm del-btn">Del</button></td>`;
-                tr.querySelector('.del-btn').onclick = () => deleteKnowledgeItem('lookups', l.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
-    }
-
-    async function loadMacros() {
-        const tbody = document.getElementById('macrosBody');
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/knowledge/macros');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-secondary)">No macros</td></tr>'; return; }
-            tbody.innerHTML = '';
-            items.forEach(m => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td style="font-weight:500">${esc(m.name)}</td>
-                    <td style="font-family:monospace;font-size:11px;max-width:300px" title="${esc(m.definition)}">${esc(m.definition)}</td>
-                    <td style="color:var(--text-secondary);font-size:11px">${esc((m.parameters || []).join(', ')) || '-'}</td>
-                    <td><button class="btn btn-danger btn-sm del-btn">Del</button></td>`;
-                tr.querySelector('.del-btn').onclick = () => deleteKnowledgeItem('macros', m.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
-    }
-
-    async function loadAliases() {
-        const tbody = document.getElementById('aliasesBody');
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/knowledge/aliases');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-secondary)">No field aliases</td></tr>'; return; }
-            tbody.innerHTML = '';
-            items.forEach(a => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${esc(a.sourceType || '*')}</td>
-                    <td style="font-family:monospace">${esc(a.originalField)}</td>
-                    <td style="font-family:monospace;color:var(--accent)">${esc(a.aliasField)}</td>
-                    <td><button class="btn btn-danger btn-sm del-btn">Del</button></td>`;
-                tr.querySelector('.del-btn').onclick = () => deleteKnowledgeItem('aliases', a.id);
-                tbody.appendChild(tr);
-            });
-        } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
-    }
-
-    function showKnowledgeModal() {
-        const type = activeKnowledgeTab;
-        document.getElementById('knowledgeEditId').value = '';
-        document.getElementById('knowledgeType').value = type;
-        document.getElementById('km-lookup-fields').classList.toggle('hide', type !== 'lookups');
-        document.getElementById('km-macro-fields').classList.toggle('hide', type !== 'macros');
-        document.getElementById('km-alias-fields').classList.toggle('hide', type !== 'aliases');
-        const titles = { lookups: 'New Lookup', macros: 'New Macro', aliases: 'New Field Alias' };
-        document.getElementById('knowledgeModalTitle').textContent = titles[type] || 'New';
-        // Clear
-        document.querySelectorAll('#knowledgeModal input[type=text], #knowledgeModal textarea').forEach(i => i.value = '');
-        openModal('knowledgeModal');
-    }
-
-    async function saveKnowledge() {
-        const type = document.getElementById('knowledgeType').value;
-        let body, url;
-        if (type === 'lookups') {
-            body = { name: document.getElementById('kmLookupName').value.trim(), description: document.getElementById('kmLookupDesc').value.trim() };
-            url = '/api/v1/knowledge/lookups';
-            if (!body.name) { toast('Name is required', 'error'); return; }
-        } else if (type === 'macros') {
-            body = { name: document.getElementById('kmMacroName').value.trim(), definition: document.getElementById('kmMacroDef').value.trim(), description: document.getElementById('kmMacroDesc').value.trim() };
-            url = '/api/v1/knowledge/macros';
-            if (!body.name || !body.definition) { toast('Name and definition required', 'error'); return; }
-        } else {
-            body = { sourceType: document.getElementById('kmAliasSourceType').value.trim(), originalField: document.getElementById('kmAliasOriginal').value.trim(), aliasField: document.getElementById('kmAliasAlias').value.trim() };
-            url = '/api/v1/knowledge/aliases';
-            if (!body.originalField || !body.aliasField) { toast('Fields required', 'error'); return; }
-        }
-        try {
-            await api('POST', url, body);
-            closeModal('knowledgeModal');
-            toast('Created successfully', 'success');
-            loadKnowledgeCurrent();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteKnowledgeItem(type, id) {
-        if (!confirm('Delete this item?')) return;
-        try {
-            await api('DELETE', '/api/v1/knowledge/' + type + '/' + id);
-            toast('Deleted', 'success');
-            loadKnowledgeCurrent();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    /* ===== Settings ===== */
-    function loadSettings() {
-        document.getElementById('settingsApiKey').value = API_KEY;
-        document.getElementById('settingsServerUrl').value = window.location.origin;
-        document.getElementById('settingsPageSize').value = localStorage.getItem('cabinet_page_size') || '100';
-        document.getElementById('settingsTimeRange').value = localStorage.getItem('cabinet_default_range') || '4h';
-        document.getElementById('settingsTsFormat').value = localStorage.getItem('cabinet_ts_format') || 'local';
-        loadRetentionPolicies();
-        loadRoles();
-    }
-
-    function saveApiSettings() {
-        const key = document.getElementById('settingsApiKey').value.trim();
-        if (key) { API_KEY = key; localStorage.setItem('cabinet_api_key', key); toast('API key saved', 'success'); }
-    }
-
-    function saveDisplaySettings() {
-        localStorage.setItem('cabinet_page_size', document.getElementById('settingsPageSize').value);
-        localStorage.setItem('cabinet_default_range', document.getElementById('settingsTimeRange').value);
-        localStorage.setItem('cabinet_ts_format', document.getElementById('settingsTsFormat').value);
-        document.getElementById('timeRange').value = document.getElementById('settingsTimeRange').value;
-        toast('Display settings saved', 'success');
-    }
-
-    function toggleApiKeyVisibility() {
-        const inp = document.getElementById('settingsApiKey');
-        inp.type = inp.type === 'password' ? 'text' : 'password';
-    }
-
-    async function loadRetentionPolicies() {
-        const el = document.getElementById('retentionList');
-        try {
-            const data = await api('GET', '/api/v1/retention');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:4px">No retention policies</div>'; return; }
-            el.innerHTML = '';
-            items.forEach(p => {
-                const div = document.createElement('div');
-                div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px';
-                div.innerHTML = `<span><strong>${esc(p.index)}</strong> — ${p.maxAgeDays}d${p.archiveBeforeDelete ? ' (archive)' : ''}</span>
-                    <button class="btn btn-danger btn-sm del-btn">Del</button>`;
-                div.querySelector('.del-btn').onclick = () => deleteRetention(p.index);
-                el.appendChild(div);
-            });
-        } catch (e) { el.innerHTML = `<div style="font-size:12px;color:var(--error)">${esc(e.message)}</div>`; }
-    }
-
-    function showRetentionModal() { openModal('retentionModal'); document.getElementById('retIndex').value = ''; }
-
-    async function saveRetention() {
-        const idx = document.getElementById('retIndex').value.trim();
-        if (!idx) { toast('Index name required', 'error'); return; }
-        const body = { index: idx, maxAgeDays: parseInt(document.getElementById('retMaxAge').value) || 90, archiveBeforeDelete: document.getElementById('retArchive').checked };
-        try {
-            await api('PUT', '/api/v1/retention/' + encodeURIComponent(idx), body);
-            closeModal('retentionModal');
-            toast('Retention policy saved', 'success');
-            loadRetentionPolicies();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function deleteRetention(idx) {
-        if (!confirm('Delete retention policy for ' + idx + '?')) return;
-        try {
-            await api('DELETE', '/api/v1/retention/' + encodeURIComponent(idx));
-            toast('Deleted', 'success');
-            loadRetentionPolicies();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function loadRoles() {
-        const el = document.getElementById('rolesList');
-        try {
-            const data = await api('GET', '/api/v1/roles');
-            const items = Array.isArray(data) ? data : (data.data || []);
-            if (items.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:4px">No roles configured</div>'; return; }
-            el.innerHTML = '';
-            items.forEach(r => {
-                const div = document.createElement('div');
-                div.style.cssText = 'padding:6px 0;border-bottom:1px solid var(--border);font-size:12px';
-                const role = r.role || r.systemRole || 'Unknown';
-                const caps = (r.additionalCapabilities || r.capabilities || []).slice(0, 3).join(', ');
-                div.innerHTML = `<div style="font-weight:500">${esc(r.apiKeyPrefix || r.apiKeyHash?.slice(0,8) || 'user')}</div>
-                    <div style="color:var(--text-secondary)">${esc(role)}${caps ? ' — ' + esc(caps) : ''}</div>`;
-                el.appendChild(div);
-            });
-        } catch (e) { el.innerHTML = `<div style="font-size:12px;color:var(--text-secondary)">Roles require SuperAdmin access</div>`; }
-    }
-
-    /* ===== Event Detail Drawer ===== */
-    function showEventDetail(event) {
-        const body = document.getElementById('drawerBody');
-        let html = '';
-        const entries = Object.entries(event).sort((a,b) => a[0].localeCompare(b[0]));
-        entries.forEach(([k, v]) => {
-            const val = v != null ? (typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)) : '';
-            html += `<div class="field-row"><div class="field-key">${esc(k)}</div><div class="field-val">${esc(val)}</div></div>`;
-        });
-        if (event.RawLine || event.rawLine || event.raw) {
-            html += '<div style="margin-top:16px;font-size:12px;color:var(--text-secondary)">Raw Event</div>';
-            html += '<pre class="code-block" style="margin-top:6px;max-height:300px">' + esc(event.RawLine || event.rawLine || event.raw) + '</pre>';
-        }
-        body.innerHTML = html;
-        document.getElementById('drawerBg').classList.add('show');
-        document.getElementById('eventDrawer').classList.add('show');
-    }
-
-    function closeDrawer() {
-        document.getElementById('drawerBg').classList.remove('show');
-        document.getElementById('eventDrawer').classList.remove('show');
-    }
-
-    /* ===== Field Sidebar ===== */
-    function toggleFieldSidebar() {
-        const sb = document.getElementById('fieldSidebar');
-        sb.classList.toggle('show');
-        if (sb.classList.contains('show') && lastResults) buildFieldSidebar(lastResults.results);
-    }
-
-    function buildFieldSidebar(results) {
-        const body = document.getElementById('fieldSidebarBody');
-        if (!results || results.length === 0) { body.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text-secondary)">No fields</div>'; return; }
-        const fieldCounts = {};
-        results.forEach(r => {
-            Object.keys(r).forEach(k => {
-                if (!k.startsWith('_')) fieldCounts[k] = (fieldCounts[k] || 0) + (r[k] != null && r[k] !== '' ? 1 : 0);
-            });
-        });
-        const sorted = Object.entries(fieldCounts).sort((a,b) => b[1] - a[1]);
-        document.getElementById('fieldCount').textContent = '(' + sorted.length + ')';
-        body.innerHTML = '';
-        sorted.forEach(([field, count]) => {
-            const div = document.createElement('div');
-            div.className = 'field-sidebar-item';
-            div.innerHTML = `<span class="fname">${esc(field)}</span><span class="fcount">${count}/${results.length}</span>`;
-            div.onclick = () => {
-                const input = document.getElementById('queryInput');
-                const cur = input.value.trim();
-                if (!cur.includes(field)) {
-                    input.value = cur + (cur.includes('|') ? '' : ' |') + ' stats count by ' + field;
-                }
-            };
-            body.appendChild(div);
-        });
-    }
-
-    /* ===== Live Tail ===== */
-    let tailEventSource = null;
-    let tailCount = 0;
-
-    async function loadTailIndexes() {
-        try {
-            const data = await api('GET', '/api/v1/indexes');
-            const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
-            const sel = document.getElementById('tailIndex');
-            sel.innerHTML = '';
-            if (indexes.length === 0) {
-                sel.innerHTML = '<option value="main">main</option>';
-            } else {
-                indexes.forEach(idx => {
-                    const name = typeof idx === 'string' ? idx : (idx.name || idx.index || 'main');
-                    const opt = document.createElement('option');
-                    opt.value = name; opt.textContent = name;
-                    sel.appendChild(opt);
-                });
-            }
-        } catch { /* keep default */ }
-    }
-
-    function toggleTail() {
-        if (tailEventSource) {
-            tailEventSource.close();
-            tailEventSource = null;
-            document.getElementById('tailDot').style.display = 'none';
-            document.getElementById('tailStartBtn').textContent = 'Start';
-            document.getElementById('tailStartBtn').classList.remove('btn-danger');
-            document.getElementById('tailStartBtn').classList.add('btn-primary');
-            return;
-        }
-        const index = document.getElementById('tailIndex').value || 'main';
-        const filter = document.getElementById('tailFilter').value.trim();
-        let url = `/api/v1/logs/stream/live?index=${encodeURIComponent(index)}&pollIntervalMs=1000`;
-        if (filter) url += `&filter=${encodeURIComponent(filter)}`;
-
-        const output = document.getElementById('tailOutput');
-        document.getElementById('tailDot').style.display = 'inline-block';
-        document.getElementById('tailStartBtn').textContent = 'Stop';
-        document.getElementById('tailStartBtn').classList.remove('btn-primary');
-        document.getElementById('tailStartBtn').classList.add('btn-danger');
-
-        // SSE connection with API key via query param not supported; use fetch streaming instead
-        const controller = new AbortController();
-        tailEventSource = { close: () => controller.abort() };
-
-        (async () => {
-            try {
-                const res = await fetch(url, {
-                    headers: { 'X-API-Key': API_KEY, 'Accept': 'text/event-stream' },
-                    signal: controller.signal
-                });
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop(); // keep incomplete line
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const evt = JSON.parse(line.slice(6));
-                                tailCount++;
-                                const div = document.createElement('div');
-                                div.style.cssText = 'padding:2px 0;border-bottom:1px solid rgba(48,54,61,0.3)';
-                                const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
-                                const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE','DEBUG','INFO','WARN','ERROR','CRIT','FATAL'][Math.min(parseInt(evt.severity)||0, 6)]}</span>` : '';
-                                const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
-                                div.innerHTML = `<span style="color:var(--text-muted);margin-right:8px">${esc(ts)}</span>${sev}<span>${esc(raw)}</span>`;
-                                output.appendChild(div);
-                                // Auto-scroll to bottom
-                                output.scrollTop = output.scrollHeight;
-                                // Limit DOM nodes to prevent memory issues
-                                while (output.children.length > 2000) output.removeChild(output.firstChild);
-                                document.getElementById('tailCount').textContent = tailCount + ' events';
-                            } catch {}
-                        }
-                    }
-                }
-            } catch (e) {
-                if (e.name !== 'AbortError') {
-                    const div = document.createElement('div');
-                    div.style.color = 'var(--error)';
-                    div.textContent = 'Stream ended: ' + e.message;
-                    output.appendChild(div);
-                }
-            }
-            // Clean up
-            document.getElementById('tailDot').style.display = 'none';
-            document.getElementById('tailStartBtn').textContent = 'Start';
-            document.getElementById('tailStartBtn').classList.remove('btn-danger');
-            document.getElementById('tailStartBtn').classList.add('btn-primary');
-            tailEventSource = null;
-        })();
-    }
-
-    function clearTail() {
-        document.getElementById('tailOutput').innerHTML = '';
-        tailCount = 0;
-        document.getElementById('tailCount').textContent = '0 events';
-    }
-
-    /* ===== Search Jobs ===== */
-    let jobPollTimer = null;
-
-    async function loadJobs() {
-        const tbody = document.getElementById('jobsBody');
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-        try {
-            const data = await api('GET', '/api/v1/query/jobs');
-            const jobs = Array.isArray(data) ? data : (data.data || data.jobs || []);
-            if (jobs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-secondary)">No search jobs. Click "+ New Job" to create one.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = '';
-            jobs.forEach(j => {
-                const tr = document.createElement('tr');
-                const status = (j.status || 'unknown').toLowerCase();
-                const statusBadge = status === 'completed' ? '<span class="badge badge-success">Completed</span>'
-                    : status === 'running' ? '<span class="badge badge-info">Running</span>'
-                    : status === 'failed' ? '<span class="badge badge-error">Failed</span>'
-                    : status === 'cancelled' ? '<span class="badge badge-muted">Cancelled</span>'
-                    : `<span class="badge badge-muted">${esc(j.status || 'Created')}</span>`;
-                const resultCount = j.resultCount != null ? fmt(j.resultCount) : '-';
-                tr.innerHTML = `<td style="font-family:monospace;font-size:11px" title="${esc(j.id)}">${esc((j.id || '').slice(0, 12))}...</td>
-                    <td style="max-width:250px;font-family:'SF Mono','Fira Code',monospace;font-size:11px" title="${esc(j.query)}">${esc(j.query)}</td>
-                    <td>${statusBadge}</td>
-                    <td>${resultCount}</td>
-                    <td style="color:var(--text-secondary)">${fmtTime(j.createdAt)}</td>
-                    <td style="white-space:nowrap"></td>`;
-                const actionsCell = tr.querySelector('td:last-child');
-                if (status === 'completed') {
-                    const viewBtn = document.createElement('button');
-                    viewBtn.className = 'btn btn-secondary btn-sm';
-                    viewBtn.textContent = 'Results';
-                    viewBtn.onclick = () => viewJobResults(j.id);
-                    actionsCell.appendChild(viewBtn);
-                }
-                if (status === 'running' || status === 'created') {
-                    const cancelBtn = document.createElement('button');
-                    cancelBtn.className = 'btn btn-danger btn-sm';
-                    cancelBtn.textContent = 'Cancel';
-                    cancelBtn.style.marginLeft = '4px';
-                    cancelBtn.onclick = () => cancelJob(j.id);
-                    actionsCell.appendChild(cancelBtn);
-                }
-                tbody.appendChild(tr);
-            });
-            // Auto-refresh if any jobs are running
-            if (jobs.some(j => (j.status || '').toLowerCase() === 'running' || (j.status || '').toLowerCase() === 'created')) {
-                if (!jobPollTimer) jobPollTimer = setInterval(() => { if (currentPage === 'jobs') loadJobs(); }, 3000);
-            } else {
-                if (jobPollTimer) { clearInterval(jobPollTimer); jobPollTimer = null; }
-            }
-        } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-        }
-    }
-
-    function showJobModal() {
-        document.getElementById('jobQuery').value = '';
-        document.getElementById('jobTimeRange').value = '-24h';
-        document.getElementById('jobMaxResults').value = '10000';
-        openModal('jobModal');
-        document.getElementById('jobQuery').focus();
-    }
-
-    async function createJob() {
-        const query = document.getElementById('jobQuery').value.trim();
-        if (!query) { toast('Query is required', 'error'); return; }
-        const body = {
-            query,
-            timeRange: document.getElementById('jobTimeRange').value.trim() || '-24h',
-            maxResults: parseInt(document.getElementById('jobMaxResults').value) || 10000
-        };
-        try {
-            await api('POST', '/api/v1/query/jobs', body);
-            closeModal('jobModal');
-            toast('Search job created', 'success');
-            loadJobs();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function cancelJob(id) {
-        try {
-            await api('POST', '/api/v1/query/jobs/' + id + '/cancel');
-            toast('Job cancelled', 'success');
-            loadJobs();
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    async function viewJobResults(id) {
-        try {
-            const data = await api('GET', '/api/v1/query/jobs/' + id + '/results');
-            const results = data.results || data;
-            if (Array.isArray(results) && results.length > 0) {
-                navigate('search');
-                lastResults = { results, count: results.length, executionTimeMs: 0 };
-                renderResults(lastResults);
-                toast(`Loaded ${results.length} results from search job`, 'info');
-            } else {
-                toast('No results in this job', 'info');
-            }
-        } catch (e) { toast('Failed: ' + e.message, 'error'); }
-    }
-
-    /* ===== Theme Toggle ===== */
-    function toggleTheme() {
-        const body = document.body;
-        body.classList.toggle('light');
-        const isLight = body.classList.contains('light');
-        localStorage.setItem('cabinet_theme', isLight ? 'light' : 'dark');
-        document.getElementById('themeBtn').textContent = isLight ? 'Dark' : 'Light';
-    }
-
-    // Restore theme on load
-    (function() {
-        const saved = localStorage.getItem('cabinet_theme');
-        if (saved === 'light') {
-            document.body.classList.add('light');
-            document.getElementById('themeBtn').textContent = 'Dark';
-        }
-    })();
-
-    /* ===== API Key ===== */
-    function changeApiKey() {
-        navigate('settings');
-    }
-
-    /* ===== Health Polling ===== */
-    async function checkHealth() {
-        try {
-            const res = await fetch('/health/live');
-            const dot = document.getElementById('healthDot');
-            const text = document.getElementById('healthText');
-            if (res.ok) { dot.className = 'dot ok'; text.textContent = 'Connected'; }
-            else { dot.className = 'dot warn'; text.textContent = 'Degraded'; }
-        } catch {
-            document.getElementById('healthDot').className = 'dot err';
-            document.getElementById('healthText').textContent = 'Disconnected';
-        }
-    }
-
-    async function loadStats() {
-        try {
-            const stats = await api('GET', '/api/v1/logs/stats');
-            document.getElementById('totalEvents').textContent = fmt(stats.totalEvents || 0);
-        } catch {}
-    }
-
-    /* ===== Utils ===== */
-    function fmt(n) { return Number(n).toLocaleString(); }
-    function esc(s) {
-        const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-        return String(s ?? '').replace(/[&<>"']/g, c => entities[c]);
-    }
-    function sevClass(val) {
-        const n = typeof val === 'number' ? val : parseInt(val) || 0;
-        return ['sev-trace','sev-debug','sev-info','sev-warning','sev-error','sev-critical','sev-fatal'][Math.min(n, 6)];
-    }
-    function toast(msg, type='info') {
-        const c = document.getElementById('toastContainer');
-        const t = document.createElement('div');
-        t.className = 'toast toast-' + type;
-        t.textContent = msg;
-        t.onclick = () => t.remove();
-        c.appendChild(t);
-        setTimeout(() => { t.style.animation = 'fadeOut 0.3s forwards'; setTimeout(() => t.remove(), 300); }, 4000);
-    }
-    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
-    function openModal(id) { document.getElementById(id).classList.add('show'); }
-    function fmtTime(ts) {
-        if (!ts) return '-';
-        const d = new Date(ts);
-        const fmt = localStorage.getItem('cabinet_ts_format') || 'local';
-        if (fmt === 'relative') {
-            const diff = Date.now() - d.getTime();
-            if (diff < 60000) return Math.round(diff/1000) + 's ago';
-            if (diff < 3600000) return Math.round(diff/60000) + 'm ago';
-            if (diff < 86400000) return Math.round(diff/3600000) + 'h ago';
-            return Math.round(diff/86400000) + 'd ago';
-        }
-        if (fmt === 'utc') return d.toISOString();
-        if (fmt === 'iso') return d.toISOString().replace('T',' ').slice(0,19);
-        return d.toLocaleString();
-    }
-    function sevBadge(sev) {
-        const s = String(sev || '').toLowerCase();
-        const n = parseInt(sev);
-        if (s === 'critical' || s === 'fatal' || n >= 5) return '<span class="badge badge-error">Critical</span>';
-        if (s === 'error' || n === 4) return '<span class="badge badge-error">Error</span>';
-        if (s === 'warning' || n === 3) return '<span class="badge badge-warning">Warning</span>';
-        if (s === 'info' || n === 2) return '<span class="badge badge-info">Info</span>';
-        return '<span class="badge badge-muted">' + esc(sev || 'Unknown') + '</span>';
-    }
-
-    /* ===== Init ===== */
-    checkHealth(); loadStats(); renderQueryHistory();
-    // P3: Reduced polling frequency for production (60s health, 120s stats)
-    setInterval(checkHealth, 60000);
-    setInterval(loadStats, 120000);
-    // Apply saved settings
-    const savedRange = localStorage.getItem('cabinet_default_range');
-    if (savedRange) document.getElementById('timeRange').value = savedRange;
-
-    // P10: URL-based navigation — restore page from hash on load and back/forward
-    (function() {
-        const hash = window.location.hash.replace('#', '');
-        if (hash && document.getElementById('page-' + hash)) {
-            navigate(hash);
-        } else {
-            document.getElementById('queryInput').focus();
-        }
-    })();
-    window.addEventListener('popstate', e => {
-        const page = (e.state && e.state.page) || window.location.hash.replace('#', '') || 'search';
-        if (VALID_PAGES.includes(page)) navigate(page);
-    });
-
-    // P11: Keyboard shortcuts
-    document.addEventListener('keydown', e => {
-        // Escape: close modals and drawers
-        if (e.key === 'Escape') {
-            closeSaveModal(); closeDrawer();
-            document.querySelectorAll('.modal-bg.show').forEach(m => m.classList.remove('show'));
-            document.getElementById('querySuggestions').classList.remove('show');
-            return;
-        }
-        // Ctrl+Enter or Cmd+Enter: execute search from anywhere
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            if (currentPage === 'search') executeQuery();
-            return;
-        }
-        // Ctrl+S or Cmd+S: save current query
-        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-            e.preventDefault();
-            if (currentPage === 'search') saveCurrentQuery();
-            return;
-        }
-        // Ctrl+K or Cmd+K: focus search bar (command palette style)
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            navigate('search');
-            document.getElementById('queryInput').focus();
-            document.getElementById('queryInput').select();
-            return;
-        }
-        // / key: focus search when not in an input
-        if (e.key === '/' && !e.target.closest('input, textarea, select')) {
-            e.preventDefault();
-            navigate('search');
-            document.getElementById('queryInput').focus();
-            return;
-        }
-    });
-
-    // Close modal on bg click
-    document.querySelectorAll('.modal-bg').forEach(bg => {
-        bg.addEventListener('click', e => { if (e.target === bg) bg.classList.remove('show'); });
-    });
-    </script>
+    <script src="charts.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>

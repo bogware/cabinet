@@ -40,4 +40,16 @@ public class AlertRecord
     public string? AcknowledgedBy { get; set; }
     public DateTime? AcknowledgedAt { get; set; }
     public DateTime FiredAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>The detection rule that fired, if a rule did.</summary>
+    public string? RuleId { get; set; }
+
+    /// <summary>The event that made it fire.</summary>
+    public string? EventId { get; set; }
+
+    /// <summary>The value being counted by, such as a source address.</summary>
+    public string? GroupValue { get; set; }
+
+    /// <summary>The MITRE ATT&amp;CK technique it relates to.</summary>
+    public string? Technique { get; set; }
 }

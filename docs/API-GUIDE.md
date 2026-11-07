@@ -543,6 +543,22 @@ curl -X POST http://localhost:5000/api/v1/scheduled-searches \
 
 `GET`, `PUT` and `DELETE` are available on `/api/v1/scheduled-searches/{id}`, along with `POST .../{id}/enable` and `POST .../{id}/disable`.
 
+### OpenTelemetry
+
+`POST /v1/logs` receives OTLP over HTTP, as `application/x-protobuf` or `application/json`, optionally gzipped. It needs `Ingest`. Point an exporter at it with the key in a header:
+
+```bash
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:5000/v1/logs
+OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_LOGS_HEADERS=X-API-Key=your-key
+```
+
+`service.name` becomes the source type, `host.name` the host, and other attributes become fields. The record's time and severity are used when present. The index is the `X-Cabinet-Index` header, then a `cabinet.index` attribute, then `main`. An event's ID comes from its content, so a retried export stores nothing twice, and neither do two identical records.
+
+### Detection Rules
+
+`/api/v1/rules` lists, adds, changes and deletes rules, with `POST /{id}/enable`, `POST /{id}/disable`, and `POST /test`. They need `Alerts`. See the deployment guide.
+
 ### Alerts
 
 `GET /api/v1/alerts`, `GET /api/v1/alerts/{id}` and `POST /api/v1/alerts/{id}/acknowledge` read an in-memory store that nothing writes to, so the list is empty. Scheduled searches deliver alerts through channels but don't record them here.

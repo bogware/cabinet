@@ -302,7 +302,7 @@ try
         context.Response.Headers.Append("X-Frame-Options", "DENY");
         context.Response.Headers.Append("X-XSS-Protection", "0"); // Disabled in favor of CSP (modern best practice)
         context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
         context.Response.Headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
         await next();
@@ -313,7 +313,11 @@ try
 
     // Serve embedded web dashboard (static files from wwwroot/)
     app.UseDefaultFiles();
-    app.UseStaticFiles();
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        // Check with the server each time, so an upgrade can't leave old script running against a new API
+        OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache",
+    });
 
     app.UseHttpsRedirection();
     app.UseCors("AllowConfiguredOrigins");
@@ -436,10 +440,19 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
                 sp.GetRequiredService<ILogger<SqliteLogStorage>>())
         };
 
-        return configuration.GetValue<bool>("Encryption:Enabled")
-            ? new EncryptingLogStorage(backend, sp.GetRequiredService<EncryptionService>(), configuration.GetValue<bool>("Encryption:EncryptRawLine"))
-            : backend;
+        if (configuration.GetValue<bool>("Encryption:Enabled"))
+        {
+            backend = new EncryptingLogStorage(backend, sp.GetRequiredService<EncryptionService>(), configuration.GetValue<bool>("Encryption:EncryptRawLine"));
+        }
+
+        // Outermost, so that rules see what arrived rather than what was encrypted
+        return new Cabinet.API.Services.DetectingLogStorage(backend, sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
     });
+
+    services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
+    services.AddSingleton<Cabinet.API.Services.DetectionRuleStore>();
+    services.AddSingleton<Cabinet.API.Services.DetectionEngine>();
+    services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
 
     // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
     services.AddCabinetMetadataStorage(configuration);

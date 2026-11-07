@@ -391,6 +391,27 @@ Off by default. Accepts RFC 3164 and RFC 5424 over UDP, TCP and TLS, with newlin
 
 When storage falls behind or is down, TCP and TLS senders wait and messages wait in a queue of 10,000. UDP can't wait, so datagrams are dropped and a warning gives the count. Use TCP where losing messages matters.
 
+### Detection Rules
+
+Rules run on each event as it's ingested, by any route, and what they find goes to alert history and the alert channels. Manage them on the dashboard's Detections page, or at `/api/v1/rules` with the `Alerts` capability.
+
+`Detection:BuiltinRulesEnabled` turns all the built-in rules on by default. Otherwise turn on those you want with `POST /api/v1/rules/{id}/enable`.
+
+```bash
+curl -X POST http://localhost:5000/api/v1/rules -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{
+  "name": "Failed logins by address",
+  "severity": "Error",
+  "pattern": "login failed",
+  "extract": "from (?<src_ip>\\S+)",
+  "groupBy": "src_ip",
+  "threshold": 5,
+  "windowSeconds": 300,
+  "cooldownSeconds": 900
+}'
+```
+
+`POST /api/v1/rules/test` tries a rule's expressions on a line without saving anything. Windows use event time, so a backlog being replayed counts as it happened. If checking falls far behind, ingest slows rather than skipping events. Counts and cooldowns are per instance.
+
 ### Alert Channels
 
 Console and file channels are always registered. Scheduled searches send alerts through all channels.

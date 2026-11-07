@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Detection rules that run on every event at ingest, with thresholds, cooldowns and grouping, at `/api/v1/rules`. 20 built-in security rules, off until turned on.
+- OTLP logs at `POST /v1/logs`, in protobuf and JSON.
+- Alert history that's actually written, from detections and scheduled searches.
+- The dashboard draws line, stacked area and bar charts and single values, with hover, keyboard access and a data table. Dashboards have a panel editor, a grid and auto-refresh, and there's a Detections page.
+- Accessibility: real buttons for navigation, skip link, labelled controls, dialogs that trap focus and close on Escape, keyboard-usable tabs and rows, visible focus, reduced motion, and a phone layout.
 - SQLite backups through `/api/v1/backups`, with `--restore`, and a PostgreSQL drill that runs in CI.
 - Per-index retention, enforced hourly.
 - Field encryption with `Encryption:*`, and masking by role with `Masking:Rules`, on every read and in the raw line too.
@@ -39,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- `AlertEngine`, `IAlertAction`, `AlertRule` and `SendAlertWithRuleAsync`, which nothing used. Detections and scheduled searches share one path.
 - `ArchiveBeforeDelete` and `MaxSizeBytes` on retention policies, which did nothing.
 - Redis, along with `Distributed:*` settings, the `distributed` setup wizard mode and the Compose service. Nothing read from it. PostgreSQL now does leader election.
 - `SqliteRbacService`, and the `cabinet-rbac.db` file with it. Roles saved in it aren't carried over.
@@ -46,6 +52,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The dashboard no longer offers a development key by default, and keeps the key for the tab unless asked to remember it. Script moved out of the page, so the content security policy forbids inline script.
+- Dashboards listed zero panels, and the Alerts page's columns didn't match the API.
+- Cron: an update could save an invalid expression, a huge step could hang the scheduler, `1,5/2` wasn't understood, and an expression could run twice in a minute or miss one during a slow check. A slow search no longer delays others.
+- Scheduled searches counted at most 10,000 results.
+- Webhooks now retry on 429.
+- `/query/execute` returns `eventsScanned`.
 - Backups could copy a SQLite database mid-write. They now use SQLite's backup API, with an integrity check, and verification opens the database rather than only decompressing it.
 - `Backup:AutoBackupEnabled` on another backend crashed startup. It's now a warning.
 - A corrupt backup manifest was overwritten, losing older checksums.

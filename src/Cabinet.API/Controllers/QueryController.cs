@@ -95,6 +95,7 @@ public class QueryController : ControllerBase
                         Count = Math.Min(cached.Events.Count, 50_000),
                         ExecutionTimeMs = (int)cacheTime.TotalMilliseconds,
                         Timestamp = DateTime.UtcNow,
+                        EventsScanned = cached.Statistics?.EventsScanned ?? 0,
                         Truncated = cached.Statistics?.Truncated == true,
                         Approximate = cached.Statistics?.Approximate == true
                     });
@@ -149,6 +150,7 @@ public class QueryController : ControllerBase
                 Count = resultList.Count,
                 ExecutionTimeMs = (int)executionTime.TotalMilliseconds,
                 Timestamp = DateTime.UtcNow,
+                EventsScanned = result.Statistics?.EventsScanned ?? 0,
                 Truncated = truncated,
                 Approximate = result.Statistics?.Approximate == true
             });
@@ -839,6 +841,11 @@ public class QueryResponse
     public int Count { get; set; }
     public int ExecutionTimeMs { get; set; }
     public DateTime Timestamp { get; set; }
+
+    /// <summary>
+    /// How many events the query read.
+    /// </summary>
+    public long EventsScanned { get; set; }
 
     /// <summary>
     /// True when a stage needed more rows than a query can hold, so results may be incomplete.

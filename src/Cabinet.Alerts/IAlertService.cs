@@ -13,22 +13,6 @@ public interface IAlertService
     Task SendAlertAsync(Alert alert, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Send an alert with dedup and cooldown enforcement based on a rule.
-    /// Returns true if the alert was actually sent, false if suppressed.
-    /// </summary>
-    Task<bool> SendAlertWithRuleAsync(Alert alert, AlertRule rule, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Register an alert rule for dedup/throttle tracking
-    /// </summary>
-    void RegisterRule(AlertRule rule);
-
-    /// <summary>
-    /// Unregister an alert rule
-    /// </summary>
-    bool UnregisterRule(string ruleId);
-
-    /// <summary>
     /// Register an alert channel
     /// </summary>
     void RegisterChannel(IAlertChannel channel);

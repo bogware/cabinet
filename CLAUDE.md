@@ -95,6 +95,14 @@ Text → BqlLexer → BqlParser → AST → BqlOptimizer (predicate pushdown) �
 
 The optimizer pushes only the leading run of filters, and only predicates every backend evaluates exactly like the pipeline (search text, `severity >=`, `host =`, `source_type =`, time range, sort by time); everything else runs as pipeline stages. Don't push a predicate unless backends match pipeline semantics; `BqlEndToEndTests` runs the same queries on all four backends. Rows are `BqlRow`, a dictionary with case-insensitive field names and aliases, because stages (`eval`, `rename`, `rex`, `stats`) change the schema at runtime. `BqlQueryEngine` reads storage a page at a time with `QueryContext.After` and feeds a pipeline's leading row stages into its first stateful stage, an `IRowSink` (`BqlStreaming.cs`), so memory follows what's computed rather than events read. Stages that need all their rows hold up to `QueryLimits.MaxRowsInMemory` and set `Statistics.Truncated`. Every aggregate goes through `AggregateAccumulator`. Text search means one thing everywhere: `SearchTerms`.
 
+### Detection
+
+`DetectingLogStorage` is the outermost `ILogStorage`, so everything stored reaches `DetectionEngine` by any route. Rules are `DetectionRule`s: `BqlEventMatcher` evaluates them, built-in ones are in `BuiltinDetectionRules` (every one needs an attack line in `BuiltinDetectionRuleTests`), and every alert goes through `AlertDispatcher`, which saves history before sending.
+
+### Dashboard
+
+`wwwroot/index.html`, `app.js` and `charts.js`, with no build step. The policy forbids inline script, so handlers are `data-click="fn"` with optional `data-args`, not `onclick`. Anything from a log goes through `esc`. `charts.js` keeps its logic pure so that `DashboardTests` can run it in Jint.
+
 ### Identity & auth
 
 - Event IDs are **ULIDs** (time-ordered, 26-char Crockford Base32) — not GUIDs.

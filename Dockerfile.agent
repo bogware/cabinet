@@ -18,6 +18,8 @@ RUN groupadd -r cabinet && useradd -r -g cabinet -s /sbin/nologin cabinet
 
 COPY --from=build /app .
 
+# Base images lag behind security fixes, so pick them up when building
+RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/spool /app/data && chown -R cabinet:cabinet /app
 
 USER cabinet

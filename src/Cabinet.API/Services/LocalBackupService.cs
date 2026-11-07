@@ -125,13 +125,7 @@ public sealed class LocalBackupService
             var partial = $"{backupPath}.partial";
             try
             {
-                await using (var source = new SqliteConnection($"Data Source={_databasePath};Pooling=False"))
-                await using (var destination = new SqliteConnection($"Data Source={snapshot};Pooling=False"))
-                {
-                    await source.OpenAsync(cancellationToken);
-                    await destination.OpenAsync(cancellationToken);
-                    source.BackupDatabase(destination);
-                }
+                await CopyDatabaseAsync(snapshot, cancellationToken);
 
                 await CheckIntegrityAsync(snapshot, cancellationToken);
 
@@ -388,6 +382,33 @@ public sealed class LocalBackupService
         finally
         {
             DeleteIfExists(unpacked);
+        }
+    }
+
+    /// <summary>
+    /// A checkpoint or a write can hold the database for a moment, and the backup API reports that
+    /// rather than waiting, so try again before giving up.
+    /// </summary>
+    private async Task CopyDatabaseAsync(string destinationPath, CancellationToken cancellationToken)
+    {
+        const int SqliteBusy = 5;
+
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await using var source = new SqliteConnection($"Data Source={_databasePath};Pooling=False");
+                await using var destination = new SqliteConnection($"Data Source={destinationPath};Pooling=False");
+                await source.OpenAsync(cancellationToken);
+                await destination.OpenAsync(cancellationToken);
+                source.BackupDatabase(destination);
+                return;
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteBusy && attempt < 40)
+            {
+                _logger.LogDebug("The database is busy, so the backup will try again");
+                await Task.Delay(250, cancellationToken);
+            }
         }
     }
 

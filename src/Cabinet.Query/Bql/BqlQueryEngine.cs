@@ -457,7 +457,8 @@ public sealed class BqlQueryEngine : IQueryEngine
         return true;
     }
 
-    internal static BqlRow ConvertToExpando(LogEvent evt)
+    /// <summary>Builds a query row from an event.</summary>
+    public static BqlRow ConvertToExpando(LogEvent evt)
     {
         var expando = new BqlRow();
         var dict = (IDictionary<string, object?>)expando;

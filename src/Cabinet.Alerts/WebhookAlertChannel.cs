@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -84,8 +85,8 @@ public class WebhookAlertChannel : IAlertChannel
                     return; // Success — no retry needed
                 }
 
-                // Don't retry client errors (4xx) — only server errors (5xx) are retriable
-                if ((int)response.StatusCode < 500)
+                // Client errors won't change on a retry, except being told to slow down or wait
+                if ((int)response.StatusCode < 500 && response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.RequestTimeout))
                 {
                     _logger.LogWarning("Webhook returned non-retriable error. Status: {Status}, Reason: {Reason}",
                         response.StatusCode, response.ReasonPhrase);

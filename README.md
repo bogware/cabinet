@@ -4,7 +4,7 @@
 [![Build](https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg)](https://github.com/bogware/cabinet/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
-Cabinet is a self-hosted log search system built on .NET 10. It accepts logs over a REST API, the Splunk HTTP Event Collector (HEC) protocol, syslog and a forwarding agent, stores them in SQLite, PostgreSQL or OpenSearch, and searches them with a pipeline query language called BQL. It also has a web dashboard, saved queries, and scheduled searches that send alerts.
+Cabinet is a self-hosted log search system built on .NET 10. It accepts logs over a REST API, OpenTelemetry (OTLP/HTTP), the Splunk HTTP Event Collector (HEC) protocol, syslog and a forwarding agent, stores them in SQLite, PostgreSQL or OpenSearch, and searches them with a pipeline query language called BQL. It also has a web dashboard, saved queries, and scheduled searches that send alerts.
 
 Each deployment serves one organization and should run as a single API instance. Some of what the codebase contains is not finished; the [features table](#features) and [known limitations](#known-limitations) say which parts work today.
 
@@ -85,17 +85,18 @@ search error | sort -timestamp | head 10
 |---------|--------|-------|
 | REST ingest | Available | `POST /api/v1/logs/ingest`. Events go to index `main`. |
 | Splunk HEC ingest | Available | `/services/collector/event` and `/raw`. |
+| OpenTelemetry logs | Available | OTLP over HTTP at `/v1/logs`, in protobuf or JSON. Retried exports are stored once. |
 | Syslog listener | Working | RFC 3164 and RFC 5424 over UDP, TCP and TLS. Off by default, and Compose doesn't publish the port. |
 | Forwarding agent | Available | Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
 | Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
 | BQL query engine | Available | Every example in the guide runs as a test. Filters, `stats`, `timechart`, `chart`, `top`, `rare` and `sort | head` read every matching event without holding them in memory. Stages that need all their rows at once hold up to 100,000 and flag results as `truncated` beyond that. See [benchmarks](docs/BENCHMARKS.md). |
 | Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
-| Web dashboard | Available | Served from the API outside the Development environment. |
+| Web dashboard | Available | Search with charts, dashboards with a panel editor and auto-refresh, detections, and keyboard and screen reader support. Served from the API outside the Development environment. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
 | Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |
-| Scheduled searches | Available | Cron-based. Require an Enterprise-tier key. |
+| Scheduled searches | Available | Cron-based, run by one instance. Require an Enterprise-tier key. |
 | Alert channels | Available | Console, file, email, and webhook with generic, Slack, Discord, Teams and PagerDuty formats. |
-| Alert history API | Not implemented | `/api/v1/alerts` reads an in-memory store that nothing writes to, so it stays empty. |
+| Alert history | Available | `/api/v1/alerts`, kept in the metadata database, from both detections and scheduled searches. |
 | API key authentication | Available | `X-API-Key` header, with Basic, Professional, Enterprise and Admin tiers. |
 | Roles and capabilities per endpoint | Available | A test fails if an endpoint has no capability check. |
 | Per-index RBAC | Available | Grants limit a principal to some indexes for every read and write, including subsearches and search jobs. |
@@ -110,7 +111,7 @@ search error | sort -timestamp | head 10
 | Data models | Available | Pre-aggregated summaries for `tstats`. |
 | Field extractions | Partial | CRUD, shared by instances, but not applied to queries yet. |
 | Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers and on-demand moderation detection at `/api/v1/detection/*`. |
-| Security detection rules | Not implemented | Nothing runs at ingest. |
+| Security detection rules | Available | Rules run on every event at ingest, with thresholds and cooldowns. 20 built-in rules for SSH, sudo, Windows, web attacks and AWS, off until turned on, and you can add your own. |
 | Health and Prometheus metrics | Available | `/health`, `/health/ready`, `/health/live`, `/metrics`. |
 | AWS CloudWatch and CloudTrail | Available | CLI only (`cabinet aws`). |
 | Backup and restore | Available | Verified SQLite backups with `--restore`, and a PostgreSQL drill. Both run in CI. OpenSearch uses snapshots, which aren't drill-tested. |
@@ -125,6 +126,8 @@ search error | sort -timestamp | head 10
 
 ## Known limitations
 
+- **Detection thresholds count per instance.** With several instances, a rule's count and cooldown cover what each one received, so behind a load balancer a threshold can take longer to reach, and a rule can fire once per instance.
+- **The built-in detections are a starting point.** They're tested against sample lines of common formats, not against your traffic, so expect to tune them.
 - **Multiple instances need PostgreSQL.** With OpenSearch, set `Storage:MetadataPostgresConnectionString`. SQLite and in-memory storage serve one instance. The query cache is per instance.
 - **Aggregates read every event through the API process.** They aren't pushed down to the database yet, so `stats` over a billion events takes a long time. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - **Agent delivery has edge cases.** Lines are lost if a file is deleted before they're read, for example during a long agent outage. If the registry file is lost, files are read again from the start under new event IDs. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#agent-behaviour).

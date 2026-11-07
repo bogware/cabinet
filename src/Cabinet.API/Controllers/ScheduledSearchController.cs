@@ -127,30 +127,10 @@ public class ScheduledSearchController : ControllerBase
             return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
         }
 
-        // Validate cron expression syntax at creation time (not just at execution time)
-        var cronParts = request.CronExpression.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (cronParts.Length < 5)
-            return Problem(detail: "Invalid cron expression: must have 5 fields (minute hour day month weekday)", statusCode: 400);
-
-        // Validate each cron field has valid syntax (digits, *, -, /, ,) and ranges
-        var cronMaxValues = new[] { 59, 23, 31, 12, 6 }; // minute, hour, day, month, weekday
-        var cronMinValues = new[] { 0, 0, 1, 1, 0 };
-        for (var ci = 0; ci < 5; ci++)
+        // At creation, not when it would have run
+        if (ScheduledSearchService.ValidateCron(request.CronExpression) is { } cronError)
         {
-            var part = cronParts[ci];
-            if (!System.Text.RegularExpressions.Regex.IsMatch(part, @"^[\d\*\-/,]+$", System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1)))
-                return Problem(detail: $"Invalid cron expression: field '{part}' contains invalid characters", statusCode: 400);
-
-            // Check numeric values are in valid range for each field
-            if (part != "*")
-            {
-                var nums = part.Replace("*/", "").Split(new[] { ',', '-', '/' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (var num in nums)
-                {
-                    if (int.TryParse(num, out var val) && (val < cronMinValues[ci] || val > cronMaxValues[ci]))
-                        return Problem(detail: $"Invalid cron expression: value {val} out of range ({cronMinValues[ci]}-{cronMaxValues[ci]})", statusCode: 400);
-                }
-            }
+            return Problem(detail: $"Invalid cron expression: {cronError}", statusCode: 400);
         }
 
         var search = new ScheduledSearch
@@ -227,17 +207,9 @@ public class ScheduledSearchController : ControllerBase
         }
 
         // Validate cron expression if being updated
-        if (!string.IsNullOrWhiteSpace(request.CronExpression))
+        if (request.CronExpression != null && ScheduledSearchService.ValidateCron(request.CronExpression) is { } cronError)
         {
-            var cronParts = request.CronExpression.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (cronParts.Length < 5)
-                return Problem(detail: "Invalid cron expression: must have 5 fields (minute hour day month weekday)", statusCode: 400);
-
-            foreach (var part in cronParts.Take(5))
-            {
-                if (!System.Text.RegularExpressions.Regex.IsMatch(part, @"^[\d\*\-/,]+$", System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1)))
-                    return Problem(detail: $"Invalid cron expression: field '{part}' contains invalid characters", statusCode: 400);
-            }
+            return Problem(detail: $"Invalid cron expression: {cronError}", statusCode: 400);
         }
 
         if (request.Name != null) search.Name = request.Name;

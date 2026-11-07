@@ -19,7 +19,10 @@ public sealed class ScheduledSearchService : BackgroundService
     private readonly IScheduledSearchStorage _storage;
     private readonly ILogger<ScheduledSearchService> _logger;
     private readonly ILeaderLease _lease;
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(15);
+    private const int MaxConcurrentSearches = 4;
+    private const int MaxResults = QueryContext.MaxLimit;
+    private DateTime _lastCheckedMinute = DateTime.MinValue;
 
     public ScheduledSearchService(
         IServiceScopeFactory scopeFactory,
@@ -143,18 +146,30 @@ public sealed class ScheduledSearchService : BackgroundService
     private async Task CheckAndRunSearchesAsync(CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
+        var previous = _lastCheckedMinute == DateTime.MinValue ? null : (DateTime?)_lastCheckedMinute;
+        _lastCheckedMinute = new DateTime(now.Ticks - (now.Ticks % TimeSpan.TicksPerMinute), DateTimeKind.Utc);
 
-        foreach (var search in _searches.Values)
+        // Run together, so a slow search can't make the others miss their minute
+        using var slots = new SemaphoreSlim(MaxConcurrentSearches, MaxConcurrentSearches);
+        var running = new List<Task>();
+        foreach (var search in _searches.Values.Where(search => search.Enabled && ShouldRun(search, now, previous)))
         {
-            if (!search.Enabled)
-            {
-                continue;
-            }
+            await slots.WaitAsync(cancellationToken);
+            running.Add(RunReleasingAsync(search, now, slots, cancellationToken));
+        }
 
-            if (ShouldRun(search, now))
-            {
-                await RunSearchAsync(search, now, cancellationToken);
-            }
+        await Task.WhenAll(running);
+    }
+
+    private async Task RunReleasingAsync(ScheduledSearch search, DateTime now, SemaphoreSlim slots, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RunSearchAsync(search, now, cancellationToken);
+        }
+        finally
+        {
+            slots.Release();
         }
     }
 
@@ -170,7 +185,8 @@ public sealed class ScheduledSearchService : BackgroundService
             var context = new QueryExecutionContext
             {
                 Query = search.Query,
-                Limit = 10000
+                Limit = MaxResults,
+                Timeout = TimeSpan.FromMinutes(5)
             };
 
             // Apply time range from the search configuration
@@ -247,7 +263,7 @@ public sealed class ScheduledSearchService : BackgroundService
         // Fire alert
         try
         {
-            var alertService = serviceProvider.GetRequiredService<IAlertService>();
+            var dispatcher = serviceProvider.GetRequiredService<AlertDispatcher>();
             var alert = new Alert
             {
                 Severity = (AlertSeverity)alertAction.Severity,
@@ -266,7 +282,16 @@ public sealed class ScheduledSearchService : BackgroundService
                 }
             };
 
-            await alertService.SendAlertAsync(alert, cancellationToken);
+            await dispatcher.DispatchAsync(
+                alert,
+                new AlertRecord
+                {
+                    SearchName = search.Name,
+                    Query = search.Query,
+                    ResultCount = resultCount,
+                    Channel = "scheduled-search",
+                },
+                cancellationToken);
             alertAction.LastAlertAt = now;
 
             _logger.LogInformation(
@@ -305,20 +330,62 @@ public sealed class ScheduledSearchService : BackgroundService
     }
 
     /// <summary>
-    /// Determine if a scheduled search should run based on its cron expression.
-    /// Simple 5-field cron matcher: minute hour dom month dow.
-    /// Supports: numbers, *, ranges (1-5), and steps (star/N).
+    /// Whether a search is due: its cron expression matches a minute since the last check, and it
+    /// hasn't already run in that minute. Looking at every minute since the last check means a
+    /// slow check, or a change of leader, doesn't make a search miss its time.
     /// </summary>
-    internal static bool ShouldRun(ScheduledSearch search, DateTime now)
+    internal static bool ShouldRun(ScheduledSearch search, DateTime now, DateTime? lastCheckedMinute = null)
     {
-        // Don't run if it ran within the last 30 seconds
-        if (search.LastRunAt.HasValue &&
-            now - search.LastRunAt.Value < CheckInterval)
+        var minute = new DateTime(now.Ticks - (now.Ticks % TimeSpan.TicksPerMinute), DateTimeKind.Utc);
+        var alreadyRan = search.LastRunAt is { } lastRun && lastRun.Ticks / TimeSpan.TicksPerMinute >= minute.Ticks / TimeSpan.TicksPerMinute;
+        if (alreadyRan)
         {
             return false;
         }
 
-        return MatchesCron(search.CronExpression, now);
+        // Catch up on at most an hour, so a long outage doesn't look like a due search forever
+        var earliest = lastCheckedMinute is { } checkedAt && minute - checkedAt < TimeSpan.FromHours(1) ? checkedAt.AddMinutes(1) : minute;
+        if (search.LastRunAt is { } previousRun && previousRun > earliest)
+        {
+            earliest = new DateTime(previousRun.Ticks - (previousRun.Ticks % TimeSpan.TicksPerMinute), DateTimeKind.Utc).AddMinutes(1);
+        }
+
+        for (var candidate = earliest; candidate <= minute; candidate = candidate.AddMinutes(1))
+        {
+            if (MatchesCron(search.CronExpression, candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Why a cron expression isn't valid, or null if it is. Every value has to be in range for its
+    /// field, so one that could never match is an error when it's saved rather than silence later.
+    /// </summary>
+    internal static string? ValidateCron(string? cronExpression)
+    {
+        var parts = cronExpression?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts is not { Length: 5 })
+        {
+            return "A cron expression has 5 fields: minute hour day-of-month month day-of-week";
+        }
+
+        (string Name, int Min, int Max)[] fields = [("minute", 0, 59), ("hour", 0, 23), ("day-of-month", 1, 31), ("month", 1, 12), ("day-of-week", 0, 6)];
+        for (var i = 0; i < fields.Length; i++)
+        {
+            foreach (var segment in parts[i].Split(','))
+            {
+                if (ParseCronSegment(segment, fields[i].Min, fields[i].Max) == null)
+                {
+                    return $"'{segment}' isn't valid for {fields[i].Name}, which runs from {fields[i].Min} to {fields[i].Max}";
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -361,74 +428,55 @@ public sealed class ScheduledSearchService : BackgroundService
     }
 
     /// <summary>
-    /// Match a single cron field. Supports: *, N, N-M, star/N, N-M/S
+    /// Match a single cron field: a comma-separated list of *, N, N-M, each with an optional /S.
     /// </summary>
     private static bool MatchesCronField(string field, int value, int min, int max)
     {
-        if (field == "*")
+        foreach (var segment in field.Split(','))
         {
-            return true;
-        }
-
-        // Handle step: */N or N-M/S
-        var stepParts = field.Split('/');
-        if (stepParts.Length == 2 && int.TryParse(stepParts[1], out var step) && step > 0)
-        {
-            var rangePart = stepParts[0];
-            int rangeStart = min;
-            int rangeEnd = max;
-
-            if (rangePart != "*")
+            if (ParseCronSegment(segment, min, max) is var (start, end, step) && value >= start && value <= end && (value - start) % step == 0)
             {
-                var rangeBounds = rangePart.Split('-');
-                if (rangeBounds.Length == 2 &&
-                    int.TryParse(rangeBounds[0], out var rs) &&
-                    int.TryParse(rangeBounds[1], out var re))
-                {
-                    rangeStart = rs;
-                    rangeEnd = re;
-                }
-                else if (int.TryParse(rangePart, out var singleStart))
-                {
-                    rangeStart = singleStart;
-                }
-            }
-
-            for (var i = rangeStart; i <= rangeEnd; i += step)
-            {
-                if (i == value) return true;
-            }
-            return false;
-        }
-
-        // Handle comma-separated values
-        var segments = field.Split(',');
-        foreach (var segment in segments)
-        {
-            // Range: N-M
-            if (segment.Contains('-'))
-            {
-                var bounds = segment.Split('-');
-                if (bounds.Length == 2 &&
-                    int.TryParse(bounds[0], out var lower) &&
-                    int.TryParse(bounds[1], out var upper))
-                {
-                    if (value >= lower && value <= upper)
-                    {
-                        return true;
-                    }
-                }
-            }
-            else if (int.TryParse(segment, out var exact))
-            {
-                if (exact == value)
-                {
-                    return true;
-                }
+                return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>Reads *, N, N-M or any of them with /S. Null if it's malformed or out of range.</summary>
+    private static (int Start, int End, int Step)? ParseCronSegment(string segment, int min, int max)
+    {
+        var step = 1;
+        var slash = segment.IndexOf('/');
+        var range = slash < 0 ? segment : segment[..slash];
+        if (slash >= 0 && (!int.TryParse(segment[(slash + 1)..], out step) || step < 1))
+        {
+            return null;
+        }
+
+        int start, end;
+        if (range == "*")
+        {
+            (start, end) = (min, max);
+        }
+        else if (range.Split('-') is [var lower, var upper])
+        {
+            if (!int.TryParse(lower, out start) || !int.TryParse(upper, out end))
+            {
+                return null;
+            }
+        }
+        else if (int.TryParse(range, out start))
+        {
+            // N/S means from N to the end of the field
+            end = slash >= 0 ? max : start;
+        }
+        else
+        {
+            return null;
+        }
+
+        return start >= min && end <= max && start <= end ? (start, end, step) : null;
     }
 
     /// <summary>

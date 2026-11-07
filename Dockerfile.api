@@ -45,6 +45,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Create directories and set permissions for non-root user
+# Base images lag behind security fixes, so pick them up when building
+RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/logs /app/data && \
     chown -R $APP_UID:$APP_UID /app
 
