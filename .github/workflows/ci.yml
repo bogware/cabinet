@@ -44,6 +44,9 @@ jobs:
       run: docker compose config --quiet
       env:
         CABINET_API_KEY: ci-validation-only
+        CABINET_DB_PASSWORD: ci-validation-only
+        CABINET_REDIS_PASSWORD: ci-validation-only
+        CABINET_GRAFANA_PASSWORD: ci-validation-only
 
     - name: Restore dependencies
       run: dotnet restore
