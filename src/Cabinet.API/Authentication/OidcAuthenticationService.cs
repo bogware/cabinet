@@ -11,6 +11,11 @@ namespace Cabinet.API.Authentication;
 /// </summary>
 public sealed class ClaimRoleMapper
 {
+    private static readonly HashSet<string> ReservedClaims = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ClientId", PrincipalResolver.RoleClaim, PrincipalResolver.IndexPermissionClaim, "Permission", "Tier",
+    };
+
     private readonly ILogger<ClaimRoleMapper> _logger;
 
     public ClaimRoleMapper(ILogger<ClaimRoleMapper> logger)
@@ -23,6 +28,13 @@ public sealed class ClaimRoleMapper
     /// </summary>
     public void MapClaims(ClaimsIdentity identity, SsoConfiguration ssoConfig)
     {
+        // These decide who someone is and what they may do. Anything in the token by these
+        // names came from the identity provider, or from whoever controls a user attribute there.
+        foreach (var claim in identity.Claims.Where(claim => ReservedClaims.Contains(claim.Type)).ToList())
+        {
+            identity.RemoveClaim(claim);
+        }
+
         SystemRole? mappedRole = ssoConfig.AutoProvision ? ssoConfig.DefaultRole : null;
 
         foreach (var mapping in ssoConfig.RoleMappings)

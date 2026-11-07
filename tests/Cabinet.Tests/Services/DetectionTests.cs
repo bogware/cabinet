@@ -235,6 +235,15 @@ public sealed class BuiltinDetectionRuleTests
         { "log4shell", "198.51.100.1 - - \"GET / HTTP/1.1\" 200 1 \"-\" \"${jndi:ldap://203.0.113.9/a}\"", null },
         { "aws-console-failures", "{\"eventName\":\"ConsoleLogin\",\"responseElements\":{\"ConsoleLogin\":\"Failure\"},\"sourceIPAddress\":\"203.0.113.9\"}", "203.0.113.9" },
         { "aws-logging-disabled", "{\"eventName\":\"StopLogging\",\"eventSource\":\"cloudtrail.amazonaws.com\"}", null },
+        { "ssh-key-added", "Mar  4 05:06:07 web bash[99]: echo ssh-ed25519 AAAA >> /root/.ssh/authorized_keys", null },
+        { "shadow-access", "Mar  4 05:06:07 web bash[99]: cat /etc/shadow", null },
+        { "history-cleared", "Mar  4 05:06:07 web bash[99]: unset HISTFILE; history -c", null },
+        { "windows-admin-group-add", "2026-03-04T05:06:07Z EventID=4732 A member was added to a security-enabled local group. Group Name: Administrators", null },
+        { "windows-account-lockout", "2026-03-04T05:06:07Z EventID=4740 A user account was locked out host=dc1", "dc1" },
+        { "kerberoasting", "2026-03-04T05:06:07Z EventID=4769 A Kerberos service ticket was requested. Ticket Encryption Type: 0x17", null },
+        { "web-server-errors", "203.0.113.9 - - [04/Mar/2026:05:06:07 +0000] \"GET /api HTTP/1.1\" 503 12", null },
+        { "aws-root-usage", "{\"eventName\":\"ConsoleLogin\",\"userIdentity\":{\"type\":\"Root\",\"arn\":\"arn:aws:iam::1:root\"}}", null },
+        { "aws-access-key-created", "{\"eventName\":\"CreateAccessKey\",\"eventSource\":\"iam.amazonaws.com\"}", null },
     };
 
     /// <summary>Everyday lines that look a bit like attacks, which have to stay quiet.</summary>
@@ -257,6 +266,14 @@ public sealed class BuiltinDetectionRuleTests
         { "log4shell", "198.51.100.1 - - \"GET /docs/${version}/index HTTP/1.1\" 200 1" },
         { "aws-console-failures", "{\"eventName\":\"ConsoleLogin\",\"responseElements\":{\"ConsoleLogin\":\"Success\"},\"sourceIPAddress\":\"203.0.113.9\"}" },
         { "aws-logging-disabled", "{\"eventName\":\"StartLogging\",\"eventSource\":\"cloudtrail.amazonaws.com\"}" },
+        { "ssh-key-added", "Mar  4 05:06:07 web sshd[99]: Authentication refused: bad ownership for directory /root/.ssh" },
+        { "shadow-access", "Mar  4 05:06:07 web passwd[99]: password for bob changed; /etc/shadow updated" },
+        { "history-cleared", "Mar  4 05:06:07 web bash[99]: history | grep ssh" },
+        { "windows-admin-group-add", "2026-03-04T05:06:07Z EventID=4732 A member was added to a security-enabled local group. Group Name: Backup Operators" },
+        { "kerberoasting", "2026-03-04T05:06:07Z EventID=4769 A Kerberos service ticket was requested. Ticket Encryption Type: 0x12" },
+        { "web-server-errors", "203.0.113.9 - - [04/Mar/2026:05:06:07 +0000] \"GET /api HTTP/1.1\" 200 512" },
+        { "aws-root-usage", "{\"eventName\":\"ConsoleLogin\",\"userIdentity\":{\"type\":\"IAMUser\",\"userName\":\"root-admin\"}}" },
+        { "aws-access-key-created", "{\"eventName\":\"ListAccessKeys\",\"eventSource\":\"iam.amazonaws.com\"}" },
     };
 
     private static DetectionRule Rule(string id) => BuiltinDetectionRules.All.Single(rule => rule.Id == id);

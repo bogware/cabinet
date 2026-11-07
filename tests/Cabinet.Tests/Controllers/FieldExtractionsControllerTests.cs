@@ -143,7 +143,7 @@ public class FieldExtractionsControllerTests
         var updated = new FieldExtraction
         {
             Name = "Updated Name",
-            Pattern = @"\w+"
+            Pattern = @"(?<word>\w+)"
         };
 
         var result = await _controller.Update("ext-1", updated);

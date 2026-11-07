@@ -100,6 +100,13 @@ public sealed class BqlQueryEngine : IQueryEngine
         }
 
         var budget = new QueryBudget(_limits);
+
+        // Storage that can aggregate itself saves reading every event
+        if (await TryAggregateInStorageAsync(optimized, context, budget, sw, span, cancellationToken) is { } aggregated)
+        {
+            return aggregated;
+        }
+
         var plan = CreatePlan(optimized.RemainingStages, context.Limit, budget);
 
         // Read only until the first stateful stage has what it needs. It holds what it computes,
@@ -140,6 +147,157 @@ public sealed class BqlQueryEngine : IQueryEngine
                 Approximate = budget.Approximate
             }
         };
+    }
+
+    /// <summary>
+    /// Runs a leading <c>stats</c> or <c>timechart</c> in storage, if storage can give the same
+    /// answer. Returns null to run the query here instead.
+    /// </summary>
+    private async Task<QueryResult?> TryAggregateInStorageAsync(
+        OptimizedQuery optimized,
+        QueryExecutionContext context,
+        QueryBudget budget,
+        Stopwatch sw,
+        System.Diagnostics.Activity? span,
+        CancellationToken cancellationToken)
+    {
+        if (context.Mode == QueryMode.Direct || _storage is not IAggregatingLogStorage storage || optimized.RemainingStages.Count == 0)
+        {
+            return null;
+        }
+
+        var request = optimized.RemainingStages[0] switch
+        {
+            StatsStage stats => BuildAggregateRequest(optimized.StorageContext, stats.Aggregations, stats.GroupByFields, null),
+            TimechartStage timechart => BuildAggregateRequest(
+                optimized.StorageContext,
+                [new AggregateFunction(timechart.Aggregation, timechart.AggregationField)],
+                timechart.ByField == null ? [] : [timechart.ByField],
+                timechart.Span),
+            _ => null,
+        };
+
+        if (request == null)
+        {
+            return null;
+        }
+
+        var aggregate = await storage.AggregateAsync(request, cancellationToken);
+        if (aggregate == null)
+        {
+            return null;
+        }
+
+        budget.CheckGroupCount(aggregate.Rows.Count);
+        IEnumerable<dynamic> result = aggregate.Rows.Select(values =>
+        {
+            var row = new BqlRow();
+            foreach (var (key, value) in values)
+            {
+                row[key] = value;
+            }
+
+            return (dynamic)row;
+        }).ToList();
+
+        foreach (var stage in optimized.RemainingStages.Skip(1))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ConvertStageToOperator(stage, budget) is { } op)
+            {
+                result = await op.ExecuteAsync(result, cancellationToken);
+            }
+        }
+
+        var finalEvents = Cancellable(result, cancellationToken).Take(context.Limit).ToList();
+        sw.Stop();
+        span?.SetTag("cabinet.pushed_down", true);
+        span?.SetTag("cabinet.events_scanned", aggregate.EventsScanned);
+
+        return new QueryResult
+        {
+            Events = finalEvents,
+            Columns = finalEvents.Count > 0 ? ((IDictionary<string, object?>)finalEvents[0]).Keys.ToList() : null,
+            Statistics = new QueryStatistics
+            {
+                EventsScanned = aggregate.EventsScanned,
+                EventsMatched = finalEvents.Count,
+                ExecutionTime = sw.Elapsed,
+                Truncated = budget.Truncated,
+                Approximate = budget.Approximate || aggregate.Approximate,
+            },
+        };
+    }
+
+    private AggregateRequest? BuildAggregateRequest(
+        QueryContext filter,
+        IReadOnlyList<AggregateFunction> functions,
+        IReadOnlyList<string> groupBy,
+        TimeSpan? bucket)
+    {
+        var specs = new List<AggregateSpec>();
+        foreach (var function in functions)
+        {
+            if (ToAggregateSpec(function) is not { } spec)
+            {
+                return null;
+            }
+
+            specs.Add(spec);
+        }
+
+        var unbounded = filter.Clone();
+        unbounded.Limit = QueryContext.MaxLimit;
+        return new AggregateRequest
+        {
+            Filter = unbounded,
+            GroupBy = groupBy,
+            Bucket = bucket,
+            Aggregates = specs,
+            MaxGroups = _limits.MaxGroups,
+        };
+    }
+
+    /// <summary>The storage form of an aggregate, or null for one storage isn't asked to do.</summary>
+    internal static AggregateSpec? ToAggregateSpec(AggregateFunction function)
+    {
+        var name = function.Name.ToLowerInvariant();
+        double percentile = 0;
+        AggregateKind? kind = name switch
+        {
+            "count" => AggregateKind.Count,
+            "dc" or "distinct_count" => AggregateKind.DistinctCount,
+            "sum" => AggregateKind.Sum,
+            "avg" or "mean" => AggregateKind.Average,
+            "min" => AggregateKind.Min,
+            "max" => AggregateKind.Max,
+            "stdev" => AggregateKind.SampleDeviation,
+            "stdevp" => AggregateKind.PopulationDeviation,
+            "variance" => AggregateKind.SampleVariance,
+            "varp" => AggregateKind.PopulationVariance,
+            _ => null,
+        };
+
+        if (name == "median")
+        {
+            (kind, percentile) = (AggregateKind.Percentile, 50);
+        }
+        else if (name == "percentile")
+        {
+            (kind, percentile) = (AggregateKind.Percentile, 95);
+        }
+        else if ((name.StartsWith("perc", StringComparison.Ordinal) && double.TryParse(name[4..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var perc))
+            || (name.Length > 1 && name[0] == 'p' && char.IsDigit(name[1]) && double.TryParse(name[1..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out perc)))
+        {
+            (kind, percentile) = (AggregateKind.Percentile, Math.Clamp(perc, 0, 100));
+        }
+
+        if (kind == null || (kind != AggregateKind.Count && function.Field == null))
+        {
+            return null;
+        }
+
+        return new AggregateSpec(kind.Value, function.Field, percentile, function.OutputName);
     }
 
     /// <summary>

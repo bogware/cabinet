@@ -9,6 +9,11 @@ public sealed class EncryptionService : IDisposable
     private readonly EncryptionConfiguration _config;
     private readonly ILogger<EncryptionService> _logger;
     private byte[]? _key;
+    private string _keyId = string.Empty;
+
+    // Every key that may have encrypted stored data, by ID, the current one included
+    private readonly Dictionary<string, byte[]> _keys = new(StringComparer.Ordinal);
+    private const string VersionedPrefix = "enc:v2:";
     private volatile bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -43,6 +48,13 @@ public sealed class EncryptionService : IDisposable
                     "Use Local or Environment for built-in support.")
             };
 
+            _keyId = KeyId(_key);
+            _keys[_keyId] = _key;
+            foreach (var previous in LoadPreviousKeys())
+            {
+                _keys.TryAdd(KeyId(previous), previous);
+            }
+
             _initialized = true;
             _logger.LogInformation("Encryption service initialized with {Provider} key provider", _config.KeyProvider);
         }
@@ -73,7 +85,42 @@ public sealed class EncryptionService : IDisposable
         Buffer.BlockCopy(ciphertext, 0, combined, NonceSize, ciphertext.Length);
         Buffer.BlockCopy(tag, 0, combined, NonceSize + ciphertext.Length, TagSize);
 
-        return EncryptedPrefix + Convert.ToBase64String(combined);
+        // Names the key, so that data stays readable after the current key changes
+        return $"{VersionedPrefix}{_keyId}:{Convert.ToBase64String(combined)}";
+    }
+
+    /// <summary>The ID of the key new data is encrypted with.</summary>
+    public string CurrentKeyId
+    {
+        get
+        {
+            EnsureInitialized();
+            return _keyId;
+        }
+    }
+
+    /// <summary>A short public ID for a key, from its hash.</summary>
+    private static string KeyId(byte[] key) => Convert.ToHexString(SHA256.HashData(key))[..12].ToLowerInvariant();
+
+    /// <summary>Keys from before a rotation, still needed to read what they encrypted.</summary>
+    private IEnumerable<byte[]> LoadPreviousKeys()
+    {
+        foreach (var path in _config.PreviousKeyFilePaths)
+        {
+            var key = File.ReadAllBytes(path);
+            if (key.Length != KeySize)
+                throw new InvalidOperationException($"Previous key file '{path}' has invalid size ({key.Length} bytes, expected {KeySize})");
+            yield return key;
+        }
+
+        var environment = Environment.GetEnvironmentVariable("CABINET_ENCRYPTION_PREVIOUS_KEYS");
+        foreach (var encoded in (environment ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var key = Convert.FromBase64String(encoded);
+            if (key.Length != KeySize)
+                throw new InvalidOperationException($"A key in CABINET_ENCRYPTION_PREVIOUS_KEYS has invalid size ({key.Length} bytes, expected {KeySize})");
+            yield return key;
+        }
     }
 
     /// <summary>Decrypt an encrypted string produced by Encrypt()</summary>
@@ -84,7 +131,24 @@ public sealed class EncryptionService : IDisposable
         if (!encrypted.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
             throw new ArgumentException("Value is not encrypted (missing 'enc:' prefix)");
 
-        var combined = Convert.FromBase64String(encrypted[EncryptedPrefix.Length..]);
+        byte[] key;
+        byte[] combined;
+        if (encrypted.StartsWith(VersionedPrefix, StringComparison.Ordinal))
+        {
+            var separator = encrypted.IndexOf(':', VersionedPrefix.Length);
+            if (separator < 0)
+                throw new ArgumentException("Encrypted value has no key ID");
+            var keyId = encrypted[VersionedPrefix.Length..separator];
+            if (!_keys.TryGetValue(keyId, out key!))
+                throw new CryptographicException($"Encrypted with key {keyId}, which isn't configured. Add it to Encryption:PreviousKeyFilePaths or CABINET_ENCRYPTION_PREVIOUS_KEYS.");
+            combined = Convert.FromBase64String(encrypted[(separator + 1)..]);
+        }
+        else
+        {
+            // From before keys had IDs: it can only have been the key in use then
+            combined = Convert.FromBase64String(encrypted[EncryptedPrefix.Length..]);
+            key = TryLegacyKey(combined);
+        }
 
         if (combined.Length < NonceSize + TagSize)
             throw new ArgumentException("Encrypted data is too short");
@@ -100,10 +164,35 @@ public sealed class EncryptionService : IDisposable
 
         var plaintext = new byte[ciphertextLength];
 
-        using var aes = new AesGcm(_key!, TagSize);
+        using var aes = new AesGcm(key, TagSize);
         aes.Decrypt(nonce, ciphertext, tag, plaintext);
 
         return System.Text.Encoding.UTF8.GetString(plaintext);
+    }
+
+    /// <summary>Finds which configured key encrypted a value written before keys had IDs.</summary>
+    private byte[] TryLegacyKey(byte[] combined)
+    {
+        if (combined.Length < NonceSize + TagSize)
+            return _key!;
+
+        var length = combined.Length - NonceSize - TagSize;
+        foreach (var candidate in _keys.Values)
+        {
+            try
+            {
+                using var aes = new AesGcm(candidate, TagSize);
+                aes.Decrypt(combined.AsSpan(0, NonceSize), combined.AsSpan(NonceSize, length), combined.AsSpan(NonceSize + length, TagSize), new byte[length]);
+                return candidate;
+            }
+            catch (CryptographicException)
+            {
+                // Not this key; the tag check says so
+                continue;
+            }
+        }
+
+        return _key!;
     }
 
     /// <summary>Check if a field should be encrypted based on configuration</summary>
@@ -126,11 +215,13 @@ public sealed class EncryptionService : IDisposable
 
     public void Dispose()
     {
-        if (_key != null)
+        foreach (var key in _keys.Values)
         {
-            CryptographicOperations.ZeroMemory(_key);
-            _key = null;
+            CryptographicOperations.ZeroMemory(key);
         }
+
+        _keys.Clear();
+        _key = null;
         _initLock.Dispose();
     }
 

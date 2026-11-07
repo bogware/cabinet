@@ -16,6 +16,9 @@ services:
       - ApiKeys__Keys__0__Key=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
       - ApiKeys__Keys__0__Tier=Admin
       - ApiKeys__Keys__0__Name=Docker Admin Client
+      - ApiKeys__Keys__1__Key=${CABINET_AGENT_API_KEY:?Set CABINET_AGENT_API_KEY, an ingest-only key for the agent}
+      - ApiKeys__Keys__1__Tier=Ingest
+      - ApiKeys__Keys__1__Name=Docker Agent
     volumes:
       - cabinet-data:/app/data
       - cabinet-logs:/app/logs
@@ -63,7 +66,7 @@ services:
       - Agent__Inputs__0__Paths__0=/var/log/host/*.log
       - Agent__Inputs__0__Paths__1=/var/log/host/*.txt
       - Agent__Output__ServerUrl=http://cabinet-api:8080
-      - Agent__Output__ApiKey=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
+      - Agent__Output__ApiKey=${CABINET_AGENT_API_KEY:?Set CABINET_AGENT_API_KEY, an ingest-only key for the agent}
       - Agent__Output__VerifySsl=false
       - Agent__Registry__Path=/app/data/registry.json
       - Agent__Output__SpillDirectory=/app/data/spool

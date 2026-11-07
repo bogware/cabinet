@@ -25,6 +25,9 @@ concurrency:
 jobs:
   build-and-test:
     name: Build & Test
+    # A pull request from a fork runs code anyone wrote, and self-hosted runners keep state
+    # between jobs and can reach Docker. Those wait for GitHub-hosted runners (docs/CI.md).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64]
     services:
       postgres:
@@ -77,6 +80,7 @@ jobs:
       run: docker compose config --quiet
       env:
         CABINET_API_KEY: ci-validation-only
+        CABINET_AGENT_API_KEY: ci-validation-only-agent
         CABINET_DB_PASSWORD: ci-validation-only
         CABINET_GRAFANA_PASSWORD: ci-validation-only
 

@@ -10,9 +10,12 @@ public static class RateLimitingExtensions
 {
     private static IConfiguration? _configuration;
 
-    /// <summary>Requests a minute for a tier, from <c>RateLimiting:Tiers:Name</c>.</summary>
-    private static int TierLimit(string tier, int defaultLimit) =>
-        _configuration?.GetValue($"RateLimiting:Tiers:{tier}", defaultLimit) ?? defaultLimit;
+    /// <summary>
+    /// Requests a minute for a tier, from <c>RateLimiting:Tiers:Name</c>, divided between the
+    /// instances running so that the limit holds for the whole cluster.
+    /// </summary>
+    private static int TierLimit(string tier, int defaultLimit, int instances) =>
+        Math.Max(1, (_configuration?.GetValue($"RateLimiting:Tiers:{tier}", defaultLimit) ?? defaultLimit) / Math.Max(1, instances));
 
     public static IServiceCollection AddCabinetRateLimiting(this IServiceCollection services, IConfiguration? configuration = null)
     {
@@ -29,7 +32,9 @@ public static class RateLimitingExtensions
                     return GetAnonymousLimiter($"ip:{context.Connection.RemoteIpAddress}");
                 }
 
-                return GetRateLimiter(context.User?.FindFirst("Tier")?.Value ?? "Basic", clientId);
+                // A new partition when the instance count changes, so limits follow it
+                var instances = context.RequestServices.GetService<Cabinet.Core.Interfaces.IClusterCoordinator>()?.LiveInstances ?? 1;
+                return GetRateLimiter(context.User?.FindFirst("Tier")?.Value ?? "Basic", $"{clientId}|{instances}", instances);
             });
 
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -66,7 +71,7 @@ public static class RateLimitingExtensions
                 QueueLimit = 0
             });
 
-    private static RateLimitPartition<string> GetRateLimiter(string tier, string apiKey)
+    private static RateLimitPartition<string> GetRateLimiter(string tier, string apiKey, int instances)
     {
         return tier.ToUpper() switch
         {
@@ -74,11 +79,11 @@ public static class RateLimitingExtensions
                 apiKey,
                 _ => new TokenBucketRateLimiterOptions
                 {
-                    TokenLimit = TierLimit("Enterprise", 10000),
+                    TokenLimit = TierLimit("Enterprise", 10000, instances),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 100,
                     ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-                    TokensPerPeriod = TierLimit("Enterprise", 10000),
+                    TokensPerPeriod = TierLimit("Enterprise", 10000, instances),
                     AutoReplenishment = true
                 }),
 
@@ -86,11 +91,11 @@ public static class RateLimitingExtensions
                 apiKey,
                 _ => new TokenBucketRateLimiterOptions
                 {
-                    TokenLimit = TierLimit("Professional", 1000),
+                    TokenLimit = TierLimit("Professional", 1000, instances),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 50,
                     ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-                    TokensPerPeriod = TierLimit("Professional", 1000),
+                    TokensPerPeriod = TierLimit("Professional", 1000, instances),
                     AutoReplenishment = true
                 }),
 
@@ -98,7 +103,7 @@ public static class RateLimitingExtensions
                 apiKey,
                 _ => new SlidingWindowRateLimiterOptions
                 {
-                    PermitLimit = 100,
+                    PermitLimit = TierLimit("Basic", 100, instances),
                     Window = TimeSpan.FromMinutes(1),
                     SegmentsPerWindow = 6,
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,

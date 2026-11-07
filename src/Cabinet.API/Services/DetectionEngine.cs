@@ -31,7 +31,10 @@ public sealed class AlertDispatcher
     public async Task DispatchAsync(Alert alert, AlertRecord record, CancellationToken cancellationToken = default)
     {
         record.Severity = alert.Severity.ToString();
-        record.Message = alert.Message;
+
+        // History keeps no log content: it isn't encrypted or masked as events are, and its
+        // readers may not be allowed that index. The event ID leads to the line.
+        record.Message ??= alert.Message;
         record.FiredAt = alert.Timestamp;
         await _history.SaveAlertAsync(record);
 
@@ -138,7 +141,6 @@ public sealed class DetectionRuleStore
 /// </summary>
 public sealed class DetectionEngine : BackgroundService
 {
-    private const int MaxGroupsPerRule = 100_000;
     private const int MaxRecentEventIds = 200_000;
     private const int MaxRegexTimeouts = 100;
 
@@ -147,6 +149,7 @@ public sealed class DetectionEngine : BackgroundService
     private readonly DetectionRuleStore _rules;
     private readonly AlertDispatcher _dispatcher;
     private readonly ILogger<DetectionEngine> _logger;
+    private readonly IClusterCoordinator _coordinator;
     private readonly Channel<IReadOnlyList<LogEvent>> _pending = Channel.CreateBounded<IReadOnlyList<LogEvent>>(
         new BoundedChannelOptions(1000) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
     private readonly HashSet<string> _recentIds = new();
@@ -156,11 +159,12 @@ public sealed class DetectionEngine : BackgroundService
     private long _pendingBatches;
     private long _processedBatches;
 
-    public DetectionEngine(DetectionRuleStore rules, AlertDispatcher dispatcher, ILogger<DetectionEngine> logger)
+    public DetectionEngine(DetectionRuleStore rules, AlertDispatcher dispatcher, ILogger<DetectionEngine> logger, IClusterCoordinator? coordinator = null)
     {
         _rules = rules;
         _dispatcher = dispatcher;
         _logger = logger;
+        _coordinator = coordinator ?? new InMemoryClusterCoordinator();
     }
 
     /// <summary>
@@ -281,29 +285,23 @@ public sealed class DetectionEngine : BackgroundService
             groupValue = text;
         }
 
-        var state = compiled.GroupFor(groupValue);
+        // Counted where every instance can see it, so a threshold covers events however they
+        // were spread across instances, and only one instance fires
         var window = TimeSpan.FromSeconds(rule.WindowSeconds);
-        state.Matches.Enqueue(logEvent.Timestamp);
-        while (state.Matches.TryPeek(out var oldest) && logEvent.Timestamp - oldest > window)
-        {
-            state.Matches.Dequeue();
-        }
-
-        if (state.Matches.Count < rule.Threshold)
+        var count = rule.Threshold <= 1
+            ? 1
+            : await _coordinator.RecordMatchAsync(rule.Id, groupValue, logEvent.Id, logEvent.Timestamp, logEvent.Timestamp - window, cancellationToken);
+        if (count < rule.Threshold)
         {
             return;
         }
 
-        var now = DateTime.UtcNow;
-        if (state.LastFiredAt is { } last && now - last < TimeSpan.FromSeconds(rule.CooldownSeconds))
+        if (!await _coordinator.TryFireAsync(rule.Id, groupValue, TimeSpan.FromSeconds(rule.CooldownSeconds), cancellationToken))
         {
             return;
         }
 
-        state.LastFiredAt = now;
-        var count = state.Matches.Count;
-        state.Matches.Clear();
-        await FireAsync(rule, groupValue, count, logEvent, cancellationToken);
+        await FireAsync(rule, groupValue, (int)Math.Min(count, int.MaxValue), logEvent, cancellationToken);
     }
 
     private Task FireAsync(DetectionRule rule, string groupValue, int count, LogEvent logEvent, CancellationToken cancellationToken)
@@ -337,12 +335,16 @@ public sealed class DetectionEngine : BackgroundService
             alert,
             new AlertRecord
             {
+                Message = rule.Threshold > 1
+                    ? $"{count} matching events within {rule.WindowSeconds} seconds{subject}."
+                    : $"Matched{subject}. See event {logEvent.Id} in index {logEvent.Index}.",
                 SearchName = rule.Name,
                 Query = rule.Condition ?? rule.Pattern ?? string.Empty,
                 ResultCount = count,
                 Channel = "detection",
                 RuleId = rule.Id,
                 EventId = logEvent.Id,
+                Index = logEvent.Index,
                 GroupValue = groupValue,
                 Technique = rule.Technique,
             },
@@ -357,7 +359,6 @@ public sealed class DetectionEngine : BackgroundService
         }
 
         _rulesLoadedAt = DateTime.UtcNow;
-        var previous = _compiled.ToDictionary(rule => rule.Rule.Id);
         var compiled = new List<CompiledRule>();
         foreach (var rule in (await _rules.ListAsync(cancellationToken)).Where(rule => rule.Enabled))
         {
@@ -365,8 +366,7 @@ public sealed class DetectionEngine : BackgroundService
             {
                 var matcher = new BqlEventMatcher(rule.Pattern, rule.Condition, rule.Extract);
 
-                // Keep counts across a reload, or a threshold could never be reached
-                compiled.Add(new CompiledRule(rule, matcher, previous.TryGetValue(rule.Id, out var old) ? old.Groups : new()));
+                compiled.Add(new CompiledRule(rule, matcher));
             }
             catch (QueryParseException ex)
             {
@@ -377,34 +377,11 @@ public sealed class DetectionEngine : BackgroundService
         _compiled = compiled;
     }
 
-    private sealed class GroupState
-    {
-        public Queue<DateTime> Matches { get; } = new();
-        public DateTime? LastFiredAt { get; set; }
-    }
-
-    private sealed record CompiledRule(DetectionRule Rule, BqlEventMatcher Matcher, Dictionary<string, GroupState> Groups)
-    {
-        public GroupState GroupFor(string value)
-        {
-            if (!Groups.TryGetValue(value, out var state))
-            {
-                if (Groups.Count >= MaxGroupsPerRule)
-                {
-                    Groups.Clear();
-                }
-
-                state = new GroupState();
-                Groups[value] = state;
-            }
-
-            return state;
-        }
-    }
+    private sealed record CompiledRule(DetectionRule Rule, BqlEventMatcher Matcher);
 }
 
 /// <summary>Hands everything stored to the detection engine, whichever route it arrived by.</summary>
-public sealed class DetectingLogStorage : ILogStorage
+public sealed class DetectingLogStorage : ILogStorage, IAggregatingLogStorage
 {
     private readonly ILogStorage _inner;
     private readonly DetectionEngine _engine;
@@ -455,4 +432,8 @@ public sealed class DetectingLogStorage : ILogStorage
 
     /// <inheritdoc />
     public Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default) => _inner.GetStatsAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default) =>
+        _inner is IAggregatingLogStorage aggregating ? aggregating.AggregateAsync(request, cancellationToken) : Task.FromResult<AggregateResult?>(null);
 }

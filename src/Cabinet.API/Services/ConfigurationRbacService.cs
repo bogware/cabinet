@@ -33,6 +33,12 @@ public sealed class ConfigurationRbacService : IRbacService
             Role = role,
         };
 
+        // For agents and senders, which shouldn't be able to read what everyone sends
+        if (keyInfo.Tier.Equals("Ingest", StringComparison.OrdinalIgnoreCase))
+        {
+            principal.IndexPermissions = [new IndexPermission { IndexPattern = "*", Capabilities = Capability.Ingest }];
+        }
+
         return principal;
     }
 

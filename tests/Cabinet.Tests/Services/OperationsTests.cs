@@ -339,6 +339,49 @@ public sealed class AuditChainTests
     }
 
     [Fact]
+    public async Task KeyedChain_RewrittenWithoutTheKey_IsDetected()
+    {
+        const string key = "a-key-of-at-least-thirty-two-characters";
+        var logger = new TamperEvidentAuditLogger(Mock.Of<IAuditLogger>(), _documents, NullLogger<TamperEvidentAuditLogger>.Instance, key);
+        for (var i = 0; i < 3; i++)
+        {
+            await logger.LogAsync(Event($"event {i}"));
+        }
+
+        (await logger.VerifyAsync()).Valid.Should().BeTrue();
+        var chain = (await _documents.ListAsync<AuditChainInfo>("audit-chains")).Single();
+        var collection = $"audit-records-{chain.Id}";
+
+        // Someone with database access changes a record and recomputes every hash after it,
+        // which is all an unkeyed chain needs
+        var previous = TamperEvidentAuditLogger.Genesis;
+        foreach (var record in (await _documents.ListAsync<AuditRecord>(collection)).OrderBy(record => record.Sequence))
+        {
+            record.Event.Description = "nothing to see";
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(previous + "|" + JsonSerializer.Serialize(record.Event)))).ToLowerInvariant();
+            await _documents.PutAsync(collection, record.Sequence.ToString("D18"), new AuditRecord { Sequence = record.Sequence, PreviousHash = previous, Hash = hash, Event = record.Event });
+            previous = hash;
+        }
+
+        chain.HeadHash = previous;
+        await _documents.PutAsync("audit-chains", chain.Id, chain);
+
+        (await logger.VerifyAsync()).Problems.Should().Contain(problem => problem.Contains("was changed"));
+    }
+
+    [Fact]
+    public async Task KeyedChain_UnderAnotherKey_IsReported()
+    {
+        var writer = new TamperEvidentAuditLogger(Mock.Of<IAuditLogger>(), _documents, NullLogger<TamperEvidentAuditLogger>.Instance, new string('a', 32));
+        await writer.LogAsync(Event("x"));
+        (await writer.VerifyAsync()).Valid.Should().BeTrue();
+
+        var reader = new TamperEvidentAuditLogger(Mock.Of<IAuditLogger>(), _documents, NullLogger<TamperEvidentAuditLogger>.Instance, new string('b', 32));
+
+        (await reader.VerifyAsync()).Problems.Should().Contain(problem => problem.Contains("isn't the configured"));
+    }
+
+    [Fact]
     public async Task RemovingFromTheMiddle_IsDetected()
     {
         var (logger, chain) = await WriteAsync(5);

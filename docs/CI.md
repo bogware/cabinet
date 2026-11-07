@@ -10,10 +10,16 @@ All jobs run on `[self-hosted, Linux, X64]` while this repository is private. On
 
 Release, package and image jobs run only on tags or `main`.
 
+Pull requests from forks don't run at all: `build-and-test` runs for a pull request only when its
+branch is in this repository, and every other job needs it. Self-hosted runners keep state between
+jobs and can reach Docker, so code from a fork must never reach them.
+
 ## What enforces this
 
 Beyond the repository being private:
 
+- **Fork pull requests are skipped** by the `if:` on `build-and-test`. A pull request can edit that
+  condition, so approval below is the backstop.
 - **Fork pull requests need approval.** The organization requires a maintainer to approve workflow
   runs from all external contributors (`all_external_contributors`). Read the diff, including
   anything under `.github/`, before approving.
@@ -45,7 +51,8 @@ updating Trivy also means updating both entries in that list.
 Do these in order:
 
 1. Run pull requests on GitHub-hosted runners, as the organization's public repositories do:
-   `runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}`.
+   `runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}`,
+   and remove the fork condition on `build-and-test` so outside contributions get tested.
    Pull requests from forks must never reach a shared self-hosted runner. That expression is only a
    default, since a pull request can edit it, so fork approval below is what enforces this.
 2. Enable branch protection on `main`, which requires a public repository on the current plan:

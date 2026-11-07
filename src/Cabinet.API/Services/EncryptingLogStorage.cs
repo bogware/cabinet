@@ -11,7 +11,7 @@ namespace Cabinet.API.Services;
 /// still be stored. Searching storage for an encrypted value finds nothing, which is the point,
 /// but a filter in the query pipeline still works, since it sees decrypted events.
 /// </summary>
-public sealed class EncryptingLogStorage : ILogStorage
+public sealed class EncryptingLogStorage : ILogStorage, IAggregatingLogStorage
 {
     private const string PlaceholderPrefix = "[encrypted:";
 
@@ -79,6 +79,16 @@ public sealed class EncryptingLogStorage : ILogStorage
 
     /// <inheritdoc />
     public Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default) => _inner.GetStatsAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
+    {
+        // Storage only holds ciphertext for these, which it can't group or add up
+        var fields = request.GroupBy.Concat(request.Aggregates.Select(spec => spec.Field).OfType<string>());
+        return _inner is IAggregatingLogStorage aggregating && !fields.Any(_encryption.ShouldEncryptField)
+            ? aggregating.AggregateAsync(request, cancellationToken)
+            : Task.FromResult<AggregateResult?>(null);
+    }
 
     private LogEvent Encrypt(LogEvent logEvent)
     {

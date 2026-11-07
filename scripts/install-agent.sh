@@ -146,6 +146,8 @@ if [[ ! -f "$INSTALL_DIR/appsettings.json" ]]; then
   }
 }
 EOF
+    # It holds the API key
+    chmod 600 "$INSTALL_DIR/appsettings.json"
 
     echo "Configuration written to $INSTALL_DIR/appsettings.json"
 fi

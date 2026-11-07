@@ -58,6 +58,7 @@ public class DataModelController : ControllerBase
 
     /// <summary>Register a new data model for acceleration</summary>
     [HttpPost]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [RequireCapability(Capability.IndexManagement)]
     [Authorize(Policy = "RequireWritePermission")]
     [ProducesResponseType(typeof(DataModelResponse), StatusCodes.Status201Created)]
@@ -111,6 +112,7 @@ public class DataModelController : ControllerBase
 
     /// <summary>Delete a data model</summary>
     [HttpDelete("{id}")]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [RequireCapability(Capability.IndexManagement)]
     [Authorize(Policy = "RequireWritePermission")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -128,6 +130,7 @@ public class DataModelController : ControllerBase
     /// Returns results from summary tables rather than scanning raw events.
     /// </summary>
     [HttpPost("{id}/tstats")]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Search)]
     [ProducesResponseType(typeof(TstatsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

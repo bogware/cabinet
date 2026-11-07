@@ -30,6 +30,16 @@ public class ApiKeyService : IApiKeyService
             var key = keyConfig["Key"];
             var tier = keyConfig["Tier"] ?? "Basic";
             var name = keyConfig["Name"] ?? "Unknown Client";
+            DateTime? expiresAt = null;
+            if (keyConfig["ExpiresAt"] is { Length: > 0 } expiry)
+            {
+                if (!DateTime.TryParse(expiry, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
+                {
+                    throw new InvalidOperationException($"ApiKeys:Keys: ExpiresAt '{expiry}' for '{name}' isn't a date");
+                }
+
+                expiresAt = parsed;
+            }
 
             if (string.IsNullOrWhiteSpace(key))
             {
@@ -48,7 +58,7 @@ public class ApiKeyService : IApiKeyService
                 Permissions = GetDefaultPermissions(tier),
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow,
-                ExpiresAt = null
+                ExpiresAt = expiresAt
             };
         }
 
@@ -165,6 +175,7 @@ public class ApiKeyService : IApiKeyService
         {
             "ADMIN" or "ENTERPRISE" => new List<string> { "Read", "Write", "Delete", "Admin" },
             "PROFESSIONAL" => new List<string> { "Read", "Write" },
+            "INGEST" => new List<string> { "Write" },
             "BASIC" => new List<string> { "Read" },
             _ => new List<string> { "Read" }
         };

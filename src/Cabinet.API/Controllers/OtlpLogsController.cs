@@ -19,11 +19,12 @@ namespace Cabinet.API.Controllers;
 /// ID comes from its content.
 /// </summary>
 [ApiController]
-[Route("v1/logs")]
+[Route("v1")]
 [Authorize]
 public class OtlpLogsController : ControllerBase
 {
-    private const long MaxDecompressedBytes = 256 * 1024 * 1024;
+    // A compressed body can expand a lot. Real exports are a few megabytes.
+    private const long MaxDecompressedBytes = 64 * 1024 * 1024;
 
     private readonly ILogStorage _storage;
     private readonly LogLineParser _lineParser;
@@ -40,14 +41,46 @@ public class OtlpLogsController : ControllerBase
     /// Receive logs. The index is the <c>X-Cabinet-Index</c> header, or a <c>cabinet.index</c>
     /// attribute on the record or its resource, or <c>main</c>.
     /// </summary>
-    [HttpPost]
+    [HttpPost("logs")]
     [RequireCapability(Capability.Ingest)]
     [RequestSizeLimit(50 * 1024 * 1024)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
-    public async Task<IActionResult> Export(CancellationToken cancellationToken = default)
+    public Task<IActionResult> Export(CancellationToken cancellationToken = default) =>
+        ReceiveAsync(OtlpLogDecoder.DecodeProtobuf, OtlpLogDecoder.DecodeJson, cancellationToken);
+
+    /// <summary>
+    /// Receive traces. Each span becomes an event in index <c>traces</c>, unless the request names another.
+    /// </summary>
+    [HttpPost("traces")]
+    [RequireCapability(Capability.Ingest)]
+    [RequestSizeLimit(50 * 1024 * 1024)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    public Task<IActionResult> ExportTraces(CancellationToken cancellationToken = default) =>
+        ReceiveAsync(OtlpSignalDecoder.DecodeTracesProtobuf, OtlpSignalDecoder.DecodeTracesJson, cancellationToken);
+
+    /// <summary>
+    /// Receive metrics. Each data point becomes an event in index <c>metrics</c>, unless the request names another.
+    /// </summary>
+    [HttpPost("metrics")]
+    [RequireCapability(Capability.Ingest)]
+    [RequestSizeLimit(50 * 1024 * 1024)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    public Task<IActionResult> ExportMetrics(CancellationToken cancellationToken = default) =>
+        ReceiveAsync(OtlpSignalDecoder.DecodeMetricsProtobuf, OtlpSignalDecoder.DecodeMetricsJson, cancellationToken);
+
+    private async Task<IActionResult> ReceiveAsync(
+        Func<ReadOnlyMemory<byte>, IReadOnlyList<OtlpLogRecord>> decodeProtobuf,
+        Func<byte[], IReadOnlyList<OtlpLogRecord>> decodeJson,
+        CancellationToken cancellationToken)
     {
         var body = await ReadBodyAsync(cancellationToken);
         if (body == null)
@@ -61,8 +94,8 @@ public class OtlpLogsController : ControllerBase
         {
             records = contentType switch
             {
-                "application/x-protobuf" => OtlpLogDecoder.DecodeProtobuf(body),
-                "application/json" => OtlpLogDecoder.DecodeJson(body),
+                "application/x-protobuf" => decodeProtobuf(body),
+                "application/json" => decodeJson(body),
                 _ => throw new NotSupportedException(),
             };
         }
@@ -149,7 +182,7 @@ public class OtlpLogsController : ControllerBase
         logEvent.Id = StableId(record);
         logEvent.SourceType = record.Attribute("service.name") ?? "otlp";
         logEvent.Host = record.Attribute("host.name") ?? logEvent.Host;
-        logEvent.Index = headerIndex ?? record.Attribute("cabinet.index") ?? "main";
+        logEvent.Index = headerIndex ?? record.Attribute("cabinet.index") ?? record.DefaultIndex;
         foreach (var (key, value) in record.Attributes)
         {
             logEvent.SetField(key, value);

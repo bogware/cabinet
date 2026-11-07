@@ -77,6 +77,10 @@ public static class StorageRegistration
             _ => new SqliteDocumentStore(SqliteOptions(sp, configuration, backend)),
         });
 
+        services.AddSingleton<IClusterCoordinator>(sp => backend == StorageBackend.Postgres
+            ? new PostgresClusterCoordinator(connectionString, Logger<PostgresClusterCoordinator>(sp))
+            : new InMemoryClusterCoordinator());
+
         // Only a shared database can have more than one instance to choose from
         services.AddSingleton<ILeaderLease>(sp => backend == StorageBackend.Postgres
             ? new PostgresLeaderLease(connectionString, Logger<PostgresLeaderLease>(sp))

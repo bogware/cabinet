@@ -17,9 +17,11 @@ namespace Cabinet.API.Controllers;
 public class FieldExtractionsController : ControllerBase
 {
     private readonly IFieldExtractionStorage _storage;
+    private readonly Cabinet.API.Services.FieldExtractor? _extractor;
 
-    public FieldExtractionsController(IFieldExtractionStorage storage)
+    public FieldExtractionsController(IFieldExtractionStorage storage, Cabinet.API.Services.FieldExtractor? extractor = null)
     {
+        _extractor = extractor;
         _storage = storage;
     }
 
@@ -56,6 +58,7 @@ public class FieldExtractionsController : ControllerBase
     /// Create a new field extraction configuration.
     /// </summary>
     [HttpPost]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldExtraction), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -71,7 +74,19 @@ public class FieldExtractionsController : ControllerBase
 
         extraction.Id = Guid.NewGuid().ToString();
         extraction.CreatedAt = DateTime.UtcNow;
+        // A bad pattern would otherwise only show up as fields that never appear
+        try
+        {
+            if (new System.Text.RegularExpressions.Regex(extraction.Pattern).GetGroupNames().All(name => int.TryParse(name, out _)))
+                return Problem(detail: "The pattern needs a named group, such as (?<user>[a-z]+), to make a field", statusCode: 400);
+        }
+        catch (ArgumentException ex)
+        {
+            return Problem(detail: $"Invalid pattern: {ex.Message}", statusCode: 400);
+        }
+
         var saved = await _storage.SaveAsync(extraction);
+        _extractor?.Invalidate();
         return CreatedAtAction(nameof(GetById), new { id = saved.Id }, saved);
     }
 
@@ -79,6 +94,7 @@ public class FieldExtractionsController : ControllerBase
     /// Update an existing field extraction configuration.
     /// </summary>
     [HttpPut("{id}")]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldExtraction), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -95,7 +111,19 @@ public class FieldExtractionsController : ControllerBase
 
         extraction.Id = id;
         extraction.CreatedAt = existing.CreatedAt;
+        // A bad pattern would otherwise only show up as fields that never appear
+        try
+        {
+            if (new System.Text.RegularExpressions.Regex(extraction.Pattern).GetGroupNames().All(name => int.TryParse(name, out _)))
+                return Problem(detail: "The pattern needs a named group, such as (?<user>[a-z]+), to make a field", statusCode: 400);
+        }
+        catch (ArgumentException ex)
+        {
+            return Problem(detail: $"Invalid pattern: {ex.Message}", statusCode: 400);
+        }
+
         var saved = await _storage.SaveAsync(extraction);
+        _extractor?.Invalidate();
         return Ok(saved);
     }
 
@@ -103,6 +131,7 @@ public class FieldExtractionsController : ControllerBase
     /// Delete a field extraction configuration.
     /// </summary>
     [HttpDelete("{id}")]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -110,6 +139,7 @@ public class FieldExtractionsController : ControllerBase
     public async Task<IActionResult> Delete(string id)
     {
         var deleted = await _storage.DeleteAsync(id);
+        _extractor?.Invalidate();
         if (!deleted) return NotFound();
         return NoContent();
     }

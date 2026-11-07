@@ -1,0 +1,68 @@
+name: Soak and backup drill
+
+# Run by hand, before a release or after changing storage, detection or delivery: a long run
+# ties up a shared runner, so this never runs on a schedule or on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: How long to run, such as 30m or 6h
+        default: 1h
+      rate:
+        description: Events a second
+        default: '1000'
+      kill_every:
+        description: Seconds between killing an instance, 0 for none
+        default: '300'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  soak:
+    name: Soak
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 1440
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        persist-credentials: false
+
+    - uses: ./.github/actions/isolate-job
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Build
+      run: dotnet build --configuration Release
+
+    - name: Soak
+      env:
+        DURATION: ${{ inputs.duration }}
+        RATE: ${{ inputs.rate }}
+        KILL_EVERY: ${{ inputs.kill_every }}
+      run: ./tests/EndToEnd/soak.sh "$DURATION" "$RATE" "$KILL_EVERY"
+
+    - name: PostgreSQL backup and restore drill
+      run: ./tests/EndToEnd/backup-drill.sh
+
+    - name: Upload report
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: soak-report
+        path: soak-report.md
+        retention-days: 90
+
+    - name: Remove job state
+      if: always()
+      run: rm -rf "$CABINET_JOB_DIR"

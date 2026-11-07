@@ -41,9 +41,27 @@ public class BackupController : ControllerBase
     /// </summary>
     [HttpPost]
     [RequireCapability(Capability.IndexManagement)]
+    [RequireEveryIndex(Capability.IndexManagement)]
     [ProducesResponseType(typeof(BackupManifestEntry), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Create(CancellationToken cancellationToken = default) =>
-        _backups == null ? NotAvailable() : Ok(await _backups.CreateBackupAsync("manual", cancellationToken));
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> Create(CancellationToken cancellationToken = default)
+    {
+        if (_backups == null)
+        {
+            return NotAvailable();
+        }
+
+        // Each is a full copy of the database, so repeated requests could fill the disk
+        var last = await _backups.GetLastBackupTimeAsync(cancellationToken);
+        if (last is { } at && DateTime.UtcNow - at < MinimumInterval)
+        {
+            return Problem(detail: $"A backup was taken at {at:u}. Wait {MinimumInterval.TotalMinutes:N0} minutes between them.", statusCode: 429);
+        }
+
+        return Ok(await _backups.CreateBackupAsync("manual", cancellationToken));
+    }
+
+    private static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Check that a backup is intact and holds a healthy database

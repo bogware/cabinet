@@ -812,6 +812,9 @@ public static class BqlExpressionEvaluator
 
             var arg = args.ElementAtOrDefault(next++);
             var precision = match.Groups["precision"].Success ? int.Parse(match.Groups["precision"].Value, CultureInfo.InvariantCulture) : (int?)null;
+
+            // .NET allows hundreds of millions of digits, so one query could allocate gigabytes
+            if (precision > 100) precision = 100;
             var number = ToDouble(arg);
             var text = type switch
             {

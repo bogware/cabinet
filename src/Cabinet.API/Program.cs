@@ -453,6 +453,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.DetectionRuleStore>();
     services.AddSingleton<Cabinet.API.Services.DetectionEngine>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
+    services.AddHostedService<Cabinet.API.Services.ClusterHeartbeatService>();
 
     // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
     services.AddCabinetMetadataStorage(configuration);
@@ -461,13 +462,19 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.ConfigurationRbacService>();
     services.AddSingleton<IRbacService, Cabinet.API.Services.StoredRbacService>();
     services.AddHttpContextAccessor();
-    services.AddScoped(sp => new Cabinet.API.Authentication.IndexAccessScope { Masking = sp.GetRequiredService<FieldMaskingService>() });
+    services.AddSingleton<Cabinet.API.Services.FieldExtractor>();
+    services.AddScoped(sp => new Cabinet.API.Authentication.IndexAccessScope
+    {
+        Masking = sp.GetRequiredService<FieldMaskingService>(),
+        Extractor = sp.GetRequiredService<Cabinet.API.Services.FieldExtractor>(),
+    });
     services.AddSingleton<Cabinet.API.Services.SerilogAuditLogger>();
     services.AddSingleton(sp =>
         new Cabinet.API.Services.TamperEvidentAuditLogger(
             sp.GetRequiredService<Cabinet.API.Services.SerilogAuditLogger>(),
             sp.GetRequiredService<IDocumentStore>(),
-            sp.GetRequiredService<ILogger<Cabinet.API.Services.TamperEvidentAuditLogger>>()));
+            sp.GetRequiredService<ILogger<Cabinet.API.Services.TamperEvidentAuditLogger>>(),
+            configuration["Audit:HmacKey"] ?? Environment.GetEnvironmentVariable("CABINET_AUDIT_HMAC_KEY")));
     services.AddSingleton<IAuditLogger>(sp => sp.GetRequiredService<Cabinet.API.Services.TamperEvidentAuditLogger>());
 
     // Field masking and encryption services

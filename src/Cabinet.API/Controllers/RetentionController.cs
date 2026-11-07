@@ -17,11 +17,31 @@ namespace Cabinet.API.Controllers;
 public class RetentionController : ControllerBase
 {
     private readonly IDocumentStore _documents;
+    private readonly IAuditLogger? _auditLogger;
+    private readonly Cabinet.API.Authentication.IndexAccessScope? _indexScope;
 
-    public RetentionController(IDocumentStore documents)
+    public RetentionController(IDocumentStore documents, IAuditLogger? auditLogger = null, Cabinet.API.Authentication.IndexAccessScope? indexScope = null)
     {
         _documents = documents;
+        _auditLogger = auditLogger;
+        _indexScope = indexScope;
     }
+
+    /// <summary>A policy deletes that index's events, so it needs the right to manage that index.</summary>
+    private ObjectResult? Forbidden(string index) =>
+        _indexScope?.Principal != null && !_indexScope.Can(Capability.IndexManagement, index)
+            ? Problem(detail: $"Not allowed to manage index '{index}'", statusCode: 403)
+            : null;
+
+    private Task AuditAsync(string index, string description) => _auditLogger?.LogAsync(new AuditEvent
+    {
+        PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
+        Action = AuditAction.Update,
+        ResourceType = "RetentionPolicy",
+        ResourceId = index,
+        Description = description,
+        SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
+    }) ?? Task.CompletedTask;
 
     /// <summary>
     /// List all retention policies with pagination.
@@ -66,8 +86,12 @@ public class RetentionController : ControllerBase
         if (policy.MaxAgeDays < 1 || policy.MaxAgeDays > 3650)
             return Problem(detail: "MaxAgeDays must be between 1 and 3650", statusCode: 400);
 
+        if (Forbidden(index) is { } forbidden)
+            return forbidden;
+
         policy.Index = index;
         await _documents.PutAsync(RetentionService.PoliciesCollection, index, policy, cancellationToken);
+        await AuditAsync(index, $"Set retention to {policy.MaxAgeDays} days");
         return Ok(policy);
     }
 
@@ -80,6 +104,13 @@ public class RetentionController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeletePolicy(string index, CancellationToken cancellationToken = default)
     {
-        return await _documents.DeleteAsync(RetentionService.PoliciesCollection, index, cancellationToken) ? NoContent() : NotFound();
+        if (Forbidden(index) is { } forbidden)
+            return forbidden;
+
+        if (!await _documents.DeleteAsync(RetentionService.PoliciesCollection, index, cancellationToken))
+            return NotFound();
+
+        await AuditAsync(index, "Removed retention policy");
+        return NoContent();
     }
 }

@@ -120,3 +120,5 @@ cache/
 .claude
 .claude/
 .claude/*
+# Written by tests/EndToEnd/soak.sh
+soak-report.md

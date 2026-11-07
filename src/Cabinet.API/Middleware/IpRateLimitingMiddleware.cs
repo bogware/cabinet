@@ -60,7 +60,9 @@ public sealed class IpRateLimitingMiddleware
 
         var requestCount = entry.Increment();
 
-        if (requestCount > _maxRequestsPerWindow)
+        // Each instance enforces its share, so the limit holds across the cluster
+        var instances = context.RequestServices?.GetService<Cabinet.Core.Interfaces.IClusterCoordinator>()?.LiveInstances ?? 1;
+        if (requestCount > Math.Max(1, _maxRequestsPerWindow / Math.Max(1, instances)))
         {
             _logger.LogWarning(
                 "Pre-auth rate limit exceeded for IP {IP}: {Count} requests in {Window}s window",

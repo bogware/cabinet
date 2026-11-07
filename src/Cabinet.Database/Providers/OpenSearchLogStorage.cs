@@ -12,7 +12,7 @@ namespace Cabinet.Database.Providers;
 /// OpenSearch ILogStorage implementation for distributed, full-text search at scale.
 /// Supports both OpenSearch and Elasticsearch-compatible backends.
 /// </summary>
-public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
+public sealed partial class OpenSearchLogStorage : ILogStorage, IDisposable
 {
     private const int SearchPageSize = 1000;
 
@@ -85,6 +85,12 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                             .Tokenizers(tk => tk.Pattern("cabinet_words", pt => pt.Pattern(@"[^\p{L}\p{N}]+")))
                             .Analyzers(an => an.Custom("cabinet_search", c => c.Tokenizer("cabinet_words").Filters("lowercase")))))
                     .Map<OpenSearchLogEvent>(m => m
+                        // Every custom field as text. Mapped dynamically, a field that holds a number in one
+                        // event and text in another would make OpenSearch reject the second event.
+                        .DynamicTemplates(templates => templates.DynamicTemplate("fields_as_keywords", template => template
+                            .PathMatch("fields.*")
+                            .MatchMappingType("*")
+                            .Mapping(mapping => mapping.Keyword(keyword => keyword.IgnoreAbove(8191)))))
                         .Properties(p => p
                             .Keyword(k => k.Name(n => n.Id))
                             .Date(d => d.Name(n => n.Timestamp))

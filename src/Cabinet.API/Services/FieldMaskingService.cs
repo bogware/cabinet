@@ -14,6 +14,9 @@ public sealed class FieldMaskingService
 
     public IReadOnlyList<FieldMaskingRule> GetRules() => _rules.AsReadOnly();
 
+    /// <summary>Whether anything is masked for this role.</summary>
+    public bool AppliesTo(SystemRole viewerRole) => _rules.Any(rule => rule.Enabled && !rule.ExemptRoles.Contains(viewerRole));
+
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
 
     public Dictionary<string, string> MaskFields(Dictionary<string, string> fields, SystemRole viewerRole)

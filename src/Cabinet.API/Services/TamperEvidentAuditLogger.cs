@@ -33,6 +33,11 @@ public sealed class AuditChainInfo
 
     /// <summary>The hash of the record before the first one retained.</summary>
     public string RetainedFromHash { get; set; } = TamperEvidentAuditLogger.Genesis;
+
+    /// <summary>
+    /// Which key signs this chain's hashes: the start of a hash of it, or null for plain SHA-256.
+    /// </summary>
+    public string? KeyId { get; set; }
 }
 
 /// <summary>The result of checking the audit log.</summary>
@@ -49,7 +54,8 @@ public sealed class AuditVerificationResult
 /// over all its fields, so that changing or removing a record shows up when the log is verified.
 /// Each process writes its own chain, so instances don't have to coordinate. Someone who can write
 /// to the database and also rewrites every later hash can't be detected from the database alone,
-/// which is why chain heads also go to the log output, to be kept somewhere else.
+/// which is why chain heads also go to the log output, to be kept somewhere else. With a key
+/// (<c>Audit:HmacKey</c>), hashes are HMACs, so rewriting them also needs the key.
 /// </summary>
 public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
 {
@@ -70,13 +76,26 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
     private readonly Task _writer;
     private long _sequence = -1;
     private string _previousHash = Genesis;
+    private readonly byte[]? _key;
+    private readonly string? _keyId;
 
-    public TamperEvidentAuditLogger(IAuditLogger inner, IDocumentStore documents, ILogger<TamperEvidentAuditLogger> logger)
+    public TamperEvidentAuditLogger(IAuditLogger inner, IDocumentStore documents, ILogger<TamperEvidentAuditLogger> logger, string? hmacKey = null)
     {
         _inner = inner;
         _documents = documents;
         _logger = logger;
-        _chain = new AuditChainInfo { Id = Ulid.NewUlid(), StartedAt = DateTime.UtcNow };
+        if (!string.IsNullOrEmpty(hmacKey))
+        {
+            if (hmacKey.Length < 32)
+            {
+                throw new ArgumentException("Audit:HmacKey must be at least 32 characters", nameof(hmacKey));
+            }
+
+            _key = Encoding.UTF8.GetBytes(hmacKey);
+            _keyId = Convert.ToHexString(SHA256.HashData(_key))[..12].ToLowerInvariant();
+        }
+
+        _chain = new AuditChainInfo { Id = Ulid.NewUlid(), StartedAt = DateTime.UtcNow, KeyId = _keyId };
         _writer = Task.Run(WriteRecordsAsync);
     }
 
@@ -86,7 +105,7 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
         AuditRecord record;
         lock (_chainLock)
         {
-            var hash = ComputeHash(_previousHash, auditEvent);
+            var hash = ComputeHash(_previousHash, auditEvent, _key);
             record = new AuditRecord
             {
                 Sequence = ++_sequence,
@@ -138,6 +157,18 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
         foreach (var chain in await _documents.ListAsync<AuditChainInfo>(ChainsCollection, cancellationToken))
         {
             result.ChainsChecked++;
+            byte[]? key = null;
+            if (chain.KeyId != null)
+            {
+                if (chain.KeyId != _keyId)
+                {
+                    result.Problems.Add($"Chain {chain.Id}: signed with key {chain.KeyId}, which isn't the configured Audit:HmacKey, so it can't be checked.");
+                    continue;
+                }
+
+                key = _key;
+            }
+
             var records = await _documents.ListAsync<AuditRecord>(RecordsCollection(chain.Id), cancellationToken);
 
             var expectedSequence = chain.FirstRetainedSequence;
@@ -155,7 +186,7 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
                     result.Problems.Add($"Chain {chain.Id}: record {record.Sequence} doesn't follow the one before it.");
                 }
 
-                if (ComputeHash(record.PreviousHash, record.Event) != record.Hash)
+                if (ComputeHash(record.PreviousHash, record.Event, key) != record.Hash)
                 {
                     result.Problems.Add($"Chain {chain.Id}: record {record.Sequence} was changed.");
                 }
@@ -233,10 +264,11 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
     private static string SequenceId(long sequence) => sequence.ToString("D18", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Covers everything in the event, so that no part can be changed unnoticed.</summary>
-    private static string ComputeHash(string previousHash, AuditEvent auditEvent)
+    private static string ComputeHash(string previousHash, AuditEvent auditEvent, byte[]? key)
     {
-        var input = previousHash + "|" + JsonSerializer.Serialize(auditEvent, HashOptions);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input))).ToLowerInvariant();
+        var input = Encoding.UTF8.GetBytes(previousHash + "|" + JsonSerializer.Serialize(auditEvent, HashOptions));
+        var hash = key == null ? SHA256.HashData(input) : HMACSHA256.HashData(key, input);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private async Task FlushAsync(CancellationToken cancellationToken)
@@ -283,6 +315,7 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
                             HeadHash = _chain.HeadHash,
                             FirstRetainedSequence = _chain.FirstRetainedSequence,
                             RetainedFromHash = _chain.RetainedFromHash,
+                            KeyId = _chain.KeyId,
                         };
                     }
 

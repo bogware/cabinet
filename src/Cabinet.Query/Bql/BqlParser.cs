@@ -447,18 +447,29 @@ public sealed class BqlParser : IQueryParser
             if (Current.Kind == BqlTokenKind.OpenParen)
             {
                 Advance();
-                var args = new List<BqlExpression>();
-                if (Current.Kind != BqlTokenKind.CloseParen)
+
+                // Arguments nest like parentheses, so they count toward the same limit
+                if (++_recursionDepth > MaxRecursionDepth)
+                    throw new QueryParseException($"Query too deeply nested (maximum depth: {MaxRecursionDepth})");
+                try
                 {
-                    args.Add(ParseOrExpression());
-                    while (Current.Kind == BqlTokenKind.Comma)
+                    var args = new List<BqlExpression>();
+                    if (Current.Kind != BqlTokenKind.CloseParen)
                     {
-                        Advance();
                         args.Add(ParseOrExpression());
+                        while (Current.Kind == BqlTokenKind.Comma)
+                        {
+                            Advance();
+                            args.Add(ParseOrExpression());
+                        }
                     }
+                    Expect(BqlTokenKind.CloseParen, ")");
+                    return new FunctionExpression(name, args);
                 }
-                Expect(BqlTokenKind.CloseParen, ")");
-                return new FunctionExpression(name, args);
+                finally
+                {
+                    _recursionDepth--;
+                }
             }
 
             return new FieldExpression(name);
@@ -1757,7 +1768,8 @@ internal sealed class LegacyStatsOperator : QueryOperator
         if (val is double d) return d;
         if (val is long l) return l;
         if (val is int i) return i;
-        if (double.TryParse(val.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)) return parsed;
+        // Float, not Any: "1,000" and "(5)" aren't numbers, which is also what storage aggregates assume
+        if (double.TryParse(val.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) return parsed;
         return null;
     }
 }

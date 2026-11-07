@@ -14,7 +14,7 @@ namespace Cabinet.Database.Providers;
 /// PostgreSQL ILogStorage implementation with JSONB indexing, BRIN timestamps, and connection pooling.
 /// This is the production-grade storage backend for Cabinet.
 /// </summary>
-public sealed class PostgresLogStorage : ILogStorage, IDisposable
+public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
 {
     private const string InsertColumns = "id, timestamp, source_type, severity, server_id, raw_line, source_file, line_number, parser_name, fields, tags, index_time, index_name";
 

@@ -50,6 +50,7 @@ public class DetectionRulesController : ControllerBase
     /// Add a rule
     /// </summary>
     [HttpPost]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(typeof(DetectionRule), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -70,6 +71,7 @@ public class DetectionRulesController : ControllerBase
     /// Change a rule. Built-in rules can only be turned on and off.
     /// </summary>
     [HttpPut("{id}")]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(typeof(DetectionRule), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -102,6 +104,7 @@ public class DetectionRulesController : ControllerBase
     /// Turn a rule on
     /// </summary>
     [HttpPost("{id}/enable")]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -112,6 +115,7 @@ public class DetectionRulesController : ControllerBase
     /// Turn a rule off
     /// </summary>
     [HttpPost("{id}/disable")]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -122,6 +126,7 @@ public class DetectionRulesController : ControllerBase
     /// Delete a rule. Built-in rules can only be turned off.
     /// </summary>
     [HttpDelete("{id}")]
+    [RequireEveryIndex(Capability.Search)]
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -159,6 +164,50 @@ public class DetectionRulesController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Run a rule over stored events to see how often it would have fired, without alerting.
+    /// Send <c>rule</c> to try changes before saving them.
+    /// </summary>
+    [HttpPost("backtest")]
+    [RequireCapability(Capability.Alerts)]
+    [ProducesResponseType(typeof(BacktestResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Backtest(
+        [FromBody] BacktestRequest request,
+        [FromServices] Cabinet.Core.Interfaces.ILogStorage storage,
+        [FromServices] Cabinet.API.Authentication.IndexAccessScope scope,
+        CancellationToken cancellationToken = default)
+    {
+        var rule = request.Rule;
+        if (rule == null && request.RuleId != null)
+        {
+            rule = await _rules.GetAsync(request.RuleId, cancellationToken);
+            if (rule == null)
+            {
+                return Problem(detail: "Rule not found", statusCode: 404);
+            }
+        }
+
+        if (rule == null)
+        {
+            return Problem(detail: "Send ruleId or rule", statusCode: 400);
+        }
+
+        rule.Name = string.IsNullOrWhiteSpace(rule.Name) ? "Backtest" : rule.Name;
+        if (Validate(rule) is { } problem)
+        {
+            return problem;
+        }
+
+        var hours = Math.Clamp(request.Hours, 1, 24 * 90);
+        var end = DateTime.UtcNow;
+
+        // The caller's own view: only indexes they can read, with masking applied
+        var result = await RuleBacktester.RunAsync(rule, scope.Restrict(storage), end.AddHours(-hours), end, Math.Clamp(request.MaxEvents, 1, 10_000_000), cancellationToken);
+        return Ok(result);
+    }
+
     private ObjectResult? Validate(DetectionRule rule)
     {
         if (string.IsNullOrWhiteSpace(rule.Name))
@@ -186,6 +235,22 @@ public class DetectionRulesController : ControllerBase
             return Problem(detail: ex.Message, statusCode: 400);
         }
     }
+}
+
+/// <summary>Which rule to backtest, and over how long.</summary>
+public class BacktestRequest
+{
+    /// <summary>A saved rule.</summary>
+    public string? RuleId { get; set; }
+
+    /// <summary>Or a rule that isn't saved, to try changes.</summary>
+    public DetectionRule? Rule { get; set; }
+
+    /// <summary>How far back to look.</summary>
+    public int Hours { get; set; } = 24;
+
+    /// <summary>Stop after this many events.</summary>
+    public long MaxEvents { get; set; } = 1_000_000;
 }
 
 /// <summary>A rule's expressions, and a line to try them on.</summary>

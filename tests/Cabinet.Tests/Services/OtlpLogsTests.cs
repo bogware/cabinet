@@ -12,6 +12,8 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using OpenTelemetry.Resources;
 using Xunit;
 
@@ -155,9 +157,9 @@ public sealed class OtlpLogsApiTests : IAsyncLifetime
         }
     }
 
-    private async Task<JsonElement> QueryAsync(string query)
+    private async Task<JsonElement> QueryAsync(string query, string? index = null)
     {
-        using var response = await _client.PostAsJsonAsync("/api/v1/query/execute", new { query });
+        using var response = await _client.PostAsJsonAsync("/api/v1/query/execute", new { query, index });
         var text = await response.Content.ReadAsStringAsync();
         response.IsSuccessStatusCode.Should().BeTrue(text);
         return JsonDocument.Parse(text).RootElement.GetProperty("results").Clone();
@@ -288,5 +290,138 @@ public sealed class OtlpLogsApiTests : IAsyncLifetime
         while (!alerts.Contains("Log4Shell", StringComparison.Ordinal) && DateTime.UtcNow < deadline);
 
         alerts.Should().Contain("Log4Shell").And.Contain("T1190");
+    }
+
+    private async Task<JsonElement> WaitForRowsAsync(string query, string? index = null)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        JsonElement rows;
+        do
+        {
+            await Task.Delay(100);
+            rows = await QueryAsync(query, index);
+        }
+        while (rows.GetArrayLength() == 0 && DateTime.UtcNow < deadline);
+
+        return rows;
+    }
+
+    [Fact]
+    public async Task RealOpenTelemetryExporter_Traces_BecomeSearchableSpans()
+    {
+        using var source = new ActivitySource("cabinet-trace-test");
+        using (var provider = Sdk.CreateTracerProviderBuilder()
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("trace-test"))
+            .AddSource(source.Name)
+            .AddOtlpExporter(exporter =>
+            {
+                exporter.Endpoint = new Uri($"http://127.0.0.1:{_port}/v1/traces");
+                exporter.Protocol = OtlpExportProtocol.HttpProtobuf;
+                exporter.Headers = $"X-API-Key={Key}";
+                exporter.ExportProcessorType = ExportProcessorType.Simple;
+            })
+            .Build())
+        {
+            using var parent = source.StartActivity("checkout-request", ActivityKind.Server)!;
+            using (var child = source.StartActivity("charge-card", ActivityKind.Client)!)
+            {
+                child.SetTag("payment.provider", "acme");
+                child.SetStatus(ActivityStatusCode.Error);
+            }
+        }
+
+        var rows = await WaitForRowsAsync("find \"charge-card\"", "traces");
+
+        rows.GetArrayLength().Should().Be(1);
+        var span = rows[0];
+        span.GetProperty("SourceType").GetString().Should().Be("trace-test");
+        span.GetProperty("span.kind").GetString().Should().Be("client");
+        span.GetProperty("status").GetString().Should().Be("error");
+        span.GetProperty("payment.provider").GetString().Should().Be("acme");
+        span.TryGetProperty("parent_span_id", out _).Should().BeTrue("it's a child span");
+        span.TryGetProperty("duration_ms", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RealOpenTelemetryExporter_Metrics_BecomeSearchablePoints()
+    {
+        using var meter = new System.Diagnostics.Metrics.Meter("cabinet-metric-test");
+        var counter = meter.CreateCounter<long>("orders_placed");
+        using (var provider = Sdk.CreateMeterProviderBuilder()
+            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("metric-test"))
+            .AddMeter(meter.Name)
+            .AddOtlpExporter(exporter =>
+            {
+                exporter.Endpoint = new Uri($"http://127.0.0.1:{_port}/v1/metrics");
+                exporter.Protocol = OtlpExportProtocol.HttpProtobuf;
+                exporter.Headers = $"X-API-Key={Key}";
+            })
+            .Build())
+        {
+            counter.Add(3, new KeyValuePair<string, object?>("region", "eu"));
+            counter.Add(4, new KeyValuePair<string, object?>("region", "eu"));
+            provider.ForceFlush().Should().BeTrue();
+        }
+
+        var rows = await WaitForRowsAsync("find \"orders_placed\"", "metrics");
+
+        rows.GetArrayLength().Should().BeGreaterThan(0);
+        var point = rows[0];
+        point.GetProperty("metric.type").GetString().Should().Be("sum");
+        point.GetProperty("region").GetString().Should().Be("eu");
+        point.GetProperty("value").GetDouble().Should().Be(7);
+    }
+
+    [Fact]
+    public async Task FieldExtraction_AppliesAtSearchTime_ToEventsAlreadyStored()
+    {
+        using (var ingest = await _client.PostAsJsonAsync("/services/collector/event", new { @event = "checkout order=A-1001 took 812ms" }))
+        {
+            ingest.EnsureSuccessStatusCode();
+        }
+
+        (await WaitForRowsAsync("find \"A-1001\"")).GetArrayLength().Should().Be(1);
+
+        using (var bad = await _client.PostAsJsonAsync("/api/v1/field-extractions", new { name = "No groups", pattern = @"order=\S+" }))
+        {
+            bad.StatusCode.Should().Be(HttpStatusCode.BadRequest, "a pattern without a named group extracts nothing");
+        }
+
+        using (var create = await _client.PostAsJsonAsync("/api/v1/field-extractions", new { name = "Orders", pattern = @"order=(?<order_id>\S+) took (?<took_ms>\d+)ms" }))
+        {
+            create.IsSuccessStatusCode.Should().BeTrue(await create.Content.ReadAsStringAsync());
+        }
+
+        var rows = await QueryAsync("find \"A-1001\" | stats sum(took_ms) as total by order_id");
+
+        rows.GetArrayLength().Should().Be(1);
+        rows[0].GetProperty("order_id").GetString().Should().Be("A-1001");
+        rows[0].GetProperty("total").GetDouble().Should().Be(812);
+    }
+
+    [Fact]
+    public async Task Backtest_ShowsHowOftenARuleWouldHaveFired_WithoutAlerting()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            using var ingest = await _client.PostAsJsonAsync("/services/collector/event", new { @event = $"backtest-marker attempt {i}", host = "bt-1" });
+            ingest.EnsureSuccessStatusCode();
+        }
+
+        (await WaitForRowsAsync("find \"backtest-marker\" | stats count as n | where n >= 5")).GetArrayLength().Should().Be(1);
+
+        using var response = await _client.PostAsJsonAsync("/api/v1/rules/backtest", new
+        {
+            rule = new { name = "Marker burst", pattern = "backtest-marker", groupBy = "Host", threshold = 5, windowSeconds = 3600, severity = "Warning" },
+            hours = 1,
+        });
+        var text = await response.Content.ReadAsStringAsync();
+        response.IsSuccessStatusCode.Should().BeTrue(text);
+        var result = JsonDocument.Parse(text).RootElement;
+
+        result.GetProperty("matches").GetInt64().Should().Be(5);
+        result.GetProperty("wouldFire").GetInt32().Should().Be(1);
+        result.GetProperty("topGroups")[0].GetProperty("group").GetString().Should().Be("bt-1");
+        (await _client.GetStringAsync("/api/v1/alerts")).Should().NotContain("Marker burst", "a backtest doesn't alert");
     }
 }

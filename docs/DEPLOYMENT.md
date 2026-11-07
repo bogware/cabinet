@@ -180,6 +180,8 @@ sudo ./install-agent.sh --server https://cabinet.example.com \
   --api-key "your-api-key" --paths "/var/log/*.log,/var/log/syslog"
 ```
 
+Give each agent a key of the `Ingest` tier, which can send events to any index but not read them, so a compromised host can't search what everyone sends. The installer makes the agent's settings file readable only by root, since it holds the key.
+
 ```powershell
 # Windows, as Administrator
 .\install-agent.ps1 -ServerUrl https://cabinet.example.com -ApiKey "your-api-key" `
@@ -294,17 +296,20 @@ Set `Gaming:Enabled=true` (`Gaming__Enabled=true` as an environment variable) to
 
 ### Retention
 
-`Storage:RetentionDays` is the only retention that deletes events. 0, the default, keeps everything. A positive value purges older events at startup and hourly. `/api/v1/retention` stores per-index definitions in memory only and doesn't enforce them.
+`Storage:RetentionDays` deletes older events across every index. 0, the default, keeps everything. `/api/v1/retention/{index}` sets a policy for one index, enforced hourly; changing one needs `IndexManagement` on that index, and is audited.
 
 ### API Keys
 
 ```bash
 ApiKeys__Keys__0__Key=<raw key>        # openssl rand -hex 32
-ApiKeys__Keys__0__Tier=Professional    # Basic, Professional or Enterprise
+ApiKeys__Keys__0__Tier=Professional    # Ingest, Basic, Professional, Enterprise or Admin
 ApiKeys__Keys__0__Name=production-client
+ApiKeys__Keys__0__ExpiresAt=2027-01-31T00:00:00Z   # optional
 ```
 
 The value is the raw key, which the API hashes with SHA-256 in memory. Don't store a hash here. Validation is local on every instance. Keys are read at startup, so restart after changing them. With no keys configured, the API starts and rejects authenticated routes.
+
+`Ingest` keys can only send events, for agents and other senders. A key stops working at `ExpiresAt`, and an unreadable date stops the API from starting rather than leaving the key valid forever. To rotate a key, add the new one beside it, move clients over, then remove or expire the old one.
 
 ### Rate Limiting
 
@@ -316,7 +321,9 @@ The value is the raw key, which the API hashes with SHA-256 in memory. Don't sto
 }
 ```
 
-These two keys set the per-address limit, which counts all requests from an address except `/health*` and `/metrics`. The tier limits (Basic 100/min, Professional 1,000/min, Enterprise 10,000/min) can be changed with `RateLimiting:Tiers:Basic`, `:Professional` and `:Enterprise`. The Admin tier follows Enterprise. Limits count per instance.
+These two keys set the per-address limit, which counts all requests from an address except `/health*` and `/metrics`. The tier limits (Basic 100/min, Professional 1,000/min, Enterprise 10,000/min) can be changed with `RateLimiting:Tiers:Basic`, `:Professional` and `:Enterprise`. The Admin and Ingest tiers follow Enterprise.
+
+Limits are for the whole deployment. With several instances on PostgreSQL, each instance takes its share, dividing by the number of instances that have sent a heartbeat in the last minute. A load balancer that sends a client mostly to one instance makes it reach its limit early, so balance evenly or raise the limits.
 
 ### Reverse Proxies
 
@@ -410,7 +417,11 @@ curl -X POST http://localhost:5000/api/v1/rules -H "X-API-Key: $KEY" -H "Content
 }'
 ```
 
-`POST /api/v1/rules/test` tries a rule's expressions on a line without saving anything. Windows use event time, so a backlog being replayed counts as it happened. If checking falls far behind, ingest slows rather than skipping events. Counts and cooldowns are per instance.
+`POST /api/v1/rules/test` tries a rule's expressions on a line without saving anything. `POST /api/v1/rules/backtest` runs a rule, saved or not, over stored events (`hours`, default 24) and reports how often it would have fired and for which groups, without alerting. Use it to tune thresholds against real traffic before turning a rule on.
+
+Windows use event time, so a backlog being replayed counts as it happened. If checking falls far behind, ingest slows rather than skipping events. With several instances on PostgreSQL, counts and cooldowns are shared, so a threshold counts events wherever they arrived and a rule fires once.
+
+Rules apply to every index, so creating, changing, turning on or off and deleting one needs `Search` on every index, not just some. Alert history shows each caller only alerts about indexes they can read, and keeps the event ID rather than the line, which stays in the event itself where encryption and masking apply.
 
 ### Alert Channels
 
@@ -433,13 +444,12 @@ Webhook `Format` is `generic`, `slack`, `discord`, `teams` or `pagerduty`.
 
 ### SSO
 
-OIDC JWT validation is configured under `SSO` (`Enabled`, `Provider`, `Oidc:Authority`, `Oidc:ClientId`). Capability checks have no principal for an OIDC subject, so routes that require a capability return 403 for those tokens. Use API keys. SAML and LDAP are not implemented.
+OIDC JWT validation is configured under `SSO` (`Enabled`, `Provider`, `Oidc:Authority`, `Oidc:ClientId`). A token gets the role and index permissions that `SSO:RoleMappings` assign to its claims, and none when nothing matches and `AutoProvision` is off. Claims in the token named like Cabinet's own (`CabinetRole`, `IndexPermission`, `ClientId`, `Tier`, `Permission`) are dropped, so a user attribute at the identity provider can't grant access. SAML and LDAP are not implemented.
 
 ### Not implemented
 
 These have configuration or classes in the code but no effect, so don't rely on them:
 
-- Per-index RBAC: capability checks always evaluate index `main`. There is no configuration section for RBAC users. No tier has `IndexManagement` or `UserManagement`, and `PUT /api/v1/roles/{apiKeyHash}` returns 501.
 - Hot/warm/cold tiering and S3 archival.
 - Server-side multi-line merging. Use the agent.
 
@@ -473,6 +483,8 @@ Both need `UserManagement`. Records older than `Audit:RetentionDays` (default 36
 
 This makes tampering evident rather than impossible. Someone with write access to the database could rewrite an entire chain, so every 1,000 records the current head goes to the log output too. Keep those logs somewhere else if that matters to you.
 
+Set `Audit:HmacKey` (or `CABINET_AUDIT_HMAC_KEY`), at least 32 characters, to make the hashes HMACs. Rewriting a chain then also needs the key, so keep it out of the database's reach. Chains record which key signed them, and verification reports a chain signed with a different key rather than calling it changed.
+
 ### Encryption
 
 Set `Encryption:Enabled` to encrypt chosen fields with AES-256-GCM before they reach storage:
@@ -490,7 +502,9 @@ Set `Encryption:Enabled` to encrypt chosen fields with AES-256-GCM before they r
 
 A field's value is also removed from the raw line, so it isn't stored there in plain text. With `EncryptRawLine`, the whole line is encrypted. Queries see decrypted events, so `where` works on these fields, but `find` can't find them in storage, and with `EncryptRawLine` it can't find anything.
 
-`KeyProvider` is `Local`, which keeps a key file at `KeyFilePath` and suits one instance, or `Environment`, which reads a base64 key from `CABINET_ENCRYPTION_KEY`. Several instances must share a key. **Back the key up separately: without it the data can't be read.** Events stored before enabling it stay as they were, and there is no key rotation yet.
+`KeyProvider` is `Local`, which keeps a key file at `KeyFilePath` and suits one instance, or `Environment`, which reads a base64 key from `CABINET_ENCRYPTION_KEY`. Several instances must share a key. **Back the key up separately: without it the data can't be read.** Events stored before enabling it stay as they were.
+
+To rotate the key, make the new key current and list the old ones in `Encryption:PreviousKeyFilePaths`, or as comma-separated base64 in `CABINET_ENCRYPTION_PREVIOUS_KEYS`. New values are written with the current key, and each value records which key wrote it (`enc:v2:<key id>:...`), so values under older keys still read. Keep an old key until retention has removed everything written with it.
 
 ### Field masking
 

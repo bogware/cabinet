@@ -6,7 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-07
+
+Upgrading from 1.0: settings under `Distributed:*` and the SQLite RBAC database are gone (see Removed), the Compose agent needs its own `CABINET_AGENT_API_KEY`, and changing detection rules, data models, knowledge objects and field extractions now needs the capability on every index.
+
 ### Added
+
+- `stats` and `timechart` run inside the database when they can: as SQL on PostgreSQL and SQLite, and as aggregations for counts on OpenSearch. Answers are identical either way, which a test checks on every backend. Counting a million events by host takes a quarter of a second on PostgreSQL instead of 13. See `docs/BENCHMARKS.md`.
+- OTLP traces at `POST /v1/traces` and metrics at `POST /v1/metrics`, stored as searchable events in the `traces` and `metrics` indexes.
+- Field extractions apply at search time, including to events already stored.
+- `POST /api/v1/rules/backtest` shows how often a rule would have fired on stored events, to tune it before turning it on.
+- Nine more built-in detection rules: SSH key added, shadow file read, shell history cleared, Windows admin group change, account lockout, Kerberoasting, bursts of 5xx responses, AWS root use and access key creation.
+- Detection counts and cooldowns are shared by all instances on PostgreSQL, so a threshold counts events wherever they arrive and a rule fires once.
+- Rate limits are shared out among running instances, which send heartbeats.
+- Encryption key rotation: values record which key wrote them, and old keys go in `Encryption:PreviousKeyFilePaths` or `CABINET_ENCRYPTION_PREVIOUS_KEYS`.
+- API key expiry with `ApiKeys:Keys:N:ExpiresAt`.
+- The `Ingest` key tier, which can send events but not read them, for agents.
+- `Audit:HmacKey`, which makes the audit chain's hashes HMACs.
+- `benchmarks/Cabinet.LoadTest` and `tests/EndToEnd/soak.sh`, which run several instances under sustained load while killing them and check every acknowledged event is stored once. A manual Soak workflow runs it with the backup drill.
 
 - Detection rules that run on every event at ingest, with thresholds, cooldowns and grouping, at `/api/v1/rules`. 20 built-in security rules, off until turned on.
 - OTLP logs at `POST /v1/logs`, in protobuf and JSON.
@@ -41,42 +58,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Apache-2.0 `LICENSE` file.
 - `SECURITY.md`.
 - CI runs the Postgres integration tests, boots the API against a real database, validates the compose file, and runs tests in a non-UTC time zone.
-
-### Removed
-
-- `AlertEngine`, `IAlertAction`, `AlertRule` and `SendAlertWithRuleAsync`, which nothing used. Detections and scheduled searches share one path.
-- `ArchiveBeforeDelete` and `MaxSizeBytes` on retention policies, which did nothing.
-- Redis, along with `Distributed:*` settings, the `distributed` setup wizard mode and the Compose service. Nothing read from it. PostgreSQL now does leader election.
-- `SqliteRbacService`, and the `cabinet-rbac.db` file with it. Roles saved in it aren't carried over.
-- The `source` parameter of `DELETE /api/v1/logs`. It was ignored, so a request meant for one source could purge everything.
-
-### Fixed
-
-- The dashboard no longer offers a development key by default, and keeps the key for the tab unless asked to remember it. Script moved out of the page, so the content security policy forbids inline script.
-- Dashboards listed zero panels, and the Alerts page's columns didn't match the API.
-- Cron: an update could save an invalid expression, a huge step could hang the scheduler, `1,5/2` wasn't understood, and an expression could run twice in a minute or miss one during a slow check. A slow search no longer delays others.
-- Scheduled searches counted at most 10,000 results.
-- Webhooks now retry on 429.
-- `/query/execute` returns `eventsScanned`.
-- Backups could copy a SQLite database mid-write. They now use SQLite's backup API, with an integrity check, and verification opens the database rather than only decompressing it.
-- `Backup:AutoBackupEnabled` on another backend crashed startup. It's now a warning.
-- A corrupt backup manifest was overwritten, losing older checksums.
-- The audit hash left out the description and source address, so those could be changed unnoticed.
-- The default `appsettings.json` deleted events older than 30 days, though the docs said it kept everything. It now keeps everything.
-- Log files stopped being written after 100 MB in a day. They now roll over.
-- The encryption service wrote a key file even when off, and instances starting together could fail on it.
-- Trivy findings now fail the Docker job, as they appeared to.
-- Text search means the same on every backend: every whole word, ignoring case. It used to be a phrase on SQLite, stemmed words on PostgreSQL, any word on OpenSearch and a substring in memory.
-- SQLite's full-text index wrote no rowid, so searches after a purge could return the wrong events or none. It's rebuilt on upgrade.
-- `GET /api/v1/logs` with `source` or `severity` returned nothing, and its `X-Total-Count` ignored filters.
-- Live streams lost events that shared a timestamp, and events that arrived with an older time than one already sent, which agents' batches often do.
-- `/query/execute` never returned its `truncated` flag.
-- The query cache could show one caller's results to another with different access.
-- Search jobs could be read, cancelled or deleted by anyone, were left Running forever after a crash, and could run twice.
-- `sort` threw on a field holding both numbers and text.
-- A long chain of `not` could overflow the stack and kill the server.
-- `logfmt` `host=` now sets the event's host.
-- Readiness counted every event, every 10 seconds. `/metrics` runs its aggregates at most once a minute.
 
 ### Changed
 
@@ -116,6 +97,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- `AlertEngine`, `IAlertAction`, `AlertRule` and `SendAlertWithRuleAsync`, which nothing used. Detections and scheduled searches share one path.
+- `ArchiveBeforeDelete` and `MaxSizeBytes` on retention policies, which did nothing.
+- Redis, along with `Distributed:*` settings, the `distributed` setup wizard mode and the Compose service. Nothing read from it. PostgreSQL now does leader election.
+- `SqliteRbacService`, and the `cabinet-rbac.db` file with it. Roles saved in it aren't carried over.
+- The `source` parameter of `DELETE /api/v1/logs`. It was ignored, so a request meant for one source could purge everything.
 - MySQL and DynamoDB storage providers and the legacy PostgreSQL provider, along with the CLI `backup` and `centralize` commands and the compose MySQL profile.
 - CLI `report` command, which simulated work and printed sample data.
 - Multi-tenancy code. Cabinet serves one organization per deployment.
@@ -125,6 +111,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- OpenSearch rejected events whose custom fields changed type from one event to another. `fields.*` is now mapped as keyword.
+- A detection rule's regular expression could time out the first time it ran under load.
+- `RateLimiting:Tiers:Basic` had no effect.
+- The dashboard no longer offers a development key by default, and keeps the key for the tab unless asked to remember it. Script moved out of the page, so the content security policy forbids inline script.
+- Dashboards listed zero panels, and the Alerts page's columns didn't match the API.
+- Cron: an update could save an invalid expression, a huge step could hang the scheduler, `1,5/2` wasn't understood, and an expression could run twice in a minute or miss one during a slow check. A slow search no longer delays others.
+- Scheduled searches counted at most 10,000 results.
+- Webhooks now retry on 429.
+- `/query/execute` returns `eventsScanned`.
+- Backups could copy a SQLite database mid-write. They now use SQLite's backup API, with an integrity check, and verification opens the database rather than only decompressing it.
+- `Backup:AutoBackupEnabled` on another backend crashed startup. It's now a warning.
+- A corrupt backup manifest was overwritten, losing older checksums.
+- The audit hash left out the description and source address, so those could be changed unnoticed.
+- The default `appsettings.json` deleted events older than 30 days, though the docs said it kept everything. It now keeps everything.
+- Log files stopped being written after 100 MB in a day. They now roll over.
+- The encryption service wrote a key file even when off, and instances starting together could fail on it.
+- Trivy findings now fail the Docker job, as they appeared to.
+- Text search means the same on every backend: every whole word, ignoring case. It used to be a phrase on SQLite, stemmed words on PostgreSQL, any word on OpenSearch and a substring in memory.
+- SQLite's full-text index wrote no rowid, so searches after a purge could return the wrong events or none. It's rebuilt on upgrade.
+- `GET /api/v1/logs` with `source` or `severity` returned nothing, and its `X-Total-Count` ignored filters.
+- Live streams lost events that shared a timestamp, and events that arrived with an older time than one already sent, which agents' batches often do.
+- `/query/execute` never returned its `truncated` flag.
+- The query cache could show one caller's results to another with different access.
+- Search jobs could be read, cancelled or deleted by anyone, were left Running forever after a crash, and could run twice.
+- `sort` threw on a field holding both numbers and text.
+- A long chain of `not` could overflow the stack and kill the server.
+- `logfmt` `host=` now sets the event's host.
+- Readiness counted every event, every 10 seconds. `/metrics` runs its aggregates at most once a minute.
 - The agent no longer loses events in an outage or crash. Checkpoints move only when events are accepted or spooled, the spool replays periodically instead of only at startup, and a rejected batch no longer blocks the rest. A 401 or 403 no longer drops events.
 - The agent no longer creates duplicates. Growing small files no longer look rotated, and events carry a stable ID that the server stores once.
 - The agent reads lines written just before a rotation, doesn't re-read rotated files that a pattern also matches, doesn't split partial lines or multi-line events across polls, bounds line length and spool size, restarts failed harvesters, and supports `**` and wildcards in any path segment.
@@ -155,6 +169,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Fork pull requests no longer run on the self-hosted CI runners.
+- Alert history no longer copies log lines, which bypassed encryption and masking, and shows each caller only alerts about indexes they can read.
+- Detection rules, data models, knowledge objects, field extractions and backups need their capability on every index, since they act on all of them. Retention changes need `IndexManagement` on that index, and are audited.
+- Searching under field masking matches the masked text, so it can't reveal whether a hidden value is present.
+- OIDC tokens can't supply Cabinet's own claims, such as `CabinetRole` or `IndexPermission`.
+- Limits on OTLP value nesting and decompressed size, on nested function calls in queries, and on `printf` precision, each of which could exhaust memory or the stack.
+- `/metrics` matches only its exact path, so a proxy rule blocking it can't be bypassed with different case.
+- Manual backups can be taken at most every five minutes.
+- The agent installer makes its settings file, which holds the API key, readable only by root.
 - Closed a stored XSS in the dashboard. Crafted hostnames or macro parameters could run script in an analyst's session and read the API key from local storage.
 - Compose refuses to start until every secret in `.env` is set, Redis requires a password, Postgres and Redis are no longer published to the host, and the monitoring and LocalStack ports bind to localhost.
 - Capability checks deny principals without a `ClientId`. They previously passed, granting every capability to such principals, including OIDC tokens without a subject.

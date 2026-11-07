@@ -16,6 +16,9 @@ public sealed class OtlpLogRecord
     public string? SpanId { get; set; }
     public Dictionary<string, object> Attributes { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>The index when the request names none: main for logs, traces and metrics for those.</summary>
+    public string DefaultIndex { get; set; } = "main";
+
     /// <summary>An attribute's value, as text.</summary>
     public string? Attribute(string name) => Attributes.TryGetValue(name, out var value) ? value.ToString() : null;
 }
@@ -186,7 +189,7 @@ public static class OtlpLogDecoder
         return record;
     }
 
-    private static void ReadKeyValue(ReadOnlyMemory<byte> data, Dictionary<string, object> target)
+    internal static void ReadKeyValue(ReadOnlyMemory<byte> data, Dictionary<string, object> target, int depth = 0)
     {
         string? key = null;
         object? value = null;
@@ -198,7 +201,7 @@ public static class OtlpLogDecoder
             }
             else if (field == 2)
             {
-                value = ReadAnyValue(bytes);
+                value = ReadAnyValue(bytes, depth);
             }
         }
 
@@ -208,8 +211,16 @@ public static class OtlpLogDecoder
         }
     }
 
-    private static object? ReadAnyValue(ReadOnlyMemory<byte> data)
+    /// <summary>Deeper than any real attribute, and shallow enough that recursion can't overflow the stack.</summary>
+    private const int MaxValueDepth = 32;
+
+    internal static object? ReadAnyValue(ReadOnlyMemory<byte> data, int depth = 0)
     {
+        if (depth > MaxValueDepth)
+        {
+            throw new FormatException($"Values are nested more than {MaxValueDepth} deep");
+        }
+
         foreach (var (field, _, bytes, number) in Fields(data))
         {
             switch (field)
@@ -223,13 +234,13 @@ public static class OtlpLogDecoder
                 case 4:
                     return BitConverter.UInt64BitsToDouble(number);
                 case 5:
-                    return string.Join(", ", Fields(bytes).Where(item => item.Field == 1).Select(item => ReadAnyValue(item.Bytes)));
+                    return string.Join(", ", Fields(bytes).Where(item => item.Field == 1).Select(item => ReadAnyValue(item.Bytes, depth + 1)));
                 case 6:
                 {
                     var map = new Dictionary<string, object>(StringComparer.Ordinal);
                     foreach (var item in Fields(bytes).Where(item => item.Field == 1))
                     {
-                        ReadKeyValue(item.Bytes, map);
+                        ReadKeyValue(item.Bytes, map, depth + 1);
                     }
 
                     return JsonSerializer.Serialize(map);
@@ -242,7 +253,7 @@ public static class OtlpLogDecoder
         return null;
     }
 
-    private static List<(int Field, int Wire, ReadOnlyMemory<byte> Bytes, ulong Number)> Fields(ReadOnlyMemory<byte> data)
+    internal static List<(int Field, int Wire, ReadOnlyMemory<byte> Bytes, ulong Number)> Fields(ReadOnlyMemory<byte> data)
     {
         var fields = new List<(int, int, ReadOnlyMemory<byte>, ulong)>();
         var position = 0;
@@ -313,7 +324,7 @@ public static class OtlpLogDecoder
         throw new FormatException("A number is too long");
     }
 
-    private static void ReadJsonAttributes(JsonElement attributes, Dictionary<string, object> target)
+    internal static void ReadJsonAttributes(JsonElement attributes, Dictionary<string, object> target)
     {
         foreach (var attribute in attributes.EnumerateArray())
         {
@@ -325,7 +336,7 @@ public static class OtlpLogDecoder
         }
     }
 
-    private static object? JsonAnyValue(JsonElement value)
+    internal static object? JsonAnyValue(JsonElement value)
     {
         if (value.TryGetProperty("stringValue", out var text))
         {
@@ -363,5 +374,24 @@ public static class OtlpLogDecoder
         return value.ValueKind == JsonValueKind.String
             ? ulong.Parse(value.GetString()!, CultureInfo.InvariantCulture)
             : value.GetUInt64();
+    }
+}
+
+/// <summary>The protobuf wire format and attribute encoding that every OTLP signal shares.</summary>
+internal static class OtlpWire
+{
+    public static List<(int Field, int Wire, ReadOnlyMemory<byte> Bytes, ulong Number)> Fields(ReadOnlyMemory<byte> data) => OtlpLogDecoder.Fields(data);
+
+    public static void ReadKeyValue(ReadOnlyMemory<byte> data, Dictionary<string, object> target) => OtlpLogDecoder.ReadKeyValue(data, target);
+
+    public static void ReadJsonAttributes(JsonElement attributes, Dictionary<string, object> target) => OtlpLogDecoder.ReadJsonAttributes(attributes, target);
+
+    /// <summary>Reads the KeyValue fields with this number from a message, such as a Resource's attributes.</summary>
+    public static void ReadAttributes(ReadOnlyMemory<byte> data, int field, Dictionary<string, object> target)
+    {
+        foreach (var item in Fields(data).Where(f => f.Field == field))
+        {
+            ReadKeyValue(item.Bytes, target);
+        }
     }
 }

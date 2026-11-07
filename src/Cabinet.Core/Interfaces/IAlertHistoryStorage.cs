@@ -34,7 +34,7 @@ public class AlertRecord
     public string Query { get; set; } = string.Empty;
     public string Severity { get; set; } = "Info";
     public int ResultCount { get; set; }
-    public string Message { get; set; } = string.Empty;
+    public string? Message { get; set; }
     public string Channel { get; set; } = string.Empty;
     public bool Acknowledged { get; set; }
     public string? AcknowledgedBy { get; set; }
@@ -43,6 +43,9 @@ public class AlertRecord
 
     /// <summary>The detection rule that fired, if a rule did.</summary>
     public string? RuleId { get; set; }
+
+    /// <summary>The index of the event that made it fire. Null for alerts about every index.</summary>
+    public string? Index { get; set; }
 
     /// <summary>The event that made it fire.</summary>
     public string? EventId { get; set; }

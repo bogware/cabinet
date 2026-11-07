@@ -47,7 +47,8 @@ public sealed class MetricsMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (context.Request.Path.Equals("/metrics", StringComparison.OrdinalIgnoreCase))
+        // Exactly, so that a proxy rule blocking /metrics also blocks every way of asking for it
+        if (context.Request.Path.Equals("/metrics", StringComparison.Ordinal))
         {
             // Design decision: /metrics is intentionally unauthenticated.
             // Prometheus scrapers typically do not support API key authentication, and requiring

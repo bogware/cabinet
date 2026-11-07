@@ -9,7 +9,7 @@ namespace Cabinet.Query.Bql;
 /// </summary>
 public sealed class BqlEventMatcher
 {
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
 
     private readonly Regex? _pattern;
     private readonly Regex? _extract;
@@ -89,7 +89,12 @@ public sealed class BqlEventMatcher
 
         try
         {
-            return new Regex(pattern, options | RegexOptions.Compiled, RegexTimeout);
+            var regex = new Regex(pattern, options | RegexOptions.Compiled, RegexTimeout);
+
+            // The first match compiles the expression, which on a busy machine can take longer
+            // than the timeout allows, and would count as a slow rule
+            regex.IsMatch(string.Empty);
+            return regex;
         }
         catch (ArgumentException ex)
         {

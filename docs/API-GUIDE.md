@@ -545,27 +545,42 @@ curl -X POST http://localhost:5000/api/v1/scheduled-searches \
 
 ### OpenTelemetry
 
-`POST /v1/logs` receives OTLP over HTTP, as `application/x-protobuf` or `application/json`, optionally gzipped. It needs `Ingest`. Point an exporter at it with the key in a header:
+`POST /v1/logs`, `/v1/traces` and `/v1/metrics` receive OTLP over HTTP, as `application/x-protobuf` or `application/json`, optionally gzipped, up to 64 MB once decompressed. They need `Ingest`. Point an exporter at the base address with the key in a header:
 
 ```bash
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:5000/v1/logs
-OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_LOGS_HEADERS=X-API-Key=your-key
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5000
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_HEADERS=X-API-Key=your-key
 ```
 
-`service.name` becomes the source type, `host.name` the host, and other attributes become fields. The record's time and severity are used when present. The index is the `X-Cabinet-Index` header, then a `cabinet.index` attribute, then `main`. An event's ID comes from its content, so a retried export stores nothing twice, and neither do two identical records.
+`service.name` becomes the source type, `host.name` the host, and other attributes become fields. The record's time and severity are used when present. The index is the `X-Cabinet-Index` header, then a `cabinet.index` attribute, then `main` for logs, `traces` for spans and `metrics` for data points. An event's ID comes from its content, so a retried export stores nothing twice, and neither do two identical records.
+
+Each span becomes an event like `span charge-card 250ms error`, with `trace_id`, `span_id`, `parent_span_id`, `span.name`, `span.kind`, `duration_ms` and `status` fields, so `find index=traces | stats p95(duration_ms) by span.name` works. Failed spans are stored at Error severity.
+
+Each metric data point becomes an event like `metric orders_placed=7`, with `metric.name`, `metric.type` (`gauge`, `sum`, `histogram`, `exponential_histogram` or `summary`), `value`, and for distributions `count`, `sum`, `min` and `max`. Timecharts over `value` chart them.
 
 ### Detection Rules
 
-`/api/v1/rules` lists, adds, changes and deletes rules, with `POST /{id}/enable`, `POST /{id}/disable`, and `POST /test`. They need `Alerts`. See the deployment guide.
+`/api/v1/rules` lists, adds, changes and deletes rules, with `POST /{id}/enable`, `POST /{id}/disable`, and `POST /test`. They need `Alerts`, and changing a rule also needs `Search` on every index, since rules see every event. See the deployment guide.
+
+`POST /api/v1/rules/backtest` runs a rule over stored events, the caller can read, without alerting:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/rules/backtest -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{
+  "rule": { "name": "Failed logins", "pattern": "login failed", "groupBy": "Host", "threshold": 5, "windowSeconds": 300, "severity": "Warning" },
+  "hours": 24
+}'
+```
+
+Send `ruleId` instead of `rule` to try a saved rule. The result has `eventsScanned`, `matches`, `wouldFire`, the groups that would fire most (`topGroups`) and sample firings. It stops at `maxEvents` (default 1,000,000) and sets `truncated`.
 
 ### Alerts
 
-`GET /api/v1/alerts`, `GET /api/v1/alerts/{id}` and `POST /api/v1/alerts/{id}/acknowledge` read an in-memory store that nothing writes to, so the list is empty. Scheduled searches deliver alerts through channels but don't record them here.
+`GET /api/v1/alerts`, `GET /api/v1/alerts/{id}` and `POST /api/v1/alerts/{id}/acknowledge` read the history that detections and scheduled searches write, newest first. Callers limited to some indexes see only alerts about those, and acknowledging needs `Alerts`. Each alert names the event that caused it (`eventId`, `index`), rather than repeating its line.
 
 ### Retention
 
-`/api/v1/retention` sets how long an index keeps events, applied hourly. A policy replaces `Storage:RetentionDays` for that index. Reading needs `SystemHealth`, and changing needs `IndexManagement`.
+`/api/v1/retention` sets how long an index keeps events, applied hourly. A policy replaces `Storage:RetentionDays` for that index. Reading needs `SystemHealth`, and changing needs `IndexManagement` on that index. Changes are audited.
 
 ```bash
 curl -X PUT http://localhost:5000/api/v1/retention/web -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{"maxAgeDays": 30}'
@@ -573,7 +588,7 @@ curl -X PUT http://localhost:5000/api/v1/retention/web -H "X-API-Key: $KEY" -H "
 
 ### Backups
 
-`GET` and `POST /api/v1/backups`, and `POST /api/v1/backups/{id}/verify`, for SQLite storage. They need `IndexManagement`. See the deployment guide.
+`GET` and `POST /api/v1/backups`, and `POST /api/v1/backups/{id}/verify`, for SQLite storage. They need `IndexManagement`, and taking a backup needs it on every index, since a backup holds them all. Backups can be taken at most every five minutes (429 otherwise). See the deployment guide.
 
 ### Audit
 
@@ -581,7 +596,17 @@ curl -X PUT http://localhost:5000/api/v1/retention/web -H "X-API-Key: $KEY" -H "
 
 ### Field Extractions
 
-`/api/v1/field-extractions` provides CRUD for definitions held in memory. They are lost on restart and aren't applied to queries.
+`/api/v1/field-extractions` saves regular expressions whose named groups become fields at search time, on events already stored as well as new ones:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/field-extractions -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{
+  "name": "Checkout timings",
+  "pattern": "order=(?<order_id>\\S+) took (?<took_ms>\\d+)ms",
+  "sourceType": "checkout"
+}'
+```
+
+`sourceType` and `index` limit where it applies; `priority` orders extractions, and a field an event already has isn't overwritten. A pattern must compile and have a named group. Each match has 100 ms. Changes apply at once on the instance that made them and within 30 seconds on others. Adding, changing and deleting them needs `IndexManagement` on every index, since they apply to everyone's searches.
 
 ### Indexes
 

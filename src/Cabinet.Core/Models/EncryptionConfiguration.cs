@@ -19,6 +19,12 @@ public sealed class EncryptionConfiguration
     public int KeyRotationDays { get; set; }
 
     public bool EncryptRawLine { get; set; }
+
+    /// <summary>
+    /// Key files from before a rotation. New data uses the current key, and these keep older
+    /// data readable. Remove one only once nothing it encrypted is still stored.
+    /// </summary>
+    public List<string> PreviousKeyFilePaths { get; set; } = new();
 }
 
 public enum KeyManagementProvider

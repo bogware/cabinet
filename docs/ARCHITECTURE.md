@@ -393,27 +393,37 @@ The optimizer moves filtering into storage where that can't change a query's ans
 
 Only the leading run of filters is pushed, because a filter after `head`, `eval` or `stats` applies to that stage's output rather than to stored events. Everything else stays in the pipeline for post-fetch filtering.
 
+### Aggregate Pushdown
+
+When the first stage after those filters is `stats` or `timechart`, `BqlQueryEngine` asks storage to compute it through `IAggregatingLogStorage`. The answer must be exactly what the pipeline would give, so storage mirrors the pipeline's rules: field names match ignoring case, a group takes its values from its newest event, numbers held as text count as numbers, groups come out newest first, and time buckets count from year 1. Where it can't match them, it returns null and the pipeline runs as usual:
+
+| Backend | Computes |
+|---|---|
+| PostgreSQL | Every aggregate, as SQL over built-in columns and JSON fields |
+| SQLite | All but percentiles and deviations, which SQLite lacks |
+| OpenSearch | Counts by built-in fields and aligned time buckets |
+
+Decorators decide too: encrypted fields, extracted fields and masking for the caller all refuse, because storage can't see what the caller would. `AggregatePushdownTests` runs the same queries pushed and not pushed on every backend and requires identical answers. A pushed query reports the events it covered in `eventsScanned`, and its trace span has `cabinet.pushed_down`.
+
 ## Security Architecture
 
 ```
 Request → Per-address limiter → Authentication → Authorization → Rate limiter → Capability filter → Controller
                                       │                               │                │
                                 SHA-256 hash                    Per key, or per   Per endpoint,
-                                dictionary lookup               address if anon   index `main`
+                                dictionary lookup               address if anon   and per index
 ```
 
 ### Defense Layers
 
-1. **Rate Limiting** — A per-address limit before authentication, then per-tier limits and a per-address limit for anonymous requests. All are held in process memory. `X-Forwarded-For` is honored only from `Network:TrustedProxies`.
-2. **Authentication** — API key looked up by SHA-256 hash in a dictionary
-3. **Authorization** — Roles and capabilities checked per endpoint through `[RequireCapability]`. Checks always evaluate index `main`, so per-index RBAC is not implemented. No tier has `IndexManagement` or `UserManagement`.
-4. **Audit Logging** — Hash-chained records in the document store, one chain per process, covering every field. `GET /api/v1/audit/verify` checks them. It's tamper-evident, not tamper-proof.
-
-### Not Implemented
-
-- **Field masking** — `FieldMaskingService` masks events by role as they're read, through `IndexRestrictedLogStorage`, in fields and in the raw line.
-- **Encryption at rest** — `EncryptingLogStorage` wraps the backend and encrypts configured fields with AES-256-GCM.
+1. **Rate Limiting** — A per-address limit before authentication, then per-tier limits and a per-address limit for anonymous requests. Counters are in process memory, and each instance enforces its share of a limit, dividing by the live instances `IClusterCoordinator` reports. `X-Forwarded-For` is honored only from `Network:TrustedProxies`.
+2. **Authentication** — API key looked up by SHA-256 hash in a dictionary, with optional expiry. OIDC tokens can't carry Cabinet's own claim names.
+3. **Authorization** — Roles and capabilities checked per endpoint through `[RequireCapability]`, and per index through `IndexAccessScope`. Things that act on every index whoever triggers them (detection rules, data models, knowledge objects, field extractions, backups) also need `[RequireEveryIndex]`.
+4. **Masking and encryption** — `FieldMaskingService` masks events by role as they're read, through `IndexRestrictedLogStorage`, in fields and in the raw line; search text is matched against the masked line. `EncryptingLogStorage` encrypts configured fields with AES-256-GCM, with each value naming the key that wrote it so keys can rotate.
+5. **Audit Logging** — Hash-chained records in the document store, one chain per process, covering every field, optionally as HMACs (`Audit:HmacKey`). `GET /api/v1/audit/verify` checks them. It's tamper-evident, not tamper-proof.
 
 ## Distributed Components
 
-Several API instances can share a PostgreSQL database. Roles, search jobs, data models, alert history and field extractions live in `IDocumentStore`. A PostgreSQL advisory lock (`PostgresLeaderLease`) picks one instance to run scheduled searches, retention, search jobs and data model builds, and the server releases it if that instance dies. Rate limits and the query cache stay per instance.
+Several API instances can share a PostgreSQL database. Roles, search jobs, data models, alert history and field extractions live in `IDocumentStore`. A PostgreSQL advisory lock (`PostgresLeaderLease`) picks one instance to run scheduled searches, retention, search jobs and data model builds, and the server releases it if that instance dies.
+
+`IClusterCoordinator` (`PostgresClusterCoordinator`) holds what instances must agree on as it happens: heartbeats, so each knows how many are running, and detection state. Each rule match is recorded once by event ID, a threshold counts matches from every instance within its window, and firing is claimed with a single conditional upsert, so a rule fires once per cooldown however many instances saw it. One instance alone uses `InMemoryClusterCoordinator`. The query cache stays per instance.

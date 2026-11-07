@@ -14,6 +14,7 @@ namespace Cabinet.API.Authentication;
 public sealed class IndexAccessScope
 {
     private FieldMaskingService? _masking;
+    private FieldExtractor? _extractor;
 
     /// <summary>Patterns the caller may read, or null for every index.</summary>
     public IReadOnlyList<string>? ReadableIndexes { get; set; }
@@ -32,7 +33,14 @@ public sealed class IndexAccessScope
     public bool Can(Capability capability, string index) => Principal?.HasCapability(capability, index) ?? false;
 
     /// <summary>Applies this scope to storage.</summary>
-    public ILogStorage Restrict(ILogStorage storage) => new IndexRestrictedLogStorage(storage, this, _masking);
+    public ILogStorage Restrict(ILogStorage storage) =>
+        new IndexRestrictedLogStorage(_extractor == null ? storage : new ExtractingLogStorage(storage, _extractor), this, _masking);
+
+    /// <summary>Adds saved field extractions to what this scope reads.</summary>
+    public FieldExtractor? Extractor
+    {
+        set => _extractor = value;
+    }
 
     /// <summary>Masks what this scope reads.</summary>
     public FieldMaskingService? Masking
@@ -49,7 +57,7 @@ public sealed class IndexAccessScope
 /// Storage that only shows the indexes in a scope. Reads the scope on each call, so it can be
 /// created before the request is authorized.
 /// </summary>
-public sealed class IndexRestrictedLogStorage : ILogStorage
+public sealed class IndexRestrictedLogStorage : ILogStorage, IAggregatingLogStorage
 {
     private readonly ILogStorage _inner;
     private readonly IndexAccessScope _scope;
@@ -74,9 +82,82 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
             yield break;
         }
 
+        if (SearchesMaskedText(restricted))
+        {
+            await foreach (var logEvent in SearchMaskedAsync(restricted, cancellationToken))
+            {
+                yield return logEvent;
+            }
+
+            yield break;
+        }
+
         await foreach (var logEvent in _inner.QueryAsync(restricted, cancellationToken))
         {
             yield return Mask(logEvent);
+        }
+    }
+
+    /// <summary>
+    /// Whether a search would run against text the caller sees masked. Storage would match the
+    /// original, so searching for a hidden value would show whether it's there.
+    /// </summary>
+    private bool SearchesMaskedText(QueryContext context) =>
+        !string.IsNullOrWhiteSpace(context.SearchText)
+        && (_masking?.AppliesTo(_scope.Principal?.Role ?? SystemRole.Viewer) ?? false);
+
+    /// <summary>Reads without the search text, and matches it against what the caller sees.</summary>
+    private async IAsyncEnumerable<LogEvent> SearchMaskedAsync(QueryContext context, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var terms = SearchTerms.Parse(context.SearchText);
+        var skip = context.Skip;
+        var remaining = context.Limit;
+        var page = context.Clone();
+        page.SearchText = null;
+        page.Skip = 0;
+        page.Limit = 1000;
+
+        // Keyset paging needs a time order. Others read one large page, as storage would.
+        var keyset = page.SortField.Equals("Timestamp", StringComparison.OrdinalIgnoreCase);
+        if (!keyset)
+        {
+            page.Limit = QueryContext.MaxLimit;
+        }
+
+        while (remaining > 0)
+        {
+            var read = 0;
+            LogEvent? last = null;
+            await foreach (var logEvent in _inner.QueryAsync(page, cancellationToken))
+            {
+                read++;
+                last = logEvent;
+                var masked = Mask(logEvent);
+                if (!SearchTerms.Matches(masked.RawLine, terms))
+                {
+                    continue;
+                }
+
+                if (skip > 0)
+                {
+                    skip--;
+                    continue;
+                }
+
+                yield return masked;
+                if (--remaining == 0)
+                {
+                    yield break;
+                }
+            }
+
+            if (!keyset || last == null || read < page.Limit)
+            {
+                yield break;
+            }
+
+            page = page.Clone();
+            page.After = new EventCursor(last.Timestamp, last.Id);
         }
     }
 
@@ -91,7 +172,26 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
     public async Task<long> GetCountAsync(QueryContext? context = null, CancellationToken cancellationToken = default)
     {
         var restricted = Restrict(context ?? new QueryContext());
-        return restricted == null ? 0 : await _inner.GetCountAsync(restricted, cancellationToken);
+        if (restricted == null)
+        {
+            return 0;
+        }
+
+        if (SearchesMaskedText(restricted))
+        {
+            var all = restricted.Clone();
+            all.Skip = 0;
+            all.Limit = QueryContext.MaxLimit;
+            long count = 0;
+            await foreach (var _ in SearchMaskedAsync(all, cancellationToken))
+            {
+                count++;
+            }
+
+            return count;
+        }
+
+        return await _inner.GetCountAsync(restricted, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -129,6 +229,40 @@ public sealed class IndexRestrictedLogStorage : ILogStorage
 
     /// <inheritdoc />
     public Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default) => _inner.DeleteByIndexAsync(indexName, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
+    {
+        // Storage would aggregate values the caller is only allowed to see masked
+        if (_inner is not IAggregatingLogStorage aggregating
+            || (_masking?.AppliesTo(_scope.Principal?.Role ?? SystemRole.Viewer) ?? false))
+        {
+            return null;
+        }
+
+        if (Restrict(request.Filter) is not { } restricted)
+        {
+            return new AggregateResult { Rows = request.GroupBy.Count == 0 && request.Bucket == null ? [EmptyRow(request)] : [] };
+        }
+
+        return await aggregating.AggregateAsync(
+            new AggregateRequest
+            {
+                Filter = restricted,
+                GroupBy = request.GroupBy,
+                Bucket = request.Bucket,
+                Aggregates = request.Aggregates,
+                MaxGroups = request.MaxGroups,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>What aggregating no events gives: counts of zero, and nothing for the rest.</summary>
+    private static Dictionary<string, object?> EmptyRow(AggregateRequest request) =>
+        request.Aggregates.ToDictionary(
+            spec => spec.OutputName,
+            spec => spec.Kind is AggregateKind.Count or AggregateKind.DistinctCount ? (object?)0 : null,
+            StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The context limited to the scope, or null if it can't match anything.</summary>
     private QueryContext? Restrict(QueryContext context)

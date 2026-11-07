@@ -83,7 +83,7 @@ public class QueryController : ControllerBase
             var useCache = request.UseCache;
             if (useCache && _queryCache != null)
             {
-                var cached = _queryCache.TryGet(request.Query, _indexScope?.CacheKey);
+                var cached = _queryCache.TryGet(request.Query, $"{_indexScope?.CacheKey}|{request.Index}");
                 if (cached != null)
                 {
                     var cacheTime = DateTime.UtcNow - startTime;
@@ -105,7 +105,8 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = request.Query,
-                Limit = 50_000
+                Limit = 50_000,
+                Index = string.IsNullOrWhiteSpace(request.Index) ? null : request.Index
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var executionTime = DateTime.UtcNow - startTime;
@@ -113,7 +114,7 @@ public class QueryController : ControllerBase
             // Cache the result for future requests
             if (_queryCache != null)
             {
-                _queryCache.Set(request.Query, result, _indexScope?.CacheKey);
+                _queryCache.Set(request.Query, result, $"{_indexScope?.CacheKey}|{request.Index}");
                 Response.Headers["X-Cache"] = "MISS";
             }
 
@@ -827,6 +828,11 @@ public class QueryRequest
 {
     public string Query { get; set; } = string.Empty;
     public Dictionary<string, object>? Parameters { get; set; }
+
+    /// <summary>
+    /// Limits the query to one index, as storage reads it, which is faster than a <c>where</c>.
+    /// </summary>
+    public string? Index { get; set; }
     /// <summary>
     /// When true, returns cached results if available (for dashboard refresh acceleration).
     /// Default: false. Cached results use a configurable TTL (default 30s).

@@ -114,6 +114,13 @@ public class BqlLanguageTests : IAsyncLifetime
         Text(await Eval(expression)).Should().Be(expected);
     }
 
+    [Fact]
+    public async Task Printf_PrecisionIsCapped()
+    {
+        // .NET would format hundreds of millions of digits
+        Text(await Eval("printf(\"%.999999999f\", 1)"))!.Length.Should().BeLessThan(200);
+    }
+
     [Theory]
     [InlineData("abs(-2)", "2")]
     [InlineData("round(1.234, 2)", "1.23")]
