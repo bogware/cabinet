@@ -30,8 +30,8 @@ public class QueryExecutionContext
     public int Limit { get; set; } = 10_000;
 
     /// <summary>
-    /// Index to scope the query to (supports tenant isolation).
-    /// When set, only events in this index (or with this prefix) are returned.
+    /// Index to scope the query to.
+    /// When set, only events in this index are returned.
     /// </summary>
     public string? Index { get; set; }
 

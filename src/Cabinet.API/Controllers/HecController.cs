@@ -106,12 +106,6 @@ public class HecController : ControllerBase
             return BadRequest(new HecResponse { Text = "No valid events", Code = 5 });
         }
 
-        // Apply tenant index scoping (ScopeIndex checks for existing prefix to avoid double-prefix)
-        foreach (var evt in events)
-        {
-            evt.Index = HttpContext.ScopeIndex(evt.Index);
-        }
-
         try
         {
             await _storage.StoreBatchAsync(events, cancellationToken);
@@ -202,7 +196,7 @@ public class HecController : ControllerBase
                 IndexTime = DateTime.UtcNow,
                 Host = host,
                 SourceType = sourcetype ?? SourceTypes.Generic,
-                Index = HttpContext.ScopeIndex(index ?? "main"),
+                Index = index ?? "main",
                 SourceFile = source,
                 Severity = LogSeverity.Info
             };

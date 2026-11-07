@@ -362,7 +362,6 @@ Full API guide: [docs/API-GUIDE.md](docs/API-GUIDE.md)
 | Feature | Description |
 |---------|-------------|
 | **RBAC** | Role-based access (Viewer/Analyst/Admin/SuperAdmin) with per-index permissions |
-| **Multi-tenancy** | Tenant isolation via index prefix scoping |
 | **PII Masking** | Field-level masking at query time (redact, hash, partial, regex, remove) |
 | **Encryption at Rest** | AES-256-GCM with configurable key management |
 | **Tamper-Evident Audit** | SHA256 hash-chained audit trail |

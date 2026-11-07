@@ -368,7 +368,7 @@ Predicates that can't be pushed down remain in the pipeline for post-fetch filte
 ## Security Architecture
 
 ```
-Request → Rate Limiter → API Key Auth → RBAC Check → Tenant Scoping → Controller
+Request → Rate Limiter → API Key Auth → RBAC Check → Controller
                               │              │              │
                          SHA-256 hash   Capability    Index prefix
                          Constant-time  enforcement   isolation
@@ -380,7 +380,6 @@ Request → Rate Limiter → API Key Auth → RBAC Check → Tenant Scoping → 
 1. **Rate Limiting** — Per-tier request limits prevent abuse
 2. **Authentication** — API key validated via SHA-256 hash comparison
 3. **Authorization** — RBAC capabilities checked per endpoint
-4. **Tenant Isolation** — Index prefix scoping prevents cross-tenant access
 5. **Audit Logging** — All security events recorded with tamper-evident hash chain
 6. **Field Masking** — PII redacted/hashed/removed at query time
 7. **Encryption** — AES-256-GCM for data at rest

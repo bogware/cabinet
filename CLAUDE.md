@@ -88,9 +88,9 @@ The optimizer pushes filters (search text, severity, field equality, time range,
 
 Order as wired in `Program.cs`, omitting logging, CORS, and static files:
 
-`IpRateLimitingMiddleware (pre-auth) → Authentication (API key / OIDC) → Authorization → TenantMiddleware (index-prefix scoping) → ASP.NET rate limiter → [RequireCapability] filter → Controller`
+`IpRateLimitingMiddleware (pre-auth) → Authentication (API key / OIDC) → Authorization → ASP.NET rate limiter → [RequireCapability] filter → Controller`
 
-Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`. Tenant isolation is via index prefix — don't bypass it when adding endpoints. Audit log is SHA-256 hash-chained (`TamperEvidentAuditLogger`).
+Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`. Each deployment serves one organization; there is no multi-tenancy. Audit log is SHA-256 hash-chained (`TamperEvidentAuditLogger`).
 
 ## Code Conventions
 

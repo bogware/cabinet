@@ -192,11 +192,11 @@ public class BqlOptimizerTests
         var executionContext = new QueryExecutionContext
         {
             Query = "find errors",
-            Index = "tenant_abc_main"
+            Index = "app_main"
         };
         var optimized = _optimizer.Optimize(query, executionContext);
 
-        optimized.StorageContext.Index.Should().Be("tenant_abc_main");
+        optimized.StorageContext.Index.Should().Be("app_main");
     }
 
     [Fact]

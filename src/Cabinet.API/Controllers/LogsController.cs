@@ -66,8 +66,7 @@ public class LogsController : ControllerBase
         var events = new List<LogEvent>();
         var errors = new List<string>();
 
-        // Apply tenant index scoping
-        var scopedIndex = HttpContext.ScopeIndex("main");
+        const string targetIndex = "main";
 
         // Each item in the Logs array is already a distinct event — no multi-line merging.
         // Multi-line merging is for raw text streams (HEC raw, syslog, file tailing) where
@@ -82,7 +81,7 @@ public class LogsController : ControllerBase
                     var evt = await parser.ParseAsync(log);
                     if (evt != null)
                     {
-                        evt.Index = scopedIndex;
+                        evt.Index = targetIndex;
                         events.Add(evt);
                     }
                 }
@@ -94,7 +93,7 @@ public class LogsController : ControllerBase
                         RawLine = log,
                         Timestamp = DateTime.UtcNow,
                         SourceType = SourceTypes.Generic,
-                        Index = scopedIndex
+                        Index = targetIndex
                     });
                 }
             }
@@ -120,7 +119,7 @@ public class LogsController : ControllerBase
             PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
             Action = AuditAction.Ingest,
             ResourceType = "LogEvent",
-            Description = $"Ingested {events.Count} events into index '{scopedIndex}'",
+            Description = $"Ingested {events.Count} events into index '{targetIndex}'",
             SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString()
         });
 
@@ -203,9 +202,6 @@ public class LogsController : ControllerBase
 
         pollIntervalMs = Math.Clamp(pollIntervalMs, 100, 5000);
 
-        // Apply tenant index scoping
-        var scopedIndex = HttpContext.ScopeIndex(index);
-
         // Set SSE response headers
         Response.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
@@ -237,7 +233,7 @@ public class LogsController : ControllerBase
                 // Query for events newer than last checkpoint
                 var context = new QueryContext
                 {
-                    Index = scopedIndex,
+                    Index = index,
                     StartTime = lastSeen,
                     SearchText = filter,
                     SortField = "Timestamp",
@@ -285,7 +281,7 @@ public class LogsController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Live SSE stream ended unexpectedly for index '{Index}'", scopedIndex);
+            _logger.LogWarning(ex, "Live SSE stream ended unexpectedly for index '{Index}'", index);
         }
     }
 

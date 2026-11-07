@@ -53,7 +53,7 @@ docker-compose --profile monitoring up -d
 
 ### Option 2: Kubernetes (Production)
 
-Best for: Teams, high availability, auto-scaling, multi-tenant.
+Best for: Teams, high availability, auto-scaling.
 
 ### Option 3: Bare Metal / VM
 

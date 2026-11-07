@@ -88,29 +88,6 @@ public class RbacTests
         result.Should().Be(expected);
     }
 
-    // ─── Tenant validation ──────────────────────────────────
-
-    [Fact]
-    public void Tenant_EmptyIndexPrefix_ThrowsArgumentException()
-    {
-        var act = () => new Tenant { Name = "test", IndexPrefix = "" };
-        act.Should().Throw<ArgumentException>().WithMessage("*IndexPrefix*");
-    }
-
-    [Fact]
-    public void Tenant_WhitespaceIndexPrefix_ThrowsArgumentException()
-    {
-        var act = () => new Tenant { Name = "test", IndexPrefix = "   " };
-        act.Should().Throw<ArgumentException>().WithMessage("*IndexPrefix*");
-    }
-
-    [Fact]
-    public void Tenant_ValidIndexPrefix_Succeeds()
-    {
-        var tenant = new Tenant { Name = "acme", IndexPrefix = "acme-" };
-        tenant.IndexPrefix.Should().Be("acme-");
-    }
-
     // ─── SavedQuery serialization ───────────────────────────
 
     [Fact]

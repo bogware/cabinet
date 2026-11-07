@@ -271,9 +271,6 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
 
-    // Tenant resolution (must run after auth to access principal claims)
-    app.UseMiddleware<TenantMiddleware>();
-
     // Rate limiter MUST run after authentication so it can read the Tier claim
     app.UseRateLimiter();
 

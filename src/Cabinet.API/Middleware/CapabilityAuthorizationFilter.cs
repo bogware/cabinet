@@ -43,15 +43,7 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
             return;
         }
 
-        // Apply tenant index scoping if configured
-        var index = _indexName;
-        var tenantPrefix = context.HttpContext.Items["TenantIndexPrefix"] as string;
-        if (!string.IsNullOrEmpty(tenantPrefix) && !index.StartsWith(tenantPrefix))
-        {
-            index = tenantPrefix + index;
-        }
-
-        var hasCapability = await rbac.HasCapabilityAsync(apiKeyHash, _capability, index);
+        var hasCapability = await rbac.HasCapabilityAsync(apiKeyHash, _capability, _indexName);
         if (!hasCapability)
         {
             context.Result = new JsonResult(new

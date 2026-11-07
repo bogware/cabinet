@@ -45,7 +45,7 @@ public sealed class SearchJob
     /// <summary>Who submitted the job</summary>
     public string? Owner { get; set; }
 
-    /// <summary>Optional tenant index scope</summary>
+    /// <summary>Optional index scope</summary>
     public string? Index { get; set; }
 
     /// <summary>Maximum results to return</summary>

@@ -58,13 +58,10 @@ public class SearchJobController : ControllerBase
             return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
         }
 
-        var tenantIndex = HttpContext.GetTenantIndexPrefix();
-
         var job = new SearchJob
         {
             Query = request.Query,
             Owner = User.FindFirst("ClientId")?.Value ?? "unknown",
-            Index = tenantIndex,
             Limit = Math.Clamp(request.MaxResults, 1, 100_000),
             Ttl = TimeSpan.FromMinutes(Math.Clamp(request.TtlMinutes, 1, 1440))
         };

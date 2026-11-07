@@ -33,7 +33,7 @@ public sealed class BqlOptimizer
         if (executionContext?.EndTime != null)
             storageContext.EndTime = executionContext.EndTime;
 
-        // Apply index scope from execution context (tenant isolation)
+        // Apply index scope from execution context
         if (!string.IsNullOrEmpty(executionContext?.Index))
             storageContext.Index = executionContext.Index;
 

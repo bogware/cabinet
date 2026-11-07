@@ -71,13 +71,12 @@ public class QueryController : ControllerBase
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
 
             var startTime = DateTime.UtcNow;
-            var tenantIndex = HttpContext.GetTenantIndexPrefix();
 
             // Check query cache for dashboard refresh acceleration
             var useCache = request.UseCache;
             if (useCache && _queryCache != null)
             {
-                var cached = _queryCache.TryGet(request.Query, tenantIndex);
+                var cached = _queryCache.TryGet(request.Query);
                 if (cached != null)
                 {
                     var cacheTime = DateTime.UtcNow - startTime;
@@ -96,8 +95,7 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = request.Query,
-                Limit = 50_000,
-                Index = tenantIndex
+                Limit = 50_000
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var executionTime = DateTime.UtcNow - startTime;
@@ -105,7 +103,7 @@ public class QueryController : ControllerBase
             // Cache the result for future requests
             if (_queryCache != null)
             {
-                _queryCache.Set(request.Query, result, tenantIndex);
+                _queryCache.Set(request.Query, result);
                 Response.Headers["X-Cache"] = "MISS";
             }
 
@@ -212,12 +210,10 @@ public class QueryController : ControllerBase
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
 
-        var tenantIndex = HttpContext.GetTenantIndexPrefix();
         var context = new QueryExecutionContext
         {
             Query = request.Query,
             Limit = 100_000,
-            Index = tenantIndex,
             Timeout = TimeSpan.FromMinutes(5)
         };
 
@@ -626,15 +622,12 @@ public class QueryController : ControllerBase
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(120)); // 2 min for exports
 
-            var exportTenantIndex = HttpContext.GetTenantIndexPrefix();
-
             // Use QueryExecutionContext to preserve aggregation data (ExpandoObjects).
             // The string-based extension method converts to LogEvent, which loses stats columns.
             var context = new QueryExecutionContext
             {
                 Query = request.Query,
                 Limit = request.MaxRows,
-                Index = exportTenantIndex,
                 Timeout = TimeSpan.FromSeconds(120)
             };
             var queryResult = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
@@ -697,7 +690,6 @@ public class QueryController : ControllerBase
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
 
             var startTime = DateTime.UtcNow;
-            var fsTenantIndex = HttpContext.GetTenantIndexPrefix();
 
             // Use QueryExecutionContext path (not the extension method) to preserve
             // raw ExpandoObject results from fieldsummary — the extension method
@@ -705,8 +697,7 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = bqlQuery,
-                Limit = 10_000,
-                Index = fsTenantIndex
+                Limit = 10_000
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var executionTime = DateTime.UtcNow - startTime;
