@@ -1,0 +1,17 @@
+name: Isolate job state
+description: >-
+  Keeps tools, package caches and credentials in the job's temp directory. Self-hosted
+  runners are long-lived and shared between repositories, so nothing a job writes should
+  be visible to, or trusted from, another job on the same host.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        {
+          echo "DOTNET_INSTALL_DIR=$RUNNER_TEMP/dotnet"
+          echo "DOTNET_CLI_HOME=$RUNNER_TEMP/dotnet-home"
+          echo "NUGET_PACKAGES=$RUNNER_TEMP/nuget"
+          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy"
+        } >> "$GITHUB_ENV"

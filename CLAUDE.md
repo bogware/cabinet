@@ -128,4 +128,5 @@ The test project has no coverlet package, so coverage flags (`/p:CollectCoverage
 - `docs/API-GUIDE.md` — REST API guide
 - `docs/DEPLOYMENT.md` — deployment topologies
 - `CONTRIBUTING.md` — full code standards, PR process, branch naming
+- `docs/CI.md` — runner policy. CI uses shared self-hosted runners; read this before changing workflows
 - `api-spec.json` — OpenAPI spec generated from the API; a test fails if it drifts. Regenerate with `CABINET_UPDATE_API_SPEC=1 dotnet test --filter ApiSpec_MatchesTheRunningApi`
