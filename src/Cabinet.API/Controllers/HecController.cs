@@ -1,3 +1,4 @@
+using Cabinet.Parsers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,14 +19,16 @@ namespace Cabinet.API.Controllers;
 public class HecController : ControllerBase
 {
     private readonly ILogStorage _storage;
+    private readonly LogLineParser _lineParser;
     private readonly IAuditLogger _auditLogger;
     private readonly Services.QueryCacheService? _queryCache;
     private readonly ILogger<HecController> _logger;
 
-    public HecController(ILogStorage storage, IAuditLogger auditLogger, ILogger<HecController> logger,
+    public HecController(ILogStorage storage, LogLineParser lineParser, IAuditLogger auditLogger, ILogger<HecController> logger,
         Services.QueryCacheService? queryCache = null)
     {
         _storage = storage;
+        _lineParser = lineParser;
         _auditLogger = auditLogger;
         _queryCache = queryCache;
         _logger = logger;
@@ -84,7 +87,7 @@ public class HecController : ControllerBase
                     continue;
                 }
 
-                events.Add(ConvertHecEvent(hecEvent));
+                events.Add(await ConvertHecEventAsync(hecEvent, cancellationToken));
             }
             catch (JsonException ex)
             {
@@ -188,18 +191,10 @@ public class HecController : ControllerBase
 
         foreach (var line in lines)
         {
-            var logEvent = new LogEvent
-            {
-                Id = Ulid.NewUlid(),
-                RawLine = line,
-                Timestamp = DateTime.UtcNow,
-                IndexTime = DateTime.UtcNow,
-                Host = host,
-                SourceType = sourcetype ?? SourceTypes.Generic,
-                Index = index ?? "main",
-                SourceFile = source,
-                Severity = LogSeverity.Info
-            };
+            var logEvent = await _lineParser.ParseAsync(line, sourcetype, cancellationToken: cancellationToken);
+            logEvent.Host = host ?? logEvent.Host;
+            logEvent.Index = index ?? "main";
+            logEvent.SourceFile = source;
 
             events.Add(logEvent);
         }
@@ -253,15 +248,11 @@ public class HecController : ControllerBase
     private static bool IsValidEventId(string? id) =>
         id is { Length: >= 16 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
-    private static LogEvent ConvertHecEvent(HecEvent hecEvent)
+    private async Task<LogEvent> ConvertHecEventAsync(HecEvent hecEvent, CancellationToken cancellationToken)
     {
-        var timestamp = DateTime.UtcNow;
-        if (hecEvent.Time.HasValue)
-        {
-            // Splunk HEC time is epoch seconds (can include fractional milliseconds)
-            timestamp = DateTimeOffset.FromUnixTimeMilliseconds(
-                (long)(hecEvent.Time.Value * 1000)).UtcDateTime;
-        }
+        DateTime? sentTime = hecEvent.Time.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds((long)(hecEvent.Time.Value * 1000)).UtcDateTime
+            : null;
 
         var rawLine = hecEvent.Event is JsonElement jsonElement
             ? jsonElement.ValueKind == JsonValueKind.String
@@ -269,34 +260,17 @@ public class HecController : ControllerBase
                 : jsonElement.GetRawText()
             : hecEvent.Event?.ToString() ?? string.Empty;
 
-        var logEvent = new LogEvent
-        {
-            Id = IsValidEventId(hecEvent.Id) ? hecEvent.Id! : Ulid.NewUlid(),
-            RawLine = rawLine,
-            Timestamp = timestamp,
-            IndexTime = DateTime.UtcNow,
-            Host = hecEvent.Host,
-            SourceType = hecEvent.SourceType ?? SourceTypes.Generic,
-            Index = hecEvent.Index ?? "main",
-            SourceFile = hecEvent.Source,
-            Severity = LogSeverity.Info
-        };
+        // A timestamp in the line says when it happened. The sender's is when it was read.
+        var logEvent = await _lineParser.ParseAsync(rawLine, hecEvent.SourceType, sentTime, cancellationToken);
 
-        // If the event is a JSON object, extract its fields
-        if (hecEvent.Event is JsonElement element && element.ValueKind == JsonValueKind.Object)
+        if (IsValidEventId(hecEvent.Id))
         {
-            foreach (var property in element.EnumerateObject())
-            {
-                logEvent.SetField(property.Name, property.Value.ValueKind switch
-                {
-                    JsonValueKind.String => property.Value.GetString(),
-                    JsonValueKind.Number => property.Value.GetDouble(),
-                    JsonValueKind.True => true,
-                    JsonValueKind.False => false,
-                    _ => property.Value.GetRawText()
-                });
-            }
+            logEvent.Id = hecEvent.Id!;
         }
+
+        logEvent.Host = hecEvent.Host ?? logEvent.Host;
+        logEvent.Index = hecEvent.Index ?? "main";
+        logEvent.SourceFile = hecEvent.Source;
 
         // Copy HEC fields metadata
         if (hecEvent.Fields != null)

@@ -1,10 +1,12 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Core.Utilities;
+using Cabinet.Parsers;
 
 namespace Cabinet.API.Services;
 
@@ -17,40 +19,55 @@ public sealed class SyslogConfiguration
     public string BindAddress { get; set; } = "0.0.0.0";
     public int UdpPort { get; set; } = 1514;
     public int TcpPort { get; set; } = 1514;
+
+    /// <summary>Port for syslog over TLS (RFC 5425, usually 6514). 0 turns it off.</summary>
+    public int TlsPort { get; set; }
+
+    /// <summary>A PEM certificate, or a PKCS#12 file (.pfx, .p12). Required when TlsPort is set.</summary>
+    public string? TlsCertificatePath { get; set; }
+
+    /// <summary>The private key, for a PEM certificate that doesn't include it.</summary>
+    public string? TlsKeyPath { get; set; }
+
+    /// <summary>The password of a PKCS#12 file.</summary>
+    public string? TlsCertificatePassword { get; set; }
+
+    /// <summary>Longest message kept, in bytes. Anything beyond it is cut off.</summary>
+    public int MaxMessageBytes { get; set; } = 64 * 1024;
+
+    /// <summary>Open TCP and TLS connections allowed at once.</summary>
+    public int MaxConnections { get; set; } = 1000;
 }
 
 /// <summary>
-/// BackgroundService that listens on UDP and TCP for syslog messages (RFC 3164).
-/// Parses syslog priority, timestamp, hostname, app, message and stores as LogEvent.
-/// Only starts if SyslogConfiguration.Enabled is true.
+/// Receives syslog (RFC 3164 and RFC 5424) over UDP, TCP and optionally TLS, and stores it.
+/// When storage falls behind, TCP and TLS senders wait. UDP has no way to wait, so datagrams are
+/// dropped and counted.
 /// </summary>
 public sealed class SyslogListenerService : BackgroundService
 {
+    private const int BatchSize = 100;
+    private const int ChannelCapacity = 10_000;
+
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DropWarningInterval = TimeSpan.FromMinutes(1);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly SyslogConfiguration _config;
     private readonly ILogger<SyslogListenerService> _logger;
-    private readonly System.Threading.Channels.Channel<(string Message, string RemoteAddress)> _messageChannel;
+    private readonly SyslogParser _parser = new();
+    private readonly Channel<(string Message, string RemoteAddress)> _messages =
+        Channel.CreateBounded<(string, string)>(new BoundedChannelOptions(ChannelCapacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+        });
 
-    private const int BatchSize = 100;
-    private const int FlushIntervalMs = 200;
-
-    // RFC 3164 syslog pattern: <priority>timestamp hostname app[pid]: message
-    // Example: <34>Oct 11 22:14:15 mymachine su[12345]: 'su root' failed for lonvick
-    private static readonly Regex SyslogPattern = new(
-        @"^<(\d{1,3})>" +                                     // Priority
-        @"(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})?\s*" +      // Timestamp (optional)
-        @"(\S+)?\s*" +                                         // Hostname (optional)
-        @"(\S+?)(?:\[(\d+)\])?:\s*" +                         // App[PID]:
-        @"(.*)$",                                              // Message
-        RegexOptions.Compiled, TimeSpan.FromSeconds(1));
-
-    // Facility names for syslog facility codes
-    private static readonly string[] FacilityNames =
-    {
-        "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
-        "uucp", "cron", "authpriv", "ftp", "ntp", "audit", "alert", "clock",
-        "local0", "local1", "local2", "local3", "local4", "local5", "local6", "local7"
-    };
+    private long _droppedDatagrams;
+    private long _lastDropWarningTicks;
+    private int _openConnections;
 
     public SyslogListenerService(
         IServiceScopeFactory scopeFactory,
@@ -60,12 +77,10 @@ public sealed class SyslogListenerService : BackgroundService
         _scopeFactory = scopeFactory;
         _config = config;
         _logger = logger;
-        _messageChannel = System.Threading.Channels.Channel.CreateBounded<(string, string)>(
-            new System.Threading.Channels.BoundedChannelOptions(10_000)
-            {
-                FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest
-            });
     }
+
+    /// <summary>UDP datagrams dropped because storage was behind.</summary>
+    public long DroppedDatagrams => Interlocked.Read(ref _droppedDatagrams);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -75,312 +90,397 @@ public sealed class SyslogListenerService : BackgroundService
             return;
         }
 
-        _logger.LogInformation(
-            "Starting syslog listener on {Address} (UDP:{UdpPort}, TCP:{TcpPort})",
-            _config.BindAddress, _config.UdpPort, _config.TcpPort);
+        if (!IPAddress.TryParse(_config.BindAddress, out var address))
+        {
+            throw new InvalidOperationException($"Invalid Syslog:BindAddress: {_config.BindAddress}");
+        }
 
-        var udpTask = ListenUdpAsync(stoppingToken);
-        var tcpTask = ListenTcpAsync(stoppingToken);
-        var batchTask = BatchProcessorAsync(stoppingToken);
+        // Bind everything first. Someone who turned the listener on needs to know it isn't
+        // listening, so these failures stop the server rather than leaving a line in a log.
+        var certificate = _config.TlsPort > 0 ? LoadCertificate(_config) : null;
+        using var udp = new UdpClient(new IPEndPoint(address, _config.UdpPort));
+        var tcp = new TcpListener(address, _config.TcpPort);
+        var tls = certificate == null ? null : new TcpListener(address, _config.TlsPort);
 
-        await Task.WhenAll(udpTask, tcpTask, batchTask);
-    }
-
-    private async Task ListenUdpAsync(CancellationToken stoppingToken)
-    {
-        UdpClient? udpClient = null;
         try
         {
-            if (!IPAddress.TryParse(_config.BindAddress, out var udpAddress))
-            {
-                _logger.LogError("Invalid syslog bind address: {Address}", _config.BindAddress);
-                return;
-            }
-            var endpoint = new IPEndPoint(udpAddress, _config.UdpPort);
-            udpClient = new UdpClient(endpoint);
-            _logger.LogInformation("Syslog UDP listener started on {Endpoint}", endpoint);
+            tcp.Start();
+            tls?.Start();
+            _logger.LogInformation(
+                "Syslog listening on {Address} (UDP:{UdpPort}, TCP:{TcpPort}, TLS:{TlsPort})",
+                _config.BindAddress, _config.UdpPort, _config.TcpPort, _config.TlsPort);
 
-            while (!stoppingToken.IsCancellationRequested)
+            var processing = ProcessMessagesAsync(stoppingToken);
+            try
             {
-                try
+                var listeners = new List<Task>
                 {
-                    var result = await udpClient.ReceiveAsync(stoppingToken);
-                    // Use replacement fallback for invalid UTF-8 sequences
-                    var message = Encoding.UTF8.GetString(result.Buffer)
-                        ?? string.Empty;
-                    await EnqueueMessageAsync(message, result.RemoteEndPoint.Address.ToString(), stoppingToken);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    ReceiveDatagramsAsync(udp, stoppingToken),
+                    AcceptConnectionsAsync(tcp, null, stoppingToken),
+                };
+
+                if (tls != null)
                 {
-                    break;
+                    listeners.Add(AcceptConnectionsAsync(tls, certificate, stoppingToken));
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error receiving syslog UDP message");
-                }
+
+                await Task.WhenAll(listeners);
             }
-        }
-        catch (SocketException ex)
-        {
-            _logger.LogError(ex, "Failed to start syslog UDP listener on port {Port}", _config.UdpPort);
+            finally
+            {
+                _messages.Writer.TryComplete();
+                await processing;
+            }
         }
         finally
         {
-            udpClient?.Dispose();
+            tcp.Stop();
+            tls?.Stop();
+            certificate?.Dispose();
         }
     }
 
-    private async Task ListenTcpAsync(CancellationToken stoppingToken)
+    private static X509Certificate2 LoadCertificate(SyslogConfiguration config)
     {
-        TcpListener? tcpListener = null;
-        try
+        if (string.IsNullOrWhiteSpace(config.TlsCertificatePath))
         {
-            if (!IPAddress.TryParse(_config.BindAddress, out var tcpAddress))
+            throw new InvalidOperationException("Syslog:TlsPort is set, but Syslog:TlsCertificatePath isn't");
+        }
+
+        var path = config.TlsCertificatePath;
+        var extension = Path.GetExtension(path);
+        if (extension.Equals(".pfx", StringComparison.OrdinalIgnoreCase) || extension.Equals(".p12", StringComparison.OrdinalIgnoreCase))
+        {
+            return X509CertificateLoader.LoadPkcs12FromFile(path, config.TlsCertificatePassword);
+        }
+
+        using var pem = X509Certificate2.CreateFromPemFile(path, config.TlsKeyPath);
+
+        // Windows can't use the ephemeral key that a PEM file loads with.
+        return X509CertificateLoader.LoadPkcs12(pem.Export(X509ContentType.Pfx), null);
+    }
+
+    private async Task ReceiveDatagramsAsync(UdpClient udp, CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
             {
-                _logger.LogError("Invalid syslog bind address: {Address}", _config.BindAddress);
+                var result = await udp.ReceiveAsync(stoppingToken);
+                var length = Math.Min(result.Buffer.Length, _config.MaxMessageBytes);
+                var message = Encoding.UTF8.GetString(result.Buffer, 0, length).TrimEnd('\r', '\n', '\0');
+                if (message.Length > 0 && !_messages.Writer.TryWrite((message, result.RemoteEndPoint.Address.ToString())))
+                {
+                    RecordDroppedDatagram();
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
                 return;
             }
-            var endpoint = new IPEndPoint(tcpAddress, _config.TcpPort);
-            tcpListener = new TcpListener(endpoint);
-            tcpListener.Start();
-            _logger.LogInformation("Syslog TCP listener started on {Endpoint}", endpoint);
-
-            while (!stoppingToken.IsCancellationRequested)
+            catch (SocketException ex)
             {
-                try
-                {
-                    var client = await tcpListener.AcceptTcpClientAsync(stoppingToken);
-                    // Handle each TCP connection in the background
-                    _ = HandleTcpClientAsync(client, stoppingToken);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error accepting syslog TCP connection");
-                }
+                // Windows reports an ICMP "port unreachable" from an earlier send here.
+                _logger.LogDebug(ex, "Syslog UDP receive failed");
             }
-        }
-        catch (SocketException ex)
-        {
-            _logger.LogError(ex, "Failed to start syslog TCP listener on port {Port}", _config.TcpPort);
-        }
-        finally
-        {
-            tcpListener?.Stop();
         }
     }
 
-    private async Task HandleTcpClientAsync(TcpClient client, CancellationToken stoppingToken)
+    private void RecordDroppedDatagram()
+    {
+        var dropped = Interlocked.Increment(ref _droppedDatagrams);
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastDropWarningTicks);
+        if (now - last >= DropWarningInterval.TotalMilliseconds
+            && Interlocked.CompareExchange(ref _lastDropWarningTicks, now, last) == last)
+        {
+            _logger.LogWarning("Storage is behind: {Dropped} syslog UDP datagrams dropped so far. TCP doesn't lose messages this way.", dropped);
+        }
+    }
+
+    private async Task AcceptConnectionsAsync(TcpListener listener, X509Certificate2? certificate, CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            TcpClient client;
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (SocketException ex)
+            {
+                _logger.LogWarning(ex, "Error accepting syslog connection");
+                continue;
+            }
+
+            if (Interlocked.Increment(ref _openConnections) > _config.MaxConnections)
+            {
+                Interlocked.Decrement(ref _openConnections);
+                _logger.LogWarning("Refused a syslog connection: {Max} are already open", _config.MaxConnections);
+                client.Dispose();
+                continue;
+            }
+
+            _ = HandleConnectionAsync(client, certificate, stoppingToken);
+        }
+    }
+
+    private async Task HandleConnectionAsync(TcpClient client, X509Certificate2? certificate, CancellationToken stoppingToken)
     {
         var remoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "unknown";
 
         try
         {
-            // Per-connection idle timeout to prevent slowloris attacks
-            using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-            connectionCts.CancelAfter(TimeSpan.FromMinutes(5));
-
             using (client)
-            await using (var stream = client.GetStream())
-            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            await using (var network = client.GetStream())
             {
-                while (!connectionCts.IsCancellationRequested)
+                using var idle = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                idle.CancelAfter(HandshakeTimeout);
+
+                await using var ssl = certificate == null ? null : new SslStream(network, leaveInnerStreamOpen: true);
+                if (ssl != null)
                 {
-                    var line = await reader.ReadLineAsync(connectionCts.Token);
-                    if (line is null)
+                    await ssl.AuthenticateAsServerAsync(
+                        new SslServerAuthenticationOptions { ServerCertificate = certificate },
+                        idle.Token);
+                }
+
+                var reader = new SyslogFrameReader(ssl ?? (Stream)network, _config.MaxMessageBytes);
+                while (true)
+                {
+                    idle.CancelAfter(IdleTimeout);
+                    var message = await reader.ReadAsync(idle.Token);
+                    if (message == null)
                     {
-                        break;
+                        return;
                     }
 
-                    // Reset idle timeout on each successful read
-                    connectionCts.CancelAfter(TimeSpan.FromMinutes(5));
-                    if (!string.IsNullOrEmpty(line))
+                    if (message.Length > 0)
                     {
-                        await EnqueueMessageAsync(line, remoteAddress, stoppingToken);
+                        // Waits when full, which slows the sender rather than losing its messages.
+                        await _messages.Writer.WriteAsync((message, remoteAddress), stoppingToken);
                     }
                 }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Graceful shutdown
+            _logger.LogDebug("Closing syslog connection from {Address} for shutdown", remoteAddress);
+        }
+        catch (ChannelClosedException)
+        {
+            _logger.LogDebug("Closing syslog connection from {Address} for shutdown", remoteAddress);
         }
         catch (OperationCanceledException)
         {
-            _logger.LogDebug("Syslog TCP connection from {Address} timed out due to inactivity", remoteAddress);
+            _logger.LogDebug("Syslog connection from {Address} timed out", remoteAddress);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or SocketException or System.Security.Authentication.AuthenticationException)
         {
-            _logger.LogWarning(ex, "Error handling syslog TCP client from {Address}", remoteAddress);
+            _logger.LogWarning(ex, "Syslog connection from {Address} failed", remoteAddress);
         }
-    }
-
-    private async Task EnqueueMessageAsync(string message, string remoteAddress, CancellationToken cancellationToken)
-    {
-        if (!_messageChannel.Writer.TryWrite((message, remoteAddress)))
+        finally
         {
-            _logger.LogWarning("Syslog channel full, dropping message from {Address}", remoteAddress);
+            Interlocked.Decrement(ref _openConnections);
         }
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
-    /// Batch processor: reads from the channel and writes to storage in batches.
-    /// Uses a single DI scope per batch instead of per-message.
+    /// Stores what arrives, in batches, until the listeners stop and everything queued is stored.
+    /// A failed batch is retried rather than lost, so senders wait while storage is down.
     /// </summary>
-    private async Task BatchProcessorAsync(CancellationToken stoppingToken)
+    private async Task ProcessMessagesAsync(CancellationToken stoppingToken)
     {
+        using var deadline = new CancellationTokenSource();
+        await using var registration = stoppingToken.Register(() => deadline.CancelAfter(DrainTimeout));
+
+        var reader = _messages.Reader;
         var batch = new List<LogEvent>(BatchSize);
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
+        {
+            while (await reader.WaitToReadAsync(deadline.Token))
+            {
+                batch.Clear();
+                while (batch.Count < BatchSize && reader.TryRead(out var item))
+                {
+                    batch.Add(await ParseAsync(item.Message, item.RemoteAddress, deadline.Token));
+                }
+
+                await StoreWithRetryAsync(batch, deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            _logger.LogError(
+                "Storage didn't take the queued syslog messages within {Timeout} of shutdown: {Lost} lost",
+                DrainTimeout, batch.Count + reader.Count);
+        }
+    }
+
+    private async Task StoreWithRetryAsync(List<LogEvent> batch, CancellationToken cancellationToken)
+    {
+        var delay = TimeSpan.FromSeconds(1);
+        while (true)
         {
             try
             {
-                batch.Clear();
-
-                // Wait for at least one message
-                if (await _messageChannel.Reader.WaitToReadAsync(stoppingToken))
-                {
-                    // Drain up to BatchSize messages, with a timeout for flushing
-                    using var flushCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    flushCts.CancelAfter(FlushIntervalMs);
-
-                    while (batch.Count < BatchSize)
-                    {
-                        try
-                        {
-                            if (_messageChannel.Reader.TryRead(out var item))
-                            {
-                                var logEvent = ParseSyslogMessage(item.Message, item.RemoteAddress);
-                                batch.Add(logEvent);
-                            }
-                            else
-                            {
-                                // No more messages available right now, flush what we have
-                                break;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to parse syslog message");
-                        }
-                    }
-
-                    if (batch.Count > 0)
-                    {
-                        using var scope = _scopeFactory.CreateScope();
-                        var storage = scope.ServiceProvider.GetRequiredService<ILogStorage>();
-                        await storage.StoreBatchAsync(batch, stoppingToken);
-                        _logger.LogDebug("Syslog batch stored {Count} events", batch.Count);
-                    }
-                }
+                using var scope = _scopeFactory.CreateScope();
+                var storage = scope.ServiceProvider.GetRequiredService<ILogStorage>();
+                await storage.StoreBatchAsync(batch, cancellationToken);
+                return;
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in syslog batch processor");
-                await Task.Delay(1000, stoppingToken);
+                _logger.LogError(ex, "Failed to store {Count} syslog messages; retrying in {Delay}", batch.Count, delay);
+                await Task.Delay(delay, cancellationToken);
+                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks));
             }
         }
     }
 
-    private static LogEvent ParseSyslogMessage(string message, string remoteAddress)
+    private async Task<LogEvent> ParseAsync(string message, string remoteAddress, CancellationToken cancellationToken)
     {
-        var logEvent = new LogEvent
-        {
-            Id = Ulid.NewUlid(),
-            RawLine = message,
-            Timestamp = DateTime.UtcNow,
-            IndexTime = DateTime.UtcNow,
-            SourceType = "syslog",
-            Index = "syslog",
-            Host = remoteAddress,
-            Severity = LogSeverity.Info
-        };
+        var logEvent = await _parser.ParseAsync(message, cancellationToken: cancellationToken)
+            ?? new LogEvent { RawLine = message, SourceType = SourceTypes.Syslog };
 
-        var match = SyslogPattern.Match(message);
-        if (!match.Success)
+        logEvent.Index = "syslog";
+        if (string.IsNullOrEmpty(logEvent.Host))
         {
-            // Not a valid syslog format; store as raw
+            logEvent.Host = remoteAddress;
+        }
+
+        if (logEvent.GetField<string>("app") is { } app)
+        {
+            logEvent.SourceFile = app;
+        }
+
+        if (!_parser.CanParse(message))
+        {
             logEvent.SetField("raw_syslog", true);
-            return logEvent;
-        }
-
-        // Parse priority (facility * 8 + severity)
-        if (int.TryParse(match.Groups[1].Value, out var priority))
-        {
-            var facility = priority / 8;
-            var syslogSeverity = priority % 8;
-
-            logEvent.SetField("facility", facility);
-            logEvent.SetField("syslog_severity", syslogSeverity);
-
-            if (facility >= 0 && facility < FacilityNames.Length)
-            {
-                logEvent.SetField("facility_name", FacilityNames[facility]);
-            }
-
-            // Map syslog severity (0=emergency..7=debug) to LogSeverity
-            logEvent.Severity = syslogSeverity switch
-            {
-                0 => LogSeverity.Fatal,    // Emergency
-                1 => LogSeverity.Fatal,    // Alert
-                2 => LogSeverity.Critical, // Critical
-                3 => LogSeverity.Error,    // Error
-                4 => LogSeverity.Warning,  // Warning
-                5 => LogSeverity.Info,     // Notice
-                6 => LogSeverity.Info,     // Informational
-                7 => LogSeverity.Debug,    // Debug
-                _ => LogSeverity.Info
-            };
-        }
-
-        // Parse timestamp
-        if (match.Groups[2].Success && !string.IsNullOrWhiteSpace(match.Groups[2].Value))
-        {
-            var timestampStr = match.Groups[2].Value.Trim();
-            // RFC 3164 timestamp doesn't include year, assume current year
-            var withYear = $"{DateTime.UtcNow.Year} {timestampStr}";
-            if (DateTime.TryParse(withYear, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal, out var timestamp))
-            {
-                logEvent.Timestamp = timestamp.ToUniversalTime();
-            }
-        }
-
-        // Hostname
-        if (match.Groups[3].Success && !string.IsNullOrWhiteSpace(match.Groups[3].Value))
-        {
-            logEvent.Host = match.Groups[3].Value;
-            logEvent.SetField("hostname", match.Groups[3].Value);
-        }
-
-        // Application name
-        if (match.Groups[4].Success)
-        {
-            logEvent.SetField("app", match.Groups[4].Value);
-            logEvent.SourceFile = match.Groups[4].Value;
-        }
-
-        // Process ID
-        if (match.Groups[5].Success)
-        {
-            logEvent.SetField("pid", match.Groups[5].Value);
-        }
-
-        // Message body
-        if (match.Groups[6].Success)
-        {
-            logEvent.SetField("message", match.Groups[6].Value);
         }
 
         return logEvent;
+    }
+}
+
+/// <summary>
+/// Splits a syslog stream into messages. Senders either prefix each message with its length
+/// (RFC 6587 octet counting) or end it with a newline, and may do either on any message.
+/// </summary>
+internal sealed class SyslogFrameReader
+{
+    private const int MaxLengthDigits = 10;
+
+    private readonly Stream _stream;
+    private readonly int _maxMessageBytes;
+    private readonly byte[] _buffer = new byte[8192];
+    private int _position;
+    private int _available;
+
+    public SyslogFrameReader(Stream stream, int maxMessageBytes)
+    {
+        _stream = stream;
+        _maxMessageBytes = maxMessageBytes;
+    }
+
+    /// <summary>Reads the next message: null at the end of the stream, empty for a blank line.</summary>
+    public async Task<string?> ReadAsync(CancellationToken cancellationToken = default)
+    {
+        var message = new List<byte>(256);
+
+        var first = await ReadByteAsync(cancellationToken);
+        if (first < 0)
+        {
+            return null;
+        }
+
+        // Digits then a space then "<" is a length prefix. Other digits are the start of a line.
+        var current = first;
+        var digits = 0;
+        var length = 0L;
+        while (current is >= '0' and <= '9' && digits < MaxLengthDigits)
+        {
+            message.Add((byte)current);
+            length = (length * 10) + (current - '0');
+            digits++;
+            current = await ReadByteAsync(cancellationToken);
+        }
+
+        if (digits > 0 && current == ' ' && length > 0 && await PeekByteAsync(cancellationToken) == '<')
+        {
+            return await ReadCountedAsync(length, cancellationToken);
+        }
+
+        return await ReadLineAsync(message, current, cancellationToken);
+    }
+
+    private async Task<string> ReadCountedAsync(long length, CancellationToken cancellationToken)
+    {
+        var message = new List<byte>((int)Math.Min(length, _maxMessageBytes));
+        for (var i = 0L; i < length; i++)
+        {
+            var value = await ReadByteAsync(cancellationToken);
+            if (value < 0)
+            {
+                break;
+            }
+
+            if (message.Count < _maxMessageBytes)
+            {
+                message.Add((byte)value);
+            }
+        }
+
+        return Decode(message);
+    }
+
+    private async Task<string> ReadLineAsync(List<byte> message, int current, CancellationToken cancellationToken)
+    {
+        while (current >= 0 && current != '\n')
+        {
+            if (message.Count < _maxMessageBytes)
+            {
+                message.Add((byte)current);
+            }
+
+            current = await ReadByteAsync(cancellationToken);
+        }
+
+        return Decode(message);
+    }
+
+    private static string Decode(List<byte> message) =>
+        Encoding.UTF8.GetString(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(message)).TrimEnd('\r', '\n', '\0');
+
+    private async ValueTask<int> ReadByteAsync(CancellationToken cancellationToken)
+    {
+        var value = await PeekByteAsync(cancellationToken);
+        if (value >= 0)
+        {
+            _position++;
+        }
+
+        return value;
+    }
+
+    private async ValueTask<int> PeekByteAsync(CancellationToken cancellationToken)
+    {
+        if (_position >= _available)
+        {
+            _available = await _stream.ReadAsync(_buffer, cancellationToken);
+            _position = 0;
+            if (_available <= 0)
+            {
+                _available = 0;
+                return -1;
+            }
+        }
+
+        return _buffer[_position];
     }
 }

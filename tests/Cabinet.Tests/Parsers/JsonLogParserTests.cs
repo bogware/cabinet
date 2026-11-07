@@ -74,7 +74,7 @@ public class JsonLogParserTests
             ["warn"] = LogSeverity.Warning,
             ["error"] = LogSeverity.Error,
             ["fatal"] = LogSeverity.Fatal,
-            ["critical"] = LogSeverity.Fatal,
+            ["critical"] = LogSeverity.Critical,
             ["information"] = LogSeverity.Info,
             ["warning"] = LogSeverity.Warning
         };
@@ -88,15 +88,14 @@ public class JsonLogParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_NestedJson_ExtractsAsRawText()
+    public async Task ParseAsync_NestedJson_FlattensToDottedFields()
     {
         var json = "{\"message\":\"test\",\"context\":{\"user\":\"alice\",\"id\":42}}";
         var result = await _parser.ParseAsync(json);
 
         result.Should().NotBeNull();
-        var context = result!.GetFieldString("context");
-        context.Should().Contain("alice");
-        context.Should().Contain("42");
+        result!.GetFieldString("context.user").Should().Be("alice");
+        result.GetField<long>("context.id").Should().Be(42);
     }
 
     [Fact]

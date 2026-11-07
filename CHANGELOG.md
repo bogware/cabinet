@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- RFC 5424 syslog with structured data, TLS syslog (`Syslog:TlsPort`), and RFC 6587 octet-counted framing.
 - systemd (`Type=notify`) and Windows service integration for the API.
 - `Authorization: Splunk <key>` authentication on `/services/collector/*` routes, alongside `X-API-Key`.
 - `Network:TrustedProxies`, the list of proxies allowed to set `X-Forwarded-For`.
@@ -20,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Every ingest route parses lines the same way: REST, HEC `/event` and `/raw`, so the agent too. Events get severity, fields and the time in the line. A HEC event's `time` is used only when the line has none. A source type that isn't a parser's stays as a label.
+- Timestamps: ISO 8601 with `T` or an offset, log4j commas, nginx error log dates and syslog dates are recognized. Times without an offset are UTC. A syslog date with no year that would be in the future is from last year.
+- Severity: words match whole words, and mentions like `0 errors`, `failed=0` or `no errors` don't count. A declared level beats words in the message. In JSON, only the level field counts.
+- JSON: epochs in seconds to nanoseconds are read, times without an offset are UTC, nested objects flatten to dotted fields such as `log.level`, and `source` no longer overwrites `Host`. `critical` maps to `Critical`, not `Fatal`.
+- `key=value` pairs become fields under their own name with numbers kept as numbers, replacing `kv_<key>`.
+- Prose with commas is no longer detected as CSV.
+- Syslog events use the `Syslog` source type, and files with syslog lines are detected. The listener's `message` field is now `Message`.
+- The syslog listener stops the server if it can't bind its ports, retries failed batches, stores what's queued at shutdown, and makes TCP senders wait rather than dropping their messages.
 - Storage ignores an event whose ID already exists, on every backend. HEC events can supply a stable `id`.
 - Agent registry files from earlier versions aren't compatible, so tracked files are read again once after upgrading.
 - Compose keeps the agent's spool on its data volume.

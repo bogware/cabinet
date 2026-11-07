@@ -29,7 +29,7 @@ public class LogsControllerTests
 
         _controller = new LogsController(
             _storage.Object,
-            _parserProvider.Object,
+            new LogLineParser(new ParserRegistry(), _parserProvider.Object),
             _auditLogger.Object,
             multiLineMerger,
             logger.Object);

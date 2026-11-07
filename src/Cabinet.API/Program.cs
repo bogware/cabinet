@@ -670,6 +670,11 @@ void ValidateConfiguration(IConfiguration configuration)
             throw new InvalidOperationException($"Syslog:TcpPort must be between 1 and 65535, got {tcpPort}");
         if (udpPort is < 1 or > 65535)
             throw new InvalidOperationException($"Syslog:UdpPort must be between 1 and 65535, got {udpPort}");
+        var tlsPort = configuration.GetValue<int>("Syslog:TlsPort");
+        if (tlsPort is < 0 or > 65535)
+            throw new InvalidOperationException($"Syslog:TlsPort must be between 1 and 65535, or 0 for off, got {tlsPort}");
+        if (tlsPort > 0 && string.IsNullOrWhiteSpace(configuration["Syslog:TlsCertificatePath"]))
+            throw new InvalidOperationException("Syslog:TlsCertificatePath is required when Syslog:TlsPort is set");
     }
 
     // Validate email configuration when enabled

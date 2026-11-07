@@ -22,7 +22,7 @@ namespace Cabinet.API.Controllers;
 public class LogsController : ControllerBase
 {
     private readonly ILogStorage _storage;
-    private readonly ILogParserProvider _parserProvider;
+    private readonly LogLineParser _lineParser;
     private readonly IAuditLogger _auditLogger;
     private readonly MultiLineLogMerger _multiLineMerger;
     private readonly QueryCacheService? _queryCache;
@@ -30,14 +30,14 @@ public class LogsController : ControllerBase
 
     public LogsController(
         ILogStorage storage,
-        ILogParserProvider parserProvider,
+        LogLineParser lineParser,
         IAuditLogger auditLogger,
         MultiLineLogMerger multiLineMerger,
         ILogger<LogsController> logger,
         QueryCacheService? queryCache = null)
     {
         _storage = storage;
-        _parserProvider = parserProvider;
+        _lineParser = lineParser;
         _auditLogger = auditLogger;
         _multiLineMerger = multiLineMerger;
         _queryCache = queryCache;
@@ -75,27 +75,9 @@ public class LogsController : ControllerBase
         {
             try
             {
-                var parser = _parserProvider.GetParser(log);
-                if (parser != null)
-                {
-                    var evt = await parser.ParseAsync(log);
-                    if (evt != null)
-                    {
-                        evt.Index = targetIndex;
-                        events.Add(evt);
-                    }
-                }
-                else
-                {
-                    // Use generic parser
-                    events.Add(new LogEvent
-                    {
-                        RawLine = log,
-                        Timestamp = DateTime.UtcNow,
-                        SourceType = SourceTypes.Generic,
-                        Index = targetIndex
-                    });
-                }
+                var evt = await _lineParser.ParseAsync(log);
+                evt.Index = targetIndex;
+                events.Add(evt);
             }
             catch (Exception ex)
             {

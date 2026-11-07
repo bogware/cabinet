@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using Cabinet.Parsers;
+using System.Text.Json;
 using System.Security.Claims;
 using System.Text;
 using Cabinet.API.Controllers;
@@ -24,8 +27,85 @@ public class HecControllerTests
         _auditLogger = new Mock<IAuditLogger>();
         var logger = new Mock<ILogger<HecController>>();
 
-        _controller = new HecController(_storage.Object, _auditLogger.Object, logger.Object);
+        _controller = new HecController(_storage.Object, CreateLineParser(), _auditLogger.Object, logger.Object);
         SetupHttpContext(_controller);
+    }
+
+    private static LogLineParser CreateLineParser() => new ServiceCollection()
+        .AddLogging()
+        .AddCabinetParsers()
+        .BuildServiceProvider()
+        .GetRequiredService<LogLineParser>();
+
+    [Fact]
+    public async Task Event_FromAgent_IsParsed_KeepingItsIdHostAndIndex()
+    {
+        const string id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        var line = "2026-03-04T05:06:07Z ERROR status=503 upstream failed";
+        var body = JsonSerializer.Serialize(new
+        {
+            id,
+            time = 1000.5,
+            host = "agent-host",
+            source = "/var/log/app.log",
+            sourcetype = "app",
+            index = "web",
+            @event = line,
+        });
+        var stored = await PostEventAsync(body);
+
+        var logEvent = stored.Should().ContainSingle().Subject;
+        logEvent.Id.Should().Be(id);
+        logEvent.RawLine.Should().Be(line);
+        logEvent.Host.Should().Be("agent-host");
+        logEvent.Index.Should().Be("web");
+        logEvent.SourceFile.Should().Be("/var/log/app.log");
+        logEvent.SourceType.Should().Be("app");
+        logEvent.Severity.Should().Be(LogSeverity.Error);
+        logEvent.Timestamp.Should().Be(new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc));
+        logEvent.GetField<long>("status").Should().Be(503);
+    }
+
+    [Fact]
+    public async Task Event_WithNoTimeInTheLine_UsesTheSendersTime()
+    {
+        var stored = await PostEventAsync("""{"time":1772600767,"event":"plain text"}""");
+
+        stored.Should().ContainSingle().Which.Timestamp
+            .Should().Be(new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task Raw_LinesAreParsed()
+    {
+        var stored = new List<LogEvent>();
+        _storage
+            .Setup(s => s.StoreBatchAsync(It.IsAny<IEnumerable<LogEvent>>(), It.IsAny<CancellationToken>()))
+            .Callback((IEnumerable<LogEvent> events, CancellationToken _) => stored.AddRange(events))
+            .ReturnsAsync(1);
+        _controller.ControllerContext.HttpContext.Request.Body = new MemoryStream(
+            Encoding.UTF8.GetBytes("2026-03-04 05:06:07 WARN disk almost full\n"));
+
+        await _controller.ReceiveRaw(host: "h1", index: "ops");
+
+        var logEvent = stored.Should().ContainSingle().Subject;
+        logEvent.Severity.Should().Be(LogSeverity.Warning);
+        logEvent.Timestamp.Should().Be(new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc));
+        logEvent.Host.Should().Be("h1");
+        logEvent.Index.Should().Be("ops");
+    }
+
+    private async Task<List<LogEvent>> PostEventAsync(string body)
+    {
+        var stored = new List<LogEvent>();
+        _storage
+            .Setup(s => s.StoreBatchAsync(It.IsAny<IEnumerable<LogEvent>>(), It.IsAny<CancellationToken>()))
+            .Callback((IEnumerable<LogEvent> events, CancellationToken _) => stored.AddRange(events))
+            .ReturnsAsync(1);
+        _controller.ControllerContext.HttpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+
+        await _controller.ReceiveEvent(CancellationToken.None);
+        return stored;
     }
 
     [Fact]

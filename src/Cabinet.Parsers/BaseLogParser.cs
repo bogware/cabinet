@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
@@ -105,34 +104,7 @@ public abstract partial class BaseLogParser : ILogParser
     /// </summary>
     protected virtual void ExtractTimestamp(string line, LogEvent logEvent)
     {
-        // Common timestamp patterns
-        var patterns = new[]
-        {
-            @"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})",  // 2024-01-01 12:34:56
-            @"(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})",  // 01/01/2024 12:34:56
-            @"(\d{2}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})",  // 01/01/24 12:34:56
-            @"\[([^\]]+)\]",  // [timestamp in brackets]
-        };
-
-        foreach (var pattern in patterns)
-        {
-            try
-            {
-                var match = Regex.Match(line, pattern, RegexOptions.None, RegexTimeout);
-                if (match.Success)
-                {
-                    if (DateTime.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp))
-                    {
-                        logEvent.Timestamp = timestamp.ToUniversalTime();
-                        return;
-                    }
-                }
-            }
-            catch (RegexMatchTimeoutException) { /* skip to next pattern */ }
-        }
-
-        // Default to current time if no timestamp found
-        logEvent.Timestamp = DateTime.UtcNow;
+        logEvent.Timestamp = LogTimestamps.TryFind(line, out var timestamp) ? timestamp : DateTime.UtcNow;
     }
 
     /// <summary>
@@ -140,22 +112,7 @@ public abstract partial class BaseLogParser : ILogParser
     /// </summary>
     protected virtual void ExtractSeverity(string line, LogEvent logEvent)
     {
-        var lower = line.ToLowerInvariant();
-
-        if (lower.Contains("fatal") || lower.Contains("critical"))
-            logEvent.Severity = LogSeverity.Fatal;
-        else if (lower.Contains("error") || lower.Contains("err:"))
-            logEvent.Severity = LogSeverity.Error;
-        else if (lower.Contains("warn") || lower.Contains("warning"))
-            logEvent.Severity = LogSeverity.Warning;
-        else if (lower.Contains("info") || lower.Contains("inf:"))
-            logEvent.Severity = LogSeverity.Info;
-        else if (lower.Contains("debug") || lower.Contains("dbg:"))
-            logEvent.Severity = LogSeverity.Debug;
-        else if (lower.Contains("trace") || lower.Contains("trc:"))
-            logEvent.Severity = LogSeverity.Trace;
-        else
-            logEvent.Severity = LogSeverity.Info;
+        logEvent.Severity = LogSeverities.Detect(line);
     }
 
     /// <summary>

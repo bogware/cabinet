@@ -85,7 +85,7 @@ search error | sort -timestamp | head 10
 |---------|--------|-------|
 | REST ingest | Available | `POST /api/v1/logs/ingest`. Events go to index `main`. |
 | Splunk HEC ingest | Available | `/services/collector/event` and `/raw`. |
-| Syslog listener | Partial | RFC 3164 over TCP and UDP. No TLS. Off by default, and Compose doesn't publish the port. |
+| Syslog listener | Working | RFC 3164 and RFC 5424 over UDP, TCP and TLS. Off by default, and Compose doesn't publish the port. |
 | Forwarding agent | Available | Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
 | Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
 | BQL query engine | Available | Every example in the guide runs as a test. Queries read at most 100,000 events, except a bare `stats count`, and flag results as `truncated` beyond that. |
@@ -128,7 +128,6 @@ search error | sort -timestamp | head 10
 - **Run one API instance.** Scheduled searches fire once per replica, and search jobs, data models, RBAC and the audit chain head are per instance.
 - **Redis does almost nothing today.** Its only role is a query result cache layer, and request paths currently use the in-process cache. API key validation never touches Redis.
 - **No benchmarks are published yet.** The repository has no throughput or scale figures, so measure against your own workload.
-- **Agent events aren't parsed.** The server stores agent lines as they arrive, with `Info` severity and the time they were read, not the time in the line.
 - **Agent delivery has edge cases.** Lines are lost if a file is deleted before they're read, for example during a long agent outage. If the registry file is lost, files are read again from the start under new event IDs. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#agent-behaviour).
 - **The audit log is not tamper-proof.** Events are hash-chained in log output, there is no verifier, and the chain head is local to each instance.
 - **The built-in SQLite backup** copies the database file without WAL consistency and has no restore. Use `sqlite3 cabinet.db ".backup ..."`, or `pg_dump` for PostgreSQL.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -24,7 +25,10 @@ public partial class GenericParser : BaseLogParser
     private static readonly Regex SizeRegex = new(@"(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)", RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout);
     private static readonly Regex PercentRegex = new(@"(\d+(?:\.\d+)?)\s*%", RegexOptions.Compiled, RegexTimeout);
     private static readonly Regex QuotedStringRegex = new(@"""([^""]+)""|'([^']+)'", RegexOptions.Compiled, RegexTimeout);
-    private static readonly Regex KvRegex = new(@"(\w+)\s*[=:]\s*([^\s,;]+)", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex KvRegex = new(@"(?<![\w.-])(?<key>[A-Za-z_][\w.-]*)=(?:""(?<quoted>[^""]*)""|'(?<single>[^']*)'|(?<bare>[^\s,;""']+))", RegexOptions.Compiled, RegexTimeout);
+
+    // Enough for any real line, and it stops a crafted line creating unbounded fields.
+    private const int MaxKeyValueFields = 64;
 
     public GenericParser(ILogger<GenericParser>? logger = null) : base(logger) { }
 
@@ -174,37 +178,45 @@ public partial class GenericParser : BaseLogParser
     {
         try
         {
-            var kvMatches = KvRegex.Matches(line);
-            foreach (Match match in kvMatches)
+            foreach (var match in KvRegex.Matches(line).Take(MaxKeyValueFields))
             {
-                var key = match.Groups[1].Value;
-                var value = match.Groups[2].Value.Trim('"', '\'');
-                if (key.Length > 1 && !IsNumeric(key))
-                    logEvent.SetField($"kv_{key}", value);
+                var value = match.Groups["quoted"].Success ? match.Groups["quoted"].Value
+                    : match.Groups["single"].Success ? match.Groups["single"].Value
+                    : match.Groups["bare"].Value;
+                logEvent.SetField(match.Groups["key"].Value, TypedValue(value));
             }
         }
-        catch (RegexMatchTimeoutException) { }
+        catch (RegexMatchTimeoutException ex)
+        {
+            _logger.LogDebug(ex, "Key-value extraction timed out");
+        }
+    }
+
+    /// <summary>Numbers stay numbers, so <c>where status >= 500</c> and <c>sum(bytes)</c> work.</summary>
+    private static object TypedValue(string value)
+    {
+        if (long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var integer))
+        {
+            return integer;
+        }
+
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number)
+            ? number
+            : value;
     }
 
     private void DetectGenericEvents(string line, LogEvent logEvent)
     {
         var lower = line.ToLowerInvariant();
 
-        // Error detection
-        if (lower.Contains("error") || lower.Contains("exception") || lower.Contains("failed") ||
-            lower.Contains("failure") || lower.Contains("critical"))
+        // Severity comes from LogSeverities, which ignores "0 errors" and the like.
+        if (logEvent.Severity >= LogSeverity.Error)
         {
             logEvent.Tags.Add("error");
-            if (logEvent.Severity < LogSeverity.Error)
-                logEvent.Severity = LogSeverity.Error;
         }
-
-        // Warning detection
-        if (lower.Contains("warning") || lower.Contains("warn"))
+        else if (logEvent.Severity == LogSeverity.Warning)
         {
             logEvent.Tags.Add("warning");
-            if (logEvent.Severity < LogSeverity.Warning)
-                logEvent.Severity = LogSeverity.Warning;
         }
 
         // Success detection

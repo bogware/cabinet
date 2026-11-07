@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<ILogParser, JsonLogParser>();
         services.AddSingleton<ILogParser, CefParser>();
+        services.AddSingleton<ILogParser, SyslogParser>();
         services.AddSingleton<ILogParser, ApacheLogParser>();
         services.AddSingleton<ILogParser, NginxLogParser>();
         services.AddSingleton<ILogParser, CsvLogParser>();
@@ -25,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILogParser, GenericParser>();
 
         services.TryAddSingleton<ILogParserProvider, LogParserProvider>();
+        services.TryAddSingleton<LogLineParser>();
 
         services.AddSingleton<IParserRegistry>(provider =>
         {

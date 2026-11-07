@@ -220,7 +220,6 @@ Delivery is at-least-once, and the server stores each event once.
 - A file deleted before it's fully read loses its unread lines.
 - If the registry file is lost, files are read again from the start under new event IDs, which creates duplicates.
 - A replacement file with the same first line, and the same text at the checkpoint offset, can't be told from the original.
-- The server stores agent lines without parsing them: `Info` severity, no extracted fields, and the time they were read.
 
 ## Kubernetes
 
@@ -359,13 +358,25 @@ Redis's only role is a query result cache layer, and request paths currently use
 
 ### Syslog
 
-Off by default. Supports RFC 3164 over TCP and UDP with no TLS. Compose doesn't publish the port, so add a port mapping if you enable it there.
+Off by default. Accepts RFC 3164 and RFC 5424 over UDP, TCP and TLS, with newline or octet-counted framing. Compose doesn't publish the ports, so add port mappings if you enable it there.
 
 ```json
 {
-  "Syslog": { "Enabled": true, "BindAddress": "0.0.0.0", "TcpPort": 1514, "UdpPort": 1514 }
+  "Syslog": {
+    "Enabled": true,
+    "BindAddress": "0.0.0.0",
+    "TcpPort": 1514,
+    "UdpPort": 1514,
+    "TlsPort": 6514,
+    "TlsCertificatePath": "/etc/cabinet/syslog.pem",
+    "TlsKeyPath": "/etc/cabinet/syslog.key"
+  }
 }
 ```
+
+`TlsPort` is off unless set. `TlsCertificatePath` takes a PEM file or a `.pfx`/`.p12`, with `TlsCertificatePassword`. Clients aren't asked for certificates, and syslog senders aren't authenticated, so restrict the ports at the network. If a port can't be bound or the certificate can't be loaded, the server stops rather than running without the listener.
+
+When storage falls behind or is down, TCP and TLS senders wait and messages wait in a queue of 10,000. UDP can't wait, so datagrams are dropped and a warning gives the count. Use TCP where losing messages matters.
 
 ### Alert Channels
 

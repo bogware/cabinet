@@ -140,6 +140,7 @@ public static class SourceTypes
     public const string CloudWatch = "CloudWatch";
     public const string CloudTrail = "CloudTrail";
     public const string Json = "JSON";
+    public const string Syslog = "Syslog";
     public const string Csv = "CSV";
     public const string Cef = "CEF";
     public const string Apache = "Apache";

@@ -19,16 +19,38 @@ public sealed class CsvLogParser : BaseLogParser
     public override bool CanParse(string line)
     {
         if (string.IsNullOrWhiteSpace(line)) return false;
-        // Require at least 3 comma-separated fields to distinguish from plain text
+        // Data, not prose. Three or more fields, none of them a phrase: no comma followed by a
+        // space, and at most one space in an unquoted field, for "2026-01-01 10:00:00,host,ok".
         var commaCount = 0;
+        var spacesInField = 0;
         var inQuotes = false;
-        foreach (var c in line)
+        for (var i = 0; i < line.Length; i++)
         {
-            if (c == '"') inQuotes = !inQuotes;
-            if (c == ',' && !inQuotes) commaCount++;
-            if (commaCount >= 2) return true;
+            var c = line[i];
+            if (c == '"')
+            {
+                inQuotes = !inQuotes;
+            }
+            else if (inQuotes)
+            {
+                continue;
+            }
+            else if (c == ',')
+            {
+                commaCount++;
+                spacesInField = 0;
+                if (i + 1 < line.Length && line[i + 1] == ' ')
+                {
+                    return false;
+                }
+            }
+            else if (c == ' ' && ++spacesInField > 1)
+            {
+                return false;
+            }
         }
-        return false;
+
+        return commaCount >= 2;
     }
 
     protected override void ExtractSpecificFields(string line, LogEvent logEvent)
