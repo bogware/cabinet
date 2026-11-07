@@ -1,4 +1,3 @@
-#pragma warning disable CS0612, CS0618 // Type or member is obsolete
 using Cabinet.Alerts;
 using Cabinet.API.Authentication;
 using Cabinet.API.Middleware;
@@ -6,9 +5,6 @@ using Cabinet.API.Services;
 using Cabinet.Core.Configuration;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Database;
-using Cabinet.Database.Abstractions;
-using Cabinet.Database.Services;
 using Cabinet.Detection;
 using Cabinet.Parsers;
 using Cabinet.Query;
@@ -636,26 +632,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     {
         services.AddSingleton(ssoConfig);
         services.AddSingleton<ClaimRoleMapper>();
-    }
-
-    // Database services (if configured)
-    var dbConfig = configuration.GetSection("Database");
-    if (dbConfig.Exists())
-    {
-        services.Configure<Cabinet.Database.Configuration.DatabaseConfiguration>(dbConfig);
-        services.AddSingleton<DatabaseProviderFactory>();
-        services.AddSingleton<IDatabaseProviderFactory, DatabaseProviderFactory>();
-
-        // Register database provider (lazy initialization to avoid blocking DI)
-        services.AddSingleton<ILogDatabaseProvider>(sp =>
-        {
-            var factory = sp.GetRequiredService<IDatabaseProviderFactory>();
-            var config = new Cabinet.Database.Configuration.DatabaseConfiguration();
-            configuration.GetSection("Database").Bind(config);
-            return factory.CreateProvider(config);
-        });
-
-        services.AddScoped<BackupService>();
     }
 
     // Deletes nothing unless Storage:RetentionDays is set to a positive value

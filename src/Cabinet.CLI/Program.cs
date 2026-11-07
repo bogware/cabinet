@@ -11,7 +11,6 @@ using Cabinet.Query;
 using Cabinet.Detection;
 using Cabinet.Alerts;
 using Cabinet.AWS;
-using Cabinet.Database;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -40,8 +39,6 @@ class Program
         rootCommand.AddCommand(new ReportCommand());
         rootCommand.AddCommand(new DashboardCommand());
         rootCommand.AddCommand(new AWSCommand());
-        rootCommand.AddCommand(new CentralizeCommand());
-        rootCommand.AddCommand(new BackupCommand());
         rootCommand.AddCommand(new SetupWizardCommand());
 
         // Build command line with host
@@ -70,7 +67,6 @@ class Program
                     services.AddCabinetDetection();
                     services.AddCabinetAlerts();
                     services.AddCabinetAWS();
-                    services.AddCabinetDatabase();
                 });
 
                 builder.ConfigureLogging((context, logging) =>

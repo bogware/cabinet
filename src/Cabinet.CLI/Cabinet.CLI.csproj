@@ -27,7 +27,6 @@
     <ProjectReference Include="..\Cabinet.Detection\Cabinet.Detection.csproj" />
     <ProjectReference Include="..\Cabinet.Alerts\Cabinet.Alerts.csproj" />
     <ProjectReference Include="..\Cabinet.AWS\Cabinet.AWS.csproj" />
-    <ProjectReference Include="..\Cabinet.Database\Cabinet.Database.csproj" />
   </ItemGroup>
 
 </Project>

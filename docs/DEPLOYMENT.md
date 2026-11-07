@@ -379,10 +379,7 @@ Cabinet uses Serilog with structured JSON output. Configure sinks in `appsetting
 ### SQLite Backup
 
 ```bash
-# CLI backup
-cabinet backup --type full --output /backups/cabinet-$(date +%Y%m%d).db
-
-# Manual copy (safe with WAL mode if briefly paused)
+# Online backup (safe while the server is writing)
 sqlite3 cabinet.db ".backup /backups/cabinet-backup.db"
 ```
 

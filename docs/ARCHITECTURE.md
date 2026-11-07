@@ -51,7 +51,7 @@ This document describes Cabinet's architecture, key design decisions, and patter
 
 ### Layer 3: Data (Storage, Database)
 - `Cabinet.Storage` — Lightweight/embedded backends (SQLite, In-Memory)
-- `Cabinet.Database` — External service backends (PostgreSQL, OpenSearch, MySQL, DynamoDB)
+- `Cabinet.Database` — External service backends (PostgreSQL, OpenSearch)
 
 ### Layer 4: Foundation (Core)
 - `Cabinet.Core` — Models, interfaces, configuration, utilities. No external dependencies.

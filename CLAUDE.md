@@ -29,7 +29,7 @@ dotnet run --project src/Cabinet.API   # Dashboard: http://localhost:5068
 ./scripts/build-release.sh 1.0.0
 
 # Docker stack (API on host port 5000, CLI, Agent, Postgres, Redis)
-# Optional profiles: monitoring (Grafana/Prometheus), with-mysql, development (LocalStack)
+# Optional profiles: monitoring (Grafana/Prometheus), development (LocalStack)
 docker-compose up -d
 ```
 

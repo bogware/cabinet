@@ -104,30 +104,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # MySQL Database (optional - use profile 'with-mysql')
-  mysql:
-    image: mysql:8.0
-    container_name: cabinet-mysql
-    environment:
-      - MYSQL_DATABASE=cabinet
-      - MYSQL_USER=cabinet
-      - MYSQL_PASSWORD=${CABINET_DB_PASSWORD:-cabinet123}
-      - MYSQL_ROOT_PASSWORD=${CABINET_MYSQL_ROOT_PASSWORD:-root123}
-    volumes:
-      - mysql-data:/var/lib/mysql
-    ports:
-      - "3306:3306"
-    networks:
-      - cabinet-network
-    restart: unless-stopped
-    profiles:
-      - with-mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Redis Cache (for rate limiting and caching)
   redis:
     image: redis:7-alpine
@@ -192,7 +168,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,dynamodb,sqs,sns
+      - SERVICES=s3,sqs,sns
       - DEBUG=0
       - DATA_DIR=/tmp/localstack/data
       - DOCKER_HOST=unix:///var/run/docker.sock
@@ -216,7 +192,6 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  mysql-data:
     driver: local
   redis-data:
     driver: local
