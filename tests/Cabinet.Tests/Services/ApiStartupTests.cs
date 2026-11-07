@@ -205,6 +205,49 @@ public sealed class ApiStartupTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Hec_SameEventIdTwice_StoresOnce()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+        startInfo.Environment["ApiKeys__Keys__0__Key"] = "hec-id-key";
+        startInfo.Environment["ApiKeys__Keys__0__Tier"] = "Enterprise";
+        startInfo.Environment["ApiKeys__Keys__0__Name"] = "HEC ID test";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            client.DefaultRequestHeaders.Add("X-API-Key", "hec-id-key");
+            await WaitUntilReadyAsync(client, process);
+
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var sent = await client.PostAsJsonAsync(
+                    "/services/collector/event",
+                    new { id = "0123456789abcdef0123456789abcdef", @event = "retried event" });
+                sent.StatusCode.Should().Be(HttpStatusCode.OK);
+            }
+
+            // An unusable ID is ignored rather than failing the event.
+            await client.PostAsJsonAsync("/services/collector/event", new { id = "../bad id", @event = "retried event" });
+
+            var query = await client.PostAsJsonAsync("/api/v1/query/execute", new { query = "find retried | stats count" });
+            using var body = JsonDocument.Parse(await query.Content.ReadAsStringAsync());
+            body.RootElement.GetProperty("results")[0].GetProperty("count").GetInt32().Should().Be(2);
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    [Fact]
     public async Task ApiSpec_MatchesTheRunningApi()
     {
         var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");

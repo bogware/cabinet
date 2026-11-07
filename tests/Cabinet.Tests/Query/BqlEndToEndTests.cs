@@ -31,6 +31,8 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
     ];
 
     private BqlQueryEngine _engine = null!;
+    private ILogStorage _storage = null!;
+    private List<LogEvent> _seeded = [];
 
     protected abstract bool IsAvailable { get; }
 
@@ -45,6 +47,7 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
             return;
 
         var storage = CreateStorage();
+        _storage = storage;
         await storage.InitializeAsync();
 
         var parser = new JsonLogParser();
@@ -58,6 +61,7 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
 
         var stored = await storage.StoreBatchAsync(events);
         stored.Should().Be(events.Count, "every seeded event must be stored");
+        _seeded = events;
         await OnSeededAsync();
         _engine = new BqlQueryEngine(storage, new BqlParser(), new BqlOptimizer(), NullLogger<BqlQueryEngine>.Instance);
     }
@@ -89,6 +93,40 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
 
     private static string? Text(IDictionary<string, object?> row, string field) =>
         row.TryGetValue(field, out var value) ? value?.ToString() : null;
+
+    // ─── Idempotent writes: a sender retrying a batch must not create duplicates ───
+
+    [SkippableFact]
+    public async Task StoreBatch_SameIdsAgain_StoresNothingNew()
+    {
+        RequireBackend();
+
+        var storedAgain = await _storage.StoreBatchAsync(_seeded);
+        await OnSeededAsync();
+
+        storedAgain.Should().Be(0);
+        (await CountAsync("find *")).Should().Be(_seeded.Count);
+    }
+
+    [SkippableFact]
+    public async Task StoreBatch_SameIdWithDifferentContent_KeepsTheOriginal()
+    {
+        RequireBackend();
+
+        var original = _seeded[0];
+        var replacement = new LogEvent
+        {
+            Id = original.Id,
+            RawLine = "overwritten",
+            Timestamp = original.Timestamp,
+            Index = original.Index,
+        };
+
+        await _storage.StoreBatchAsync([replacement]);
+        await OnSeededAsync();
+
+        (await CountAsync("find overwritten")).Should().Be(0);
+    }
 
     // ─── Field names: what the guide documents must find what ingestion stores ───
 

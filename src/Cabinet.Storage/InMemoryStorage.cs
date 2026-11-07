@@ -36,8 +36,7 @@ public class InMemoryStorage : ILogStorage
     public Task<bool> StoreAsync(LogEvent logEvent, CancellationToken cancellationToken = default)
     {
         EvictIfNeeded(1);
-        _events[logEvent.Id] = logEvent;
-        return Task.FromResult(true);
+        return Task.FromResult(_events.TryAdd(logEvent.Id, logEvent));
     }
 
     public Task<int> StoreBatchAsync(IEnumerable<LogEvent> events, CancellationToken cancellationToken = default)
@@ -47,8 +46,8 @@ public class InMemoryStorage : ILogStorage
         var count = 0;
         foreach (var evt in eventList)
         {
-            _events[evt.Id] = evt;
-            count++;
+            if (_events.TryAdd(evt.Id, evt))
+                count++;
         }
         return Task.FromResult(count);
     }

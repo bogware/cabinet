@@ -247,6 +247,12 @@ public class HecController : ControllerBase
         return Ok(new HecHealthResponse { Text = "HEC is healthy", Code = 17 });
     }
 
+    /// <summary>
+    /// A sender can supply a stable ID so re-sending is safe: storage ignores IDs it already has.
+    /// </summary>
+    private static bool IsValidEventId(string? id) =>
+        id is { Length: >= 16 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
     private static LogEvent ConvertHecEvent(HecEvent hecEvent)
     {
         var timestamp = DateTime.UtcNow;
@@ -265,7 +271,7 @@ public class HecController : ControllerBase
 
         var logEvent = new LogEvent
         {
-            Id = Ulid.NewUlid(),
+            Id = IsValidEventId(hecEvent.Id) ? hecEvent.Id! : Ulid.NewUlid(),
             RawLine = rawLine,
             Timestamp = timestamp,
             IndexTime = DateTime.UtcNow,
@@ -317,6 +323,12 @@ public class HecController : ControllerBase
 /// </summary>
 public class HecEvent
 {
+    /// <summary>
+    /// Optional stable event ID, 16 to 64 letters, digits, hyphens or underscores. An event with
+    /// an ID that's already stored is ignored, so senders can safely retry.
+    /// </summary>
+    public string? Id { get; set; }
+
     public object? Event { get; set; }
     public double? Time { get; set; }
     public string? Host { get; set; }

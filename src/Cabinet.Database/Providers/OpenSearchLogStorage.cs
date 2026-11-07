@@ -132,9 +132,11 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
         var doc = MapToDocument(logEvent);
         var indexName = GetIndexNameForDate(logEvent.Timestamp);
 
+        // Create, not index, so an event ID that's already stored isn't overwritten
         var response = await _client.IndexAsync(doc, i => i
             .Index(indexName)
-            .Id(logEvent.Id), cancellationToken);
+            .Id(logEvent.Id)
+            .OpType(OpenSearch.Net.OpType.Create), cancellationToken);
 
         return response.IsValid;
     }
@@ -151,7 +153,8 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
             {
                 var doc = MapToDocument(evt);
                 var indexName = GetIndexNameForDate(evt.Timestamp);
-                b.Index<OpenSearchLogEvent>(i => i
+                // Create, not index, so an event ID that's already stored isn't overwritten
+                b.Create<OpenSearchLogEvent>(i => i
                     .Index(indexName)
                     .Id(evt.Id)
                     .Document(doc));
@@ -168,16 +171,16 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 
         if (bulkResponse.Errors)
         {
-            var errorCount = bulkResponse.ItemsWithErrors.Count();
-            _logger.LogWarning("Bulk insert had {ErrorCount} errors out of {Total}", errorCount, eventList.Count);
-
-            // Log first few errors for debugging (avoid flooding logs)
-            foreach (var errorItem in bulkResponse.ItemsWithErrors.Take(5))
+            // 409 means the event ID is already stored, which is what a retry should find.
+            var failed = bulkResponse.ItemsWithErrors.Where(item => item.Status != 409).ToList();
+            if (failed.Count > 0)
             {
-                _logger.LogWarning("Bulk error: {Id} - {Error}", errorItem.Id, errorItem.Error?.Reason);
+                // Fail the whole request. The sender retries, and events already stored are ignored.
+                throw new InvalidOperationException(
+                    $"OpenSearch rejected {failed.Count} of {eventList.Count} events: {failed[0].Error?.Reason}");
             }
 
-            return eventList.Count - errorCount;
+            return eventList.Count - bulkResponse.ItemsWithErrors.Count();
         }
 
         _logger.LogDebug("Bulk stored {Count} events", eventList.Count);
