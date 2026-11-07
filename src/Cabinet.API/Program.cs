@@ -655,10 +655,12 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             return factory.CreateProvider(config);
         });
 
-        services.AddScoped<RetentionService>();
         services.AddScoped<BackupService>();
-        services.AddHostedService<RetentionBackgroundService>();
     }
+
+    // Deletes nothing unless Storage:RetentionDays is set to a positive value
+    services.AddScoped<RetentionService>();
+    services.AddHostedService<RetentionBackgroundService>();
 
     // Distributed infrastructure (Redis coordination, caching, rate limiting)
     var distributedConfig = configuration.GetSection("Distributed");
