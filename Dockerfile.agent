@@ -1,6 +1,7 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/Cabinet.Agent/Cabinet.Agent.csproj src/Cabinet.Agent/
 RUN dotnet restore src/Cabinet.Agent/Cabinet.Agent.csproj
 
@@ -10,7 +11,7 @@ RUN dotnet publish src/Cabinet.Agent/Cabinet.Agent.csproj \
     --output /app \
     --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
 
 RUN groupadd -r cabinet && useradd -r -g cabinet -s /sbin/nologin cabinet

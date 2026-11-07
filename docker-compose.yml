@@ -47,7 +47,7 @@ services:
     container_name: cabinet-cli
     environment:
       - CABINET_MODE=remote
-      - CABINET_API_URL=http://cabinet-api
+      - CABINET_API_URL=http://cabinet-api:8080
       - CABINET_API_KEY=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
     volumes:
       - ./logs:/app/logs:ro  # Mount host logs directory for analysis

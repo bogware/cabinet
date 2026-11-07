@@ -20,7 +20,7 @@ Be respectful and constructive. We're building software together — treat other
 
 ### Prerequisites
 
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or later
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://docs.docker.com/get-docker/) (for integration testing and container builds)
 - Git 2.30+
 - A C# IDE (Visual Studio 2022, VS Code with C# Dev Kit, JetBrains Rider)
@@ -101,7 +101,7 @@ Fixes #123
 
 ### Enforced by Build
 
-- **Target framework:** `net8.0`
+- **Target framework:** `net10.0`
 - **Nullable reference types:** Enabled (`<Nullable>enable</Nullable>`)
 - **Warnings as errors:** `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`
 - All warnings must be resolved — the build will fail otherwise

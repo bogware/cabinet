@@ -60,14 +60,10 @@ public class PeekCommand : Command
         using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096);
         var lineCount = 0;
 
-        while (!reader.EndOfStream && lineCount < lines)
+        while (lineCount < lines && await reader.ReadLineAsync() is { } line)
         {
-            var line = await reader.ReadLineAsync();
-            if (line != null)
-            {
-                DisplayLine(line, lineCount + 1);
-                lineCount++;
-            }
+            DisplayLine(line, lineCount + 1);
+            lineCount++;
         }
     }
 
@@ -89,7 +85,7 @@ public class PeekCommand : Command
                 var readSize = (int)Math.Min(buffer.Length, position);
                 position -= readSize;
                 fs.Seek(position, SeekOrigin.Begin);
-                await fs.ReadAsync(buffer, 0, readSize);
+                await fs.ReadExactlyAsync(buffer, 0, readSize);
 
                 var text = Encoding.UTF8.GetString(buffer, 0, readSize) + leftover;
                 var textLines = text.Split('\n');

@@ -1,12 +1,13 @@
 # Cabinet API Dockerfile
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 WORKDIR /app
 EXPOSE 8080
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy solution and ALL project files (solution-level restore needs every referenced project)
+COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY Cabinet.sln .
 COPY src/Cabinet.Core/Cabinet.Core.csproj src/Cabinet.Core/
 COPY src/Cabinet.Parsers/Cabinet.Parsers.csproj src/Cabinet.Parsers/
@@ -44,12 +45,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Create directories and set permissions for non-root user
-RUN addgroup --gid 1000 cabinet && \
-    adduser --uid 1000 --gid 1000 --disabled-password --gecos "" cabinet && \
-    mkdir -p /app/logs /app/data && \
-    chown -R cabinet:cabinet /app
+RUN mkdir -p /app/logs /app/data && \
+    chown -R $APP_UID:$APP_UID /app
 
-USER cabinet
+USER $APP_UID
 
 ENV ASPNETCORE_URLS=http://+:8080
 

@@ -205,7 +205,7 @@ public sealed class FileMonitorService : BackgroundService
 
                         var pendingMultiLine = new List<string>();
 
-                        while (!reader.EndOfStream && !cancellationToken.IsCancellationRequested)
+                        while (!cancellationToken.IsCancellationRequested)
                         {
                             var line = await reader.ReadLineAsync(cancellationToken);
                             if (line == null) break;

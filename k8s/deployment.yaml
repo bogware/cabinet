@@ -100,8 +100,8 @@ spec:
             failureThreshold: 12
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        runAsUser: 1654
+        fsGroup: 1654
 ---
 apiVersion: v1
 kind: ServiceAccount

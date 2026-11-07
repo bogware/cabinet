@@ -1,11 +1,12 @@
 # Cabinet CLI Dockerfile
-FROM mcr.microsoft.com/dotnet/runtime:8.0 AS base
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
 WORKDIR /app
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy solution and ALL project files (solution-level restore needs every referenced project)
+COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY Cabinet.sln .
 COPY src/Cabinet.Core/Cabinet.Core.csproj src/Cabinet.Core/
 COPY src/Cabinet.Parsers/Cabinet.Parsers.csproj src/Cabinet.Parsers/
@@ -31,18 +32,21 @@ WORKDIR /src/src/Cabinet.CLI
 RUN dotnet build -c Release -o /app/build
 
 FROM build AS publish
-RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish -c Release -o /app/publish -p:UseAppHost=false -p:PublishSingleFile=false
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 
 # Create directories for logs and config
-RUN mkdir -p /app/logs /app/data /root/.cabinet
+RUN mkdir -p /app/logs /app/data && \
+    chown -R $APP_UID:$APP_UID /app
+
+USER $APP_UID
 
 # Set environment variables for remote mode (can be overridden)
 ENV CABINET_MODE=local
-ENV CABINET_API_URL=http://cabinet-api
+ENV CABINET_API_URL=http://cabinet-api:8080
 ENV CABINET_API_KEY=""
 
-ENTRYPOINT ["dotnet", "Cabinet.CLI.dll"]
+ENTRYPOINT ["dotnet", "cabinet.dll"]

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Cabinet is a .NET 8.0 enterprise log-intelligence system (Splunk alternative) split into ~11 projects under `src/`, with all tests in `tests/Cabinet.Tests/`. Solution file: `Cabinet.sln`.
+Cabinet is a .NET 10.0 enterprise log-intelligence system (Splunk alternative) split into ~11 projects under `src/`, with all tests in `tests/Cabinet.Tests/`. Solution file: `Cabinet.sln`.
 
 ## Common Commands
 
@@ -37,7 +37,7 @@ Dev API keys (development only): `dev-basic-key`, `dev-professional-key`, `dev-e
 
 ## Build Configuration (enforced repo-wide via `Directory.Build.props`)
 
-- `TargetFramework=net8.0`, `Nullable=enable`, `ImplicitUsings=enable`
+- `TargetFramework=net10.0`, `Nullable=enable`, `ImplicitUsings=enable`
 - **`TreatWarningsAsErrors=true`** — any warning fails the build. Resolve all warnings; never suppress. Existing `#pragma warning disable CS0612, CS0618` lines (obsolete APIs in `Cabinet.Database` and its callers) are legacy; don't add more.
 - This also applies to NuGet audit warnings (`NU190x`): a newly published advisory can fail `dotnet restore` with no code change. `-p:NuGetAudit=false` gets past it for local diagnosis only; the real fix is a manual package update.
 

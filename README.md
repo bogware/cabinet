@@ -1,10 +1,10 @@
 # Cabinet - Enterprise Log Intelligence System
 
-[![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple)](https://dotnet.microsoft.com/)
+[![.NET 10.0](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
 [![Build](https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg)](https://github.com/bogware/cabinet/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
 
-Cabinet is an enterprise-grade log intelligence system — a modern, open-source alternative to Splunk. Built with .NET 8.0, it provides log ingestion, real-time search, a powerful query language (BQL), alerting, dashboards, and a lightweight forwarding agent. Storage is pluggable: SQLite (dev), PostgreSQL (production), or OpenSearch (enterprise scale).
+Cabinet is an enterprise-grade log intelligence system — a modern, open-source alternative to Splunk. Built with .NET 10.0, it provides log ingestion, real-time search, a powerful query language (BQL), alerting, dashboards, and a lightweight forwarding agent. Storage is pluggable: SQLite (dev), PostgreSQL (production), or OpenSearch (enterprise scale).
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ docker-compose up -d
 ### Local Development
 
 ```bash
-# Prerequisites: .NET 8.0 SDK
+# Prerequisites: .NET 10.0 SDK
 dotnet build && dotnet test    # 786 tests, all passing
 dotnet run --project src/Cabinet.API
 # Dashboard: http://localhost:5068
@@ -487,7 +487,7 @@ Coverage areas: Parsers, BQL query engine, expression evaluator, storage backend
 
 ### Prerequisites
 
-- .NET 8.0 SDK
+- .NET 10.0 SDK
 - Docker & Docker Compose (optional, for PostgreSQL/Redis)
 
 ### Project Structure

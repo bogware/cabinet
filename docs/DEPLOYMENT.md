@@ -24,7 +24,7 @@ This guide covers deploying Cabinet in production environments.
 | CPU | 2 cores | 4+ cores |
 | RAM | 2 GB | 8+ GB |
 | Disk | 20 GB SSD | 100+ GB SSD |
-| .NET Runtime | 8.0 | 8.0 (latest patch) |
+| .NET Runtime | 10.0 | 10.0 (latest patch) |
 | Docker | 20.10+ | 24.0+ |
 | Kubernetes | 1.25+ | 1.28+ |
 

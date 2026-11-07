@@ -187,11 +187,16 @@ public sealed class SyslogListenerService : BackgroundService
             await using (var stream = client.GetStream())
             using (var reader = new StreamReader(stream, Encoding.UTF8))
             {
-                while (!connectionCts.IsCancellationRequested && !reader.EndOfStream)
+                while (!connectionCts.IsCancellationRequested)
                 {
+                    var line = await reader.ReadLineAsync(connectionCts.Token);
+                    if (line is null)
+                    {
+                        break;
+                    }
+
                     // Reset idle timeout on each successful read
                     connectionCts.CancelAfter(TimeSpan.FromMinutes(5));
-                    var line = await reader.ReadLineAsync(connectionCts.Token);
                     if (!string.IsNullOrEmpty(line))
                     {
                         await EnqueueMessageAsync(line, remoteAddress, stoppingToken);

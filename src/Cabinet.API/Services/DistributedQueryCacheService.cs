@@ -93,7 +93,7 @@ public sealed class DistributedQueryCacheService
 
             if (cached.HasValue)
             {
-                var result = JsonSerializer.Deserialize<QueryResult>(cached!, _jsonOptions);
+                var result = JsonSerializer.Deserialize<QueryResult>(cached.ToString(), _jsonOptions);
                 if (result != null)
                 {
                     // Promote to L1 for subsequent fast access
