@@ -2,6 +2,8 @@
 
 BQL (Bog Query Language) is Cabinet's native query language. It's designed to be natural-language-inspired while maintaining full backward compatibility with Splunk's SPL (Search Processing Language).
 
+Every query in this guide runs as part of the test suite, and `BqlLanguageTests` checks what each function and stage returns.
+
 ## Quick Start
 
 ```
@@ -28,6 +30,12 @@ A BQL query consists of a **search command** followed by zero or more **pipeline
 | `* \| ...` | Wildcard search (all events) |
 | `<text>` | Implicit search (auto-detected) |
 
+### Field Names
+
+Field names ignore case, so `host` and `Host` are the same field. `source_type`, `raw_line`, `source_file` and `line_number` name the built-in columns, and `level` names the level a parser extracted. `message` always has a value: the parsed message, or the raw line.
+
+`search status=500` and `search a=1 OR b=2` filter on fields, as `where` does, with unquoted values read as text. Other search text is a text search.
+
 ### Time Ranges
 
 ```
@@ -53,13 +61,17 @@ find * | where message like "%timeout%"
 find * | where NOT source_type = "debug"
 ```
 
-**Operators:** `=`, `!=`, `>`, `>=`, `<`, `<=`, `like`, `AND`, `OR`, `NOT`
+**Operators:** `=`, `!=`, `>`, `>=`, `<`, `<=`, `like`, `in`, `AND`, `OR`, `NOT`
+
+Text compares without regard to case. `severity` accepts level names such as `severity >= warning`. A time field compared with a date string compares as times.
 
 #### `regex` — Filter by regex pattern
 
 ```
 find * | regex RawLine="error|fail|timeout"
 find * | regex host="web-\d+"
+find * | regex host!="web-\d+"
+find * | regex "disk full"
 ```
 
 #### `search` / `find` — Text search within pipeline
@@ -81,15 +93,17 @@ find * | stats median(latency), stdev(latency) by endpoint
 find * | stats perc95(response_time) as p95 by service
 ```
 
+An aggregate's column is named after its alias, or `count` or `avg(duration)` without one. An unknown function is an error.
+
 **Aggregation functions:**
 
 | Function | Description |
 |----------|-------------|
-| `count` | Number of events |
+| `count` / `count(field)` | Number of events / events with that field |
 | `sum(field)` | Sum of numeric field |
-| `avg(field)` | Average of numeric field |
-| `min(field)` | Minimum value |
-| `max(field)` | Maximum value |
+| `avg(field)` / `mean(field)` | Average of numeric field |
+| `min(field)` | Minimum value; compares as text if no values are numeric |
+| `max(field)` | Maximum value; compares as text if no values are numeric |
 | `dc(field)` | Distinct count |
 | `median(field)` | Median (50th percentile) |
 | `stdev(field)` / `stdevp(field)` | Standard deviation (sample/population) |
@@ -125,6 +139,8 @@ find * | top 10 host
 find * | top 5 status by host
 ```
 
+Events without the field are ignored. With `by`, values are ranked within each group.
+
 #### `rare` — Least common values
 
 ```
@@ -138,6 +154,8 @@ find * | rare 10 status
 find * | chart count over host by status
 find * | chart avg(duration) over endpoint by method
 ```
+
+Each `over` value is a row, and each `by` value is a column.
 
 ### Transformation
 
@@ -178,6 +196,8 @@ find * | convert memk(memory)             # Memory string → kilobytes
 find * | convert rmunit(value)            # Remove unit suffix
 find * | convert rmcomma(number)          # Remove commas from numbers
 ```
+
+The field is converted in place. Use `convert memk(memory) as kb` to keep the original.
 
 #### `fieldalias` — Create field aliases
 
@@ -267,6 +287,8 @@ find * | transaction session_id maxspan=1h maxevents=100
 find * | transaction host startswith="BEGIN" endswith="COMMIT"
 ```
 
+Each result has `_eventcount` and `_duration`. The markers match text in the raw line. With `startswith`, events before a start marker are dropped. With `endswith`, a transaction that never reaches its end marker is dropped.
+
 #### `lookup` — Enrich from lookup table
 
 ```
@@ -301,6 +323,8 @@ find * | fieldsummary
 
 ## Expression Functions
 
+An unknown function or an invalid regular expression makes the query fail with an error. A function given a missing value returns a missing value, and a result that isn't a real number, such as `sqrt(-1)`, is missing too. Join text with `.`, as in `host . ":" . port`; if either side is missing, so is the result.
+
 ### String Functions
 
 | Function | Description | Example |
@@ -317,7 +341,7 @@ find * | fieldsummary
 | `endswith(s, suffix)` | Ends with check | `eval is_log = endswith(file, ".log")` |
 | `match(s, regex)` | Regex match | `eval has_ip = match(msg, "\d+\.\d+")` |
 | `urlencode(s)` / `urldecode(s)` | URL encode/decode | `eval encoded = urlencode(query)` |
-| `printf(fmt, args...)` / `format(fmt, args...)` | Formatted string | `eval msg = printf("%s: %d", host, count)` |
+| `printf(fmt, args...)` / `format(fmt, args...)` | Formatted string with `%s %d %i %f %e %g %x %%`, flags, width and precision | `eval msg = printf("%s: %d", host, count)` |
 | `exact(expr)` | Force exact string match | `eval e = exact(field)` |
 
 ### Math Functions
@@ -336,6 +360,8 @@ find * | fieldsummary
 
 ### Date/Time Functions
 
+Times are in UTC. Epochs are in seconds. Formats use `%Y %y %m %d %H %I %M %S %p %a %A %b %B %j %F %T %z %Z %s %%`. Relative specs are an offset such as `-1d` or `+30m`, a snap such as `@d`, or both as in `-1d@d`, with units `s m h d w M y`.
+
 | Function | Description | Example |
 |----------|-------------|---------|
 | `now()` | Current Unix timestamp | `eval t = now()` |
@@ -345,13 +371,13 @@ find * | fieldsummary
 | `relative_time(t, spec)` | Relative time calc | `eval yesterday = relative_time(now(), "-1d")` |
 | `ctime(epoch)` | Epoch → readable | `eval readable = ctime(timestamp)` |
 | `mktime(readable)` | Readable → epoch | `eval epoch = mktime(date_str)` |
-| `dur2sec(duration)` | Duration → seconds | `eval secs = dur2sec("5m30s")` |
+| `dur2sec(duration)` | Duration such as `5m30s`, `1h`, `01:00:05` or `90` → seconds | `eval secs = dur2sec("5m30s")` |
 
 ### Type Functions
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `typeof(v)` | Get type name | `eval t = typeof(field)` |
+| `typeof(v)` | Type name: `Number`, `String`, `Boolean`, `DateTime`, `MultiValue` or `Null` | `eval t = typeof(field)` |
 | `isnum(v)` | Is numeric? | `eval n = isnum(value)` |
 | `isstr(v)` | Is string? | `eval s = isstr(value)` |
 | `isint(v)` | Is integer? | `eval i = isint(value)` |
@@ -400,7 +426,7 @@ find * | fieldsummary
 | `mvdedup(mv)` | Remove duplicates | `eval unique = mvdedup(tags)` |
 | `mvsort(mv)` | Sort values | `eval sorted = mvsort(tags)` |
 | `mvfind(mv, regex)` | Find matching index | `eval i = mvfind(tags, "error")` |
-| `mvfilter(mv, expr)` | Filter values | `eval filtered = mvfilter(tags, match(tags, "err"))` |
+| `mvfilter(mv, expr)` | Keep values where `expr` is true; `expr` sees each value under the field's name and as `mv` | `eval filtered = mvfilter(tags, match(tags, "err"))` |
 
 ### Utility Functions
 

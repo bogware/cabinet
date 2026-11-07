@@ -234,6 +234,8 @@ public sealed class TopStage : BqlStage
     public int Count { get; }
     public string Field { get; }
 
+    public string? ByField { get; init; }
+
     public TopStage(int count, string field)
     {
         Count = count;
@@ -281,7 +283,16 @@ public sealed class AggregateFunction
     {
         Name = name.ToLowerInvariant();
         Field = field;
+
+        if (!IsKnown(Name))
+            throw new QueryParseException($"Unknown aggregate function: {name}");
     }
+
+    private static bool IsKnown(string name) =>
+        name is "count" or "sum" or "avg" or "mean" or "min" or "max" or "median" or "dc" or "distinct_count"
+            or "stdev" or "stdevp" or "variance" or "varp" or "percentile"
+        || (name.Length > 1 && name[0] == 'p' && name.Skip(name.StartsWith("perc", StringComparison.Ordinal) ? 4 : 1).All(char.IsDigit)
+            && (name.StartsWith("perc", StringComparison.Ordinal) ? name.Length > 4 : true));
 }
 
 /// <summary>
@@ -466,6 +477,9 @@ public sealed class TransactionStage : BqlStage
     public List<string> Fields { get; }
     public TimeSpan? MaxSpan { get; }
     public int? MaxEvents { get; }
+
+    public string? StartsWith { get; init; }
+    public string? EndsWith { get; init; }
 
     public TransactionStage(List<string> fields, TimeSpan? maxSpan = null, int? maxEvents = null)
     {

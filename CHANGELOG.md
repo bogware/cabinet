@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `now()` returns Unix seconds, as documented. `strptime`, `relative_time` and `mktime` also return Unix seconds.
+- Unknown functions, unknown aggregates and invalid regular expressions are query errors rather than silent nulls.
+- `Tags` in query results is an array rather than a comma-separated string. CSV exports join multi-value fields with semicolons.
+- Text such as `1,2` or `$5` no longer counts as a number.
 - Game log parsers and moderation detection moved to the optional `Cabinet.Extras.Gaming` extension, off by default. Set `Gaming:Enabled=true` to use them. `/api/v1/detection/*` returns 404 otherwise.
 - Parsers run in a fixed order: JSON, CEF, Apache, Nginx, CSV, gaming parsers if enabled, Generic. Ordinary lines mentioning words like "Steam" are no longer claimed by a game parser, and the API now parses Apache and Nginx logs.
 - `stats count` output column is now `count`, as documented, rather than `count()`.
@@ -45,6 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Brought BQL in line with its guide. Every documented query now runs as a test, with results checked for each function and stage. Notable fixes: `.` concatenation, `replace` with a regex, `printf`, `strftime`, `strptime`, `relative_time`, `mktime`, `ctime`, `dur2sec`, `mvfilter`, `regex field="pattern"`, `top N x by y`, `transaction startswith/endswith`, `chart` cross-tabs, `timechart` functions other than sum, avg, min and max, in-place `convert`, and `fieldsummary` type and stdev.
+- Fields named like severity levels, such as `error`, are no longer read as numbers outside severity comparisons.
+- Group keys no longer collide when values contain `|`.
 - PostgreSQL instances starting together on a new database could crash creating the schema. Schema creation now takes a lock.
 - OpenSearch queries raise an error when shards fail instead of returning partial results.
 - BQL field names now match case-insensitively in every stage, so `stats count by host`, `fields`, `dedup`, `top` and `rename` find the fields ingestion stores. `source_type`, `raw_line` and `level` are aliases, and `message` always has a value.

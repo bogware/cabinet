@@ -763,7 +763,7 @@ public class QueryController : ControllerBase
             if (evt is IDictionary<string, object?> dict)
             {
                 foreach (var key in allKeys)
-                    values.Add(EscapeCsvField(dict.TryGetValue(key, out var v) ? v?.ToString() ?? "" : ""));
+                    values.Add(EscapeCsvField(dict.TryGetValue(key, out var v) ? CsvValue(v) : ""));
             }
             else if (evt is LogEvent le)
             {
@@ -788,6 +788,15 @@ public class QueryController : ControllerBase
 
         await writer.FlushAsync();
     }
+
+    /// <summary>Text for one CSV cell. Multi-value fields join with semicolons.</summary>
+    internal static string CsvValue(object? value) => value switch
+    {
+        null => "",
+        string text => text,
+        IEnumerable<object?> values => string.Join(";", values),
+        _ => value.ToString() ?? "",
+    };
 
     private static string EscapeCsvField(string value)
     {

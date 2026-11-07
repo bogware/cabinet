@@ -31,24 +31,30 @@ public static class BqlExpressionEvaluator
     {
         LiteralExpression lit => lit.Value,
         FieldExpression field => GetFieldValue(context, field.Name),
-        ArithmeticExpression arith => EvaluateArithmetic(arith, context),
+        ArithmeticExpression arith => Finite(EvaluateArithmetic(arith, context)),
         ComparisonExpression comp => EvaluateComparison(comp, context),
         LogicalExpression logical => EvaluateLogical(logical, context),
         NotExpression not => !EvaluateBool(not.Operand, context),
         InExpression inExpr => EvaluateIn(inExpr, context),
         LikeExpression like => EvaluateLike(like, context),
-        FunctionExpression func => EvaluateFunction(func, context),
+        FunctionExpression func => Finite(EvaluateFunction(func, context)),
         _ => null
     };
+
+    private static object? Finite(object? value) =>
+        value is double number && !double.IsFinite(number) ? null : value;
 
     private static object? EvaluateArithmetic(ArithmeticExpression expr, IDictionary<string, object?> context)
     {
         var left = Evaluate(expr.Left, context);
         var right = Evaluate(expr.Right, context);
 
+        if (expr.Operator == ".")
+            return left == null || right == null ? null : $"{FormatValue(left)}{FormatValue(right)}";
+
         // String concatenation with +
         if (expr.Operator == "+" && (left is string || right is string))
-            return $"{left}{right}";
+            return $"{FormatValue(left)}{FormatValue(right)}";
 
         var l = ToDouble(left);
         var r = ToDouble(right);
@@ -76,6 +82,10 @@ public static class BqlExpressionEvaluator
         if (left == null && right == null) return expr.Operator is "=" or "==";
         if (left == null || right == null) return expr.Operator is "!=" or "<>";
 
+        // A time compared with a date string compares as times
+        left = CoerceTimeOperand(left, right);
+        right = CoerceTimeOperand(right, left);
+
         // Numeric comparison
         var numLeft = ToDouble(left);
         var numRight = ToDouble(right);
@@ -99,8 +109,8 @@ public static class BqlExpressionEvaluator
         }
 
         // String comparison (case-insensitive)
-        var strLeft = left.ToString() ?? "";
-        var strRight = right.ToString() ?? "";
+        var strLeft = left?.ToString() ?? "";
+        var strRight = right?.ToString() ?? "";
         var cmp = string.Compare(strLeft, strRight, StringComparison.OrdinalIgnoreCase);
 
         return expr.Operator switch
@@ -114,6 +124,9 @@ public static class BqlExpressionEvaluator
             _ => false
         };
     }
+
+    private static object? CoerceTimeOperand(object? value, object? other) =>
+        value is string text && other is DateTime && BqlTime.Parse(text, null) is { } parsed ? parsed : value;
 
     private static object EvaluateLogical(LogicalExpression expr, IDictionary<string, object?> context)
     {
@@ -208,15 +221,19 @@ public static class BqlExpressionEvaluator
             "tonumber" => ToDouble(args.FirstOrDefault()),
 
             // Math functions
-            "abs" => Math.Abs(ToDouble(args.FirstOrDefault()) ?? 0),
-            "round" => Math.Round(ToDouble(args.FirstOrDefault()) ?? 0, (int)(ToDouble(args.ElementAtOrDefault(1)) ?? 0)),
-            "ceil" or "ceiling" => Math.Ceiling(ToDouble(args.FirstOrDefault()) ?? 0),
-            "floor" => Math.Floor(ToDouble(args.FirstOrDefault()) ?? 0),
-            "pow" => Math.Pow(ToDouble(args.ElementAtOrDefault(0)) ?? 0, ToDouble(args.ElementAtOrDefault(1)) ?? 1),
-            "sqrt" => Math.Sqrt(ToDouble(args.FirstOrDefault()) ?? 0),
+            "abs" => ToDouble(args.FirstOrDefault()) is { } number ? Math.Abs(number) : null,
+            "round" => ToDouble(args.FirstOrDefault()) is { } number
+                ? Math.Round(number, Math.Clamp((int)(ToDouble(args.ElementAtOrDefault(1)) ?? 0), 0, 15))
+                : null,
+            "ceil" or "ceiling" => ToDouble(args.FirstOrDefault()) is { } number ? Math.Ceiling(number) : null,
+            "floor" => ToDouble(args.FirstOrDefault()) is { } number ? Math.Floor(number) : null,
+            "pow" => ToDouble(args.ElementAtOrDefault(0)) is { } power && ToDouble(args.ElementAtOrDefault(1)) is { } exponent
+                ? Math.Pow(power, exponent)
+                : null,
+            "sqrt" => ToDouble(args.FirstOrDefault()) is { } number ? Math.Sqrt(number) : null,
             "log" => EvalLog(args),
             "ln" => Math.Log(ToDouble(args.FirstOrDefault()) ?? 1),
-            "exp" => Math.Exp(ToDouble(args.FirstOrDefault()) ?? 0),
+            "exp" => ToDouble(args.FirstOrDefault()) is { } number ? Math.Exp(number) : null,
             "pi" => Math.PI,
             "atan2" => Math.Atan2(ToDouble(args.ElementAtOrDefault(0)) ?? 0, ToDouble(args.ElementAtOrDefault(1)) ?? 1),
             "sigfig" => EvalSigfig(args),
@@ -225,7 +242,7 @@ public static class BqlExpressionEvaluator
             "random" => Random.Shared.Next(),
 
             // Date/time functions
-            "now" => DateTime.UtcNow,
+            "now" => DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             "time" => DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             "strftime" => EvalStrftime(args),
             "strptime" => EvalStrptime(args),
@@ -275,9 +292,9 @@ public static class BqlExpressionEvaluator
 
             // String formatting
             "printf" or "format" => EvalPrintf(args),
-            "exact" => ToDouble(args.FirstOrDefault()),
+            "exact" => args.FirstOrDefault(),
 
-            _ => null
+            _ => throw new QueryParseException($"Unknown function: {func.Name}")
         };
     }
 
@@ -347,10 +364,22 @@ public static class BqlExpressionEvaluator
     private static object? EvalReplace(List<object?> args)
     {
         var str = args.ElementAtOrDefault(0)?.ToString();
-        var find = args.ElementAtOrDefault(1)?.ToString();
+        var pattern = args.ElementAtOrDefault(1)?.ToString();
         var replacement = args.ElementAtOrDefault(2)?.ToString() ?? "";
-        if (str == null || find == null) return str;
-        return str.Replace(find, replacement, StringComparison.Ordinal);
+        if (str == null || pattern == null) return str;
+
+        try
+        {
+            return Regex.Replace(str, pattern, replacement, RegexOptions.None, RegexTimeout);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new QueryParseException($"Invalid regular expression '{pattern}': {ex.Message}");
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return str;
+        }
     }
 
     private static object? EvalSplit(List<object?> args)
@@ -363,10 +392,12 @@ public static class BqlExpressionEvaluator
     private static object EvalMvCount(List<object?> args)
     {
         var val = args.FirstOrDefault();
-        if (val is string[] arr) return arr.Length;
-        if (val is IEnumerable<object?> list) return list.Count();
-        return val != null ? 1 : 0;
+        return AsMultiValue(val)?.Count ?? (val != null ? 1 : 0);
     }
+
+    /// <summary>The values of a multi-value field, or null if the value isn't multi-valued.</summary>
+    private static List<object?>? AsMultiValue(object? value) =>
+        value is string ? null : (value as IEnumerable<object?>)?.ToList();
 
     private static object? EvalMatch(List<object?> args)
     {
@@ -374,13 +405,19 @@ public static class BqlExpressionEvaluator
         var pattern = args.ElementAtOrDefault(1)?.ToString();
         if (str == null || pattern == null) return false;
         if (pattern.Length > 10_000) return false; // Guard against excessively long patterns
+
         try
         {
-            // Pre-compile with timeout to protect against ReDoS during compilation
-            var regex = new Regex(pattern, RegexOptions.IgnoreCase, RegexTimeout);
-            return regex.IsMatch(str);
+            return Regex.IsMatch(str, pattern, RegexOptions.IgnoreCase, RegexTimeout);
         }
-        catch { return false; }
+        catch (ArgumentException ex)
+        {
+            throw new QueryParseException($"Invalid regular expression '{pattern}': {ex.Message}");
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     private static object? EvalCase(List<object?> args, IDictionary<string, object?> context, FunctionExpression func)
@@ -414,58 +451,25 @@ public static class BqlExpressionEvaluator
 
     private static object? EvalStrftime(List<object?> args)
     {
-        var dt = args.ElementAtOrDefault(0);
-        var format = args.ElementAtOrDefault(1)?.ToString() ?? "yyyy-MM-dd HH:mm:ss";
-        if (dt is DateTime dateTime) return dateTime.ToString(format, CultureInfo.InvariantCulture);
-        var epoch = ToDouble(dt);
-        if (epoch.HasValue)
-        {
-            try
-            {
-                var utcDt = DateTimeOffset.FromUnixTimeSeconds((long)epoch.Value).UtcDateTime;
-                return utcDt.ToString(format, CultureInfo.InvariantCulture);
-            }
-            catch (ArgumentOutOfRangeException) { return null; }
-        }
-        return null;
+        var value = args.ElementAtOrDefault(0);
+        var format = args.ElementAtOrDefault(1)?.ToString() ?? "%Y-%m-%d %H:%M:%S";
+        return BqlTime.FromValue(value, ToDouble(value)) is { } time ? BqlTime.Format(time, format) : null;
     }
 
     private static object? EvalStrptime(List<object?> args)
     {
         var str = args.ElementAtOrDefault(0)?.ToString();
-        var format = args.ElementAtOrDefault(1)?.ToString();
         if (str == null) return null;
-        if (format != null && DateTime.TryParseExact(str, format, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var exact))
-            return exact;
-        if (DateTime.TryParse(str, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
-            return parsed;
-        return null;
+        return BqlTime.Parse(str, args.ElementAtOrDefault(1)?.ToString()) is { } time ? BqlTime.ToEpoch(time) : null;
     }
 
     private static object? EvalRelativeTime(List<object?> args)
     {
-        var dt = args.ElementAtOrDefault(0);
-        var offset = args.ElementAtOrDefault(1)?.ToString();
-        DateTime baseTime;
-        if (dt is DateTime d) baseTime = d;
-        else return null;
-        if (string.IsNullOrEmpty(offset)) return baseTime;
-
-        // Parse relative time spec like "-1h", "+30m", "-7d"
-        var match = Regex.Match(offset, @"^([+-]?\d+)([smhdwMy])$", RegexOptions.None, RegexTimeout);
-        if (!match.Success) return baseTime;
-        var amount = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-        return match.Groups[2].Value switch
-        {
-            "s" => baseTime.AddSeconds(amount),
-            "m" => baseTime.AddMinutes(amount),
-            "h" => baseTime.AddHours(amount),
-            "d" => baseTime.AddDays(amount),
-            "w" => baseTime.AddDays(amount * 7),
-            "M" => baseTime.AddMonths(amount),
-            "y" => baseTime.AddYears(amount),
-            _ => baseTime
-        };
+        var value = args.ElementAtOrDefault(0);
+        var spec = args.ElementAtOrDefault(1)?.ToString();
+        if (BqlTime.FromValue(value, ToDouble(value)) is not { } time) return null;
+        if (string.IsNullOrEmpty(spec)) return BqlTime.ToEpoch(time);
+        return BqlTime.ApplyRelative(time, spec) is { } result ? BqlTime.ToEpoch(result) : null;
     }
 
     private static object? EvalToJson(List<object?> args)
@@ -521,8 +525,7 @@ public static class BqlExpressionEvaluator
     {
         var val = args.ElementAtOrDefault(0);
         var idx = (int)(ToDouble(args.ElementAtOrDefault(1)) ?? 0);
-        if (val is string[] arr) return idx >= 0 && idx < arr.Length ? arr[idx] : null;
-        if (val is IList<object?> list) return idx >= 0 && idx < list.Count ? list[idx] : null;
+        if (AsMultiValue(val) is { } values) return idx >= 0 && idx < values.Count ? values[idx] : null;
         return idx == 0 ? val : null;
     }
 
@@ -530,9 +533,7 @@ public static class BqlExpressionEvaluator
     {
         var val = args.ElementAtOrDefault(0);
         var sep = args.ElementAtOrDefault(1)?.ToString() ?? ",";
-        if (val is string[] arr) return string.Join(sep, arr);
-        if (val is IEnumerable<object?> list) return string.Join(sep, list);
-        return val?.ToString();
+        return AsMultiValue(val) is { } values ? string.Join(sep, values) : val?.ToString();
     }
 
     private static object? EvalMvAppend(List<object?> args)
@@ -540,8 +541,7 @@ public static class BqlExpressionEvaluator
         var result = new List<object?>();
         foreach (var arg in args)
         {
-            if (arg is string[] arr) result.AddRange(arr.Cast<object?>());
-            else if (arg is IEnumerable<object?> list) result.AddRange(list);
+            if (AsMultiValue(arg) is { } values) result.AddRange(values);
             else if (arg != null) result.Add(arg);
         }
         return result.ToArray();
@@ -550,16 +550,15 @@ public static class BqlExpressionEvaluator
     private static object? EvalMvDedup(List<object?> args)
     {
         var val = args.FirstOrDefault();
-        if (val is string[] arr) return arr.Distinct().ToArray();
-        if (val is IEnumerable<object?> list) return list.Distinct().ToArray();
-        return val;
+        return AsMultiValue(val) is { } values ? values.Distinct().ToArray() : val;
     }
 
     private static object? EvalMvSort(List<object?> args)
     {
         var val = args.FirstOrDefault();
-        if (val is string[] arr) { var sorted = arr.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToArray(); return sorted; }
-        return val;
+        return AsMultiValue(val) is { } values
+            ? values.OrderBy(v => v?.ToString(), StringComparer.OrdinalIgnoreCase).ToArray()
+            : val;
     }
 
     // ─── Hash / encoding / type helpers ──────────────────────
@@ -600,10 +599,9 @@ public static class BqlExpressionEvaluator
         var val = args.FirstOrDefault();
         if (val == null) return "Null";
         if (val is bool) return "Boolean";
-        if (val is int or long) return "Integer";
-        if (val is double or float or decimal) return "Number";
+        if (val is int or long or double or float or decimal) return "Number";
         if (val is DateTime) return "DateTime";
-        if (val is string[] or IEnumerable<object?>) return "MultiValue";
+        if (AsMultiValue(val) != null) return "MultiValue";
         return "String";
     }
 
@@ -639,6 +637,7 @@ public static class BqlExpressionEvaluator
     private static bool IsInteger(object? val)
     {
         if (val is int or long) return true;
+        if (val is double number) return double.IsFinite(number) && Math.Floor(number) == number;
         if (val is string s && long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)) return true;
         return false;
     }
@@ -667,62 +666,96 @@ public static class BqlExpressionEvaluator
 
     private static object? EvalMvFilter(List<object?> args, IDictionary<string, object?> context, FunctionExpression func)
     {
-        // mvfilter(expression) — filter multi-value field by expression
-        // In practice this is complex; simplified: filter by truthiness of expression applied to each element
-        var val = args.FirstOrDefault();
-        if (val is string[] arr)
-            return arr.Where(s => !string.IsNullOrEmpty(s)).ToArray();
-        if (val is IEnumerable<object?> list)
-            return list.Where(x => x != null).ToArray();
-        return val;
+        // mvfilter(mv, condition), where the condition sees each value under the field's name and
+        // as `mv`; or mvfilter(condition), which filters the first field the condition names.
+        var field = func.Arguments.Count >= 2
+            ? func.Arguments[0] as FieldExpression
+            : FirstField(func.Arguments.FirstOrDefault());
+        var condition = func.Arguments.Count >= 2 ? func.Arguments[1] : func.Arguments.FirstOrDefault();
+        var source = func.Arguments.Count >= 2 || field == null ? args.FirstOrDefault() : Evaluate(field, context);
+        if (condition == null) return source;
+
+        var values = AsMultiValue(source) ?? (source != null ? new List<object?> { source } : []);
+        var scope = new BqlRow();
+        foreach (var kvp in context)
+        {
+            scope[kvp.Key] = kvp.Value;
+        }
+
+        var kept = new List<object?>();
+        foreach (var value in values)
+        {
+            scope["mv"] = value;
+            if (field != null)
+            {
+                scope[field.Name] = value;
+            }
+
+            if (EvaluateBool(condition, scope))
+            {
+                kept.Add(value);
+            }
+        }
+
+        return kept.ToArray();
     }
+
+    private static FieldExpression? FirstField(BqlExpression? expression) => expression switch
+    {
+        FieldExpression field => field,
+        FunctionExpression function => function.Arguments.Select(FirstField).FirstOrDefault(f => f != null),
+        ComparisonExpression comparison => FirstField(comparison.Left) ?? FirstField(comparison.Right),
+        LogicalExpression logical => FirstField(logical.Left) ?? FirstField(logical.Right),
+        NotExpression not => FirstField(not.Operand),
+        _ => null,
+    };
 
     private static object? EvalCtime(List<object?> args)
     {
-        // Convert epoch time to human-readable string
-        var epoch = ToDouble(args.ElementAtOrDefault(0));
-        if (!epoch.HasValue) return null;
-        var format = args.ElementAtOrDefault(1)?.ToString() ?? "yyyy-MM-dd HH:mm:ss";
-        try
-        {
-            var dt = DateTimeOffset.FromUnixTimeSeconds((long)epoch.Value).UtcDateTime;
-            return dt.ToString(format, CultureInfo.InvariantCulture);
-        }
-        catch (ArgumentOutOfRangeException) { return null; }
+        // Convert a time or epoch to a readable string
+        var value = args.ElementAtOrDefault(0);
+        var format = args.ElementAtOrDefault(1)?.ToString() ?? "%Y-%m-%d %H:%M:%S";
+        return BqlTime.FromValue(value, ToDouble(value)) is { } time ? BqlTime.Format(time, format) : null;
     }
 
     private static object? EvalMktime(List<object?> args)
     {
-        // Convert date string to epoch time
-        var str = args.ElementAtOrDefault(0)?.ToString();
-        if (str == null) return null;
-        if (args.ElementAtOrDefault(0) is DateTime dt)
-            return new DateTimeOffset(dt, TimeSpan.Zero).ToUnixTimeSeconds();
-        if (DateTime.TryParse(str, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
-            return new DateTimeOffset(parsed, TimeSpan.Zero).ToUnixTimeSeconds();
-        return null;
+        // Convert a time or date string to epoch seconds
+        var value = args.ElementAtOrDefault(0);
+        if (value is DateTime time) return BqlTime.ToEpoch(time);
+        var text = value?.ToString();
+        if (text == null) return null;
+        return BqlTime.Parse(text, null) is { } parsed ? BqlTime.ToEpoch(parsed) : ToDouble(text);
     }
 
     private static object? EvalDur2Sec(List<object?> args)
     {
-        // Convert duration string "HH:MM:SS" or "MM:SS" to seconds
-        var str = args.FirstOrDefault()?.ToString();
-        if (str == null) return null;
-        var parts = str.Split(':');
-        try
+        // Durations: "5m30s", "1h", "HH:MM:SS", "MM:SS" or plain seconds
+        var str = args.FirstOrDefault()?.ToString()?.Trim();
+        if (string.IsNullOrEmpty(str)) return null;
+
+        var units = Regex.Match(
+            str,
+            @"^(?:(?<d>\d+(?:\.\d+)?)d)?(?:(?<h>\d+(?:\.\d+)?)h)?(?:(?<m>\d+(?:\.\d+)?)m)?(?:(?<s>\d+(?:\.\d+)?)s)?$",
+            RegexOptions.IgnoreCase,
+            RegexTimeout);
+        if (units.Success)
         {
-            return parts.Length switch
-            {
-                3 => double.Parse(parts[0], CultureInfo.InvariantCulture) * 3600 +
-                     double.Parse(parts[1], CultureInfo.InvariantCulture) * 60 +
-                     double.Parse(parts[2], CultureInfo.InvariantCulture),
-                2 => double.Parse(parts[0], CultureInfo.InvariantCulture) * 60 +
-                     double.Parse(parts[1], CultureInfo.InvariantCulture),
-                1 => ToDouble(str),
-                _ => null
-            };
+            double Part(string name, double scale) => units.Groups[name].Success
+                ? double.Parse(units.Groups[name].Value, CultureInfo.InvariantCulture) * scale
+                : 0;
+            return Part("d", 86400) + Part("h", 3600) + Part("m", 60) + Part("s", 1);
         }
-        catch { return null; }
+
+        var parts = str.Split(':').Select(ToDouble).ToList();
+        if (parts.Any(p => !p.HasValue)) return null;
+        return parts.Count switch
+        {
+            3 => parts[0]!.Value * 3600 + parts[1]!.Value * 60 + parts[2]!.Value,
+            2 => parts[0]!.Value * 60 + parts[1]!.Value,
+            1 => parts[0],
+            _ => null,
+        };
     }
 
     private static object? EvalMemK(List<object?> args)
@@ -766,13 +799,48 @@ public static class BqlExpressionEvaluator
 
     private static object? EvalPrintf(List<object?> args)
     {
-        // Simple printf-style formatting: printf("%s has %d items", name, count)
+        // printf("%s has %d items", name, count). Supports %s %d %i %f %e %g %x %X %%, with
+        // optional left-justify, zero padding, width and precision.
         var format = args.ElementAtOrDefault(0)?.ToString();
         if (format == null) return null;
-        var formatArgs = args.Skip(1).Select(a => a ?? "").ToArray();
-        try { return string.Format(CultureInfo.InvariantCulture, format, formatArgs); }
-        catch { return format; }
+
+        var next = 1;
+        return Regex.Replace(format, @"%(?<flags>[-0]*)(?<width>\d*)(?:\.(?<precision>\d+))?(?<type>[sdifeEgxX%])", match =>
+        {
+            var type = match.Groups["type"].Value[0];
+            if (type == '%') return "%";
+
+            var arg = args.ElementAtOrDefault(next++);
+            var precision = match.Groups["precision"].Success ? int.Parse(match.Groups["precision"].Value, CultureInfo.InvariantCulture) : (int?)null;
+            var number = ToDouble(arg);
+            var text = type switch
+            {
+                's' => precision is { } max && FormatValue(arg).Length > max ? FormatValue(arg)[..max] : FormatValue(arg),
+                'd' or 'i' => number is { } d ? Math.Truncate(d).ToString("0", CultureInfo.InvariantCulture) : "",
+                'f' => number?.ToString($"F{precision ?? 6}", CultureInfo.InvariantCulture) ?? "",
+                'e' or 'E' => number?.ToString($"{type}{precision ?? 6}", CultureInfo.InvariantCulture) ?? "",
+                'g' => number?.ToString("G", CultureInfo.InvariantCulture) ?? "",
+                _ => number is { } x ? ((long)x).ToString(type.ToString(), CultureInfo.InvariantCulture) : "",
+            };
+
+            var flags = match.Groups["flags"].Value;
+            var width = match.Groups["width"].Length > 0 ? int.Parse(match.Groups["width"].Value, CultureInfo.InvariantCulture) : 0;
+            width = Math.Min(width, 1000);
+            if (flags.Contains('-')) return text.PadRight(width);
+            return flags.Contains('0') && type != 's' ? text.PadLeft(width, '0') : text.PadLeft(width);
+        }, RegexOptions.None, RegexTimeout);
     }
+
+    /// <summary>Text form of a value: whole numbers without decimals, times in ISO 8601.</summary>
+    private static string FormatValue(object? value) => value switch
+    {
+        null => "",
+        bool flag => flag ? "true" : "false",
+        DateTime time => BqlTime.ToUtc(time).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+        double number when Math.Floor(number) == number && Math.Abs(number) < 1e15 => number.ToString("0", CultureInfo.InvariantCulture),
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? "",
+    };
 
     // ─── Utility ─────────────────────────────────────────────
 
@@ -824,7 +892,9 @@ public static class BqlExpressionEvaluator
         if (value is float f) return f;
         if (value is decimal dec) return (double)dec;
         if (value is bool b) return b ? 1.0 : 0.0;
-        if (double.TryParse(value.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+        if (value is DateTime time) return BqlTime.ToEpoch(time);
+        if (double.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            && double.IsFinite(parsed))
             return parsed;
         return null;
     }

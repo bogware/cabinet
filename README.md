@@ -78,7 +78,6 @@ find * | timechart span=1h count by severity
 search error | sort -timestamp | head 10
 ```
 
-The full reference is [docs/BQL-GUIDE.md](docs/BQL-GUIDE.md). The language is being brought in line with the guide, so some examples may not yet behave as documented.
 
 ## Features
 
@@ -89,7 +88,7 @@ The full reference is [docs/BQL-GUIDE.md](docs/BQL-GUIDE.md). The language is be
 | Syslog listener | Partial | RFC 3164 over TCP and UDP. No TLS. Off by default, and Compose doesn't publish the port. |
 | Forwarding agent | Partial | Batches with retries and a disk spill directory. See the delivery limits below. |
 | Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
-| BQL query engine | Partial | Works, but not every documented example behaves as written yet. |
+| BQL query engine | Available | Every example in the guide runs as a test. Queries read at most 100,000 events, except a bare `stats count`, and flag results as `truncated` beyond that. |
 | Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
 | Web dashboard | Available | Served from the API outside the Development environment. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |

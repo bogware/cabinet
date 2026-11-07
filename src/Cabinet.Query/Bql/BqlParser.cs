@@ -70,6 +70,9 @@ public sealed class BqlParser : IQueryParser
             Advance(); // skip pipe
             var stage = ParseStage();
             bqlQuery.Stages.Add(stage);
+
+            if (Current.IsKeyword("from") && Peek(1).IsKeyword("last"))
+                ParseFromLast(bqlQuery);
         }
 
         if (Current.Kind != BqlTokenKind.Eof)
@@ -306,11 +309,11 @@ public sealed class BqlParser : IQueryParser
             Advance();
             Expect(BqlTokenKind.OpenParen, "(");
             var values = new List<BqlExpression>();
-            values.Add(ParsePrimary());
+            values.Add(SeverityLiteral(left, ParsePrimary()));
             while (Current.Kind == BqlTokenKind.Comma)
             {
                 Advance();
-                values.Add(ParsePrimary());
+                values.Add(SeverityLiteral(left, ParsePrimary()));
             }
             Expect(BqlTokenKind.CloseParen, ")");
             return new InExpression(left, values);
@@ -333,7 +336,7 @@ public sealed class BqlParser : IQueryParser
             var op = Current.Value;
             Advance();
             var right = ParseAdditive();
-            return new ComparisonExpression(left, op, right);
+            return new ComparisonExpression(left, op, SeverityLiteral(left, right));
         }
 
         return left;
@@ -343,7 +346,7 @@ public sealed class BqlParser : IQueryParser
     {
         var left = ParseMultiplicative();
 
-        while (Current.Kind is BqlTokenKind.Plus or BqlTokenKind.Minus)
+        while (Current.Kind is BqlTokenKind.Plus or BqlTokenKind.Minus or BqlTokenKind.Dot)
         {
             var op = Current.Value;
             Advance();
@@ -424,14 +427,6 @@ public sealed class BqlParser : IQueryParser
         {
             Advance();
             return new LiteralExpression("*");
-        }
-
-        // Named severity levels
-        if (IsSeverityKeyword(Current))
-        {
-            var severity = ParseSeverityValue(Current.Value);
-            Advance();
-            return new LiteralExpression(severity);
         }
 
         // Boolean literals
@@ -758,7 +753,14 @@ public sealed class BqlParser : IQueryParser
         if (Current.Kind == BqlTokenKind.NumberLiteral)
             count = ExpectNumber();
         var field = ExpectIdentifier();
-        return new TopStage(count, field);
+        string? byField = null;
+        if (Current.IsKeyword("by"))
+        {
+            Advance();
+            byField = ExpectIdentifier();
+        }
+
+        return new TopStage(count, field) { ByField = byField };
     }
 
     private TimechartStage ParseTimechartStage()
@@ -1259,31 +1261,30 @@ public sealed class BqlParser : IQueryParser
 
     private RegexStage ParseRegexStage()
     {
-        // regex [field=name] "pattern"  OR  regex field!=name "pattern"
+        // regex "pattern" | regex host="pattern" | regex host!="pattern" | regex field=host "pattern"
         var stage = new RegexStage();
 
-        if (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind == BqlTokenKind.Equals)
+        if (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind is BqlTokenKind.Equals or BqlTokenKind.NotEquals)
         {
-            var key = Current.Value;
-            Advance(); Advance(); // skip "field" and "="
-            if (string.Equals(key, "field", StringComparison.OrdinalIgnoreCase))
+            stage.Field = Current.Value;
+            stage.Negate = Peek(1).Kind == BqlTokenKind.NotEquals;
+            Advance();
+            Advance();
+
+            if (stage.Field.Equals("field", StringComparison.OrdinalIgnoreCase)
+                && Current.Kind == BqlTokenKind.Identifier
+                && Peek(1).Kind == BqlTokenKind.StringLiteral)
+            {
                 stage.Field = Current.Value;
-            else
-                stage.Field = key;
-            Advance();
+                Advance();
+            }
         }
 
-        if (Current.Kind == BqlTokenKind.StringLiteral)
-        {
-            stage.Pattern = Current.Value;
-            Advance();
-        }
-        else if (Current.Kind == BqlTokenKind.Identifier)
-        {
-            stage.Pattern = Current.Value;
-            Advance();
-        }
+        if (Current.Kind is not (BqlTokenKind.StringLiteral or BqlTokenKind.Identifier))
+            throw new QueryParseException("Expected a pattern after regex", $"position {Current.Position}");
 
+        stage.Pattern = Current.Value;
+        Advance();
         return stage;
     }
 
@@ -1335,7 +1336,7 @@ public sealed class BqlParser : IQueryParser
             Expect(BqlTokenKind.OpenParen, "(");
             var fieldExpr = ParseOrExpression();
             Expect(BqlTokenKind.CloseParen, ")");
-            var alias = funcName + "(" + (fieldExpr is FieldExpression fe ? fe.Name : "value") + ")";
+            var alias = fieldExpr is FieldExpression fe ? fe.Name : funcName + "(value)";
             if (Current.IsKeyword("as"))
             {
                 Advance();
@@ -1402,6 +1403,8 @@ public sealed class BqlParser : IQueryParser
 
         TimeSpan? maxSpan = null;
         int? maxEvents = null;
+        string? startsWith = null;
+        string? endsWith = null;
 
         // Parse optional parameters
         while (Current.Kind == BqlTokenKind.Identifier && Current.Kind != BqlTokenKind.Pipe && Current.Kind != BqlTokenKind.Eof)
@@ -1417,6 +1420,19 @@ public sealed class BqlParser : IQueryParser
                 }
                 continue;
             }
+            if (Current.IsAnyKeyword("startswith", "endswith"))
+            {
+                var isStart = Current.IsKeyword("startswith");
+                Advance();
+                if (Current.Kind == BqlTokenKind.Equals) Advance();
+                if (Current.Kind != BqlTokenKind.StringLiteral)
+                    throw new QueryParseException("Expected a quoted string after startswith or endswith", $"position {Current.Position}");
+
+                if (isStart) startsWith = Current.Value;
+                else endsWith = Current.Value;
+                Advance();
+                continue;
+            }
             if (Current.Value.StartsWith("maxevents", StringComparison.OrdinalIgnoreCase))
             {
                 Advance(); // skip "maxevents"
@@ -1430,7 +1446,7 @@ public sealed class BqlParser : IQueryParser
             break;
         }
 
-        return new TransactionStage(fields, maxSpan, maxEvents);
+        return new TransactionStage(fields, maxSpan, maxEvents) { StartsWith = startsWith, EndsWith = endsWith };
     }
 
     private EventStatsStage ParseEventStatsStage()
@@ -1567,9 +1583,19 @@ public sealed class BqlParser : IQueryParser
         _ => 2
     };
 
-    private static bool IsSeverityKeyword(BqlToken token) =>
-        token.Kind == BqlTokenKind.Identifier &&
-        token.Value.ToLowerInvariant() is "trace" or "debug" or "info" or "information"
+    /// <summary>
+    /// In <c>severity >= warning</c> the name is a severity level. Elsewhere it's a field.
+    /// </summary>
+    private static BqlExpression SeverityLiteral(BqlExpression left, BqlExpression value) =>
+        left is FieldExpression { Name: var name }
+        && name.Equals("severity", StringComparison.OrdinalIgnoreCase)
+        && value is FieldExpression { Name: var level }
+        && IsSeverityName(level)
+            ? new LiteralExpression(ParseSeverityValue(level))
+            : value;
+
+    private static bool IsSeverityName(string name) =>
+        name.ToLowerInvariant() is "trace" or "debug" or "info" or "information"
             or "warning" or "warn" or "error" or "err" or "critical" or "crit" or "fatal";
 
     private static bool IsComparisonOperator(BqlTokenKind kind) =>
@@ -1612,14 +1638,14 @@ public sealed class BqlParser : IQueryParser
         LimitStage l => new LegacyLimitOperator(l.Count),
         TailStage t => new LegacyTailOperator(t.Count),
         DedupStage d => new LegacyDedupOperator(d.Fields),
-        TopStage tp => new LegacyTopOperator(tp.Count, tp.Field),
+        TopStage tp => new LegacyTopOperator(tp.Count, tp.Field, tp.ByField),
         TableStage tb => new LegacyTableOperator(tb.Fields),
         EvalStage e => new LegacyEvalOperator(e.Assignments),
         RexStage r => new LegacyRexOperator(r.Pattern, r.SourceField),
         RenameStage rn => new LegacyRenameOperator(rn.Mappings),
         TimechartStage tc => new LegacyTimechartOperator(tc.Span, tc.Aggregation, tc.ByField, tc.AggregationField),
         FieldAliasStage fa => new LegacyFieldAliasOperator(fa.Aliases),
-        TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents),
+        TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents, tx.StartsWith, tx.EndsWith),
         EventStatsStage es => new LegacyEventStatsOperator(es.Aggregations, es.GroupByFields),
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
@@ -1721,7 +1747,7 @@ internal sealed class LegacyStatsOperator : QueryOperator
         var groups = events.GroupBy(evt =>
         {
             var dict = (IDictionary<string, object?>)evt;
-            return string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+            return BqlGroupKey.For(dict, _groupByFields);
         });
 
         var results = new List<dynamic>();
@@ -1746,7 +1772,12 @@ internal sealed class LegacyStatsOperator : QueryOperator
 
     internal static object? ComputeAggregate(AggregateFunction agg, List<dynamic> events)
     {
-        if (agg.Name == "count") return events.Count;
+        if (agg.Name == "count")
+        {
+            return agg.Field == null
+                ? events.Count
+                : events.Count(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field, out var value) && value != null);
+        }
 
         if (agg.Name == "dc" || agg.Name == "distinct_count")
         {
@@ -1763,7 +1794,21 @@ internal sealed class LegacyStatsOperator : QueryOperator
             .Select(v => v!.Value)
             .ToList();
 
-        if (values.Count == 0) return null;
+        if (values.Count == 0)
+        {
+            // min and max also work on text
+            if (agg.Name is "min" or "max")
+            {
+                var text = events
+                    .Select(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field ?? "", out var v) ? v?.ToString() : null)
+                    .Where(v => v != null)
+                    .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return text.Count == 0 ? null : agg.Name == "min" ? text[0] : text[^1];
+            }
+
+            return null;
+        }
 
         // Handle percentile variants first (perc95, p99, etc.)
         if (agg.Name.StartsWith("perc") || agg.Name == "percentile" ||
@@ -1772,17 +1817,20 @@ internal sealed class LegacyStatsOperator : QueryOperator
             return ComputePercentile(values, agg);
         }
 
-        return agg.Name switch
+        object? result = agg.Name switch
         {
             "sum" => values.Sum(),
-            "avg" => values.Average(),
+            "avg" or "mean" => values.Average(),
             "min" => values.Min(),
             "max" => values.Max(),
             "median" => ComputeMedian(values),
             "stdev" or "stdevp" => ComputeStdev(values, population: agg.Name == "stdevp"),
             "variance" or "varp" => ComputeVariance(values, population: agg.Name == "varp"),
-            _ => events.Count
+            _ => throw new QueryParseException($"Unknown aggregate function: {agg.Name}")
         };
+
+        // The sample deviation of a single value is undefined, which isn't a JSON number
+        return result is double number && !double.IsFinite(number) ? null : result;
     }
 
     private static double ComputeMedian(List<double> values)
@@ -1919,7 +1967,7 @@ internal sealed class LegacyDedupOperator : QueryOperator
         var result = input.Where(evt =>
         {
             var dict = (IDictionary<string, object?>)evt;
-            var key = string.Join("|", _fields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+            var key = BqlGroupKey.For(dict, _fields);
             return seen.Add(key);
         });
         return Task.FromResult(result);
@@ -1930,28 +1978,45 @@ internal sealed class LegacyTopOperator : QueryOperator
 {
     private readonly int _count;
     private readonly string _field;
+    private readonly string? _byField;
     public override string Name => "top";
 
-    public LegacyTopOperator(int count, string field) { _count = count; _field = field; }
+    public LegacyTopOperator(int count, string field, string? byField = null)
+    {
+        _count = count;
+        _field = field;
+        _byField = byField;
+    }
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var groups = input
-            .GroupBy(evt =>
-            {
-                var dict = (IDictionary<string, object?>)evt;
-                return dict.TryGetValue(_field, out var v) ? v?.ToString() ?? "" : "";
-            })
-            .OrderByDescending(g => g.Count())
-            .Take(_count);
+        var results = new List<dynamic>();
+        var withField = input
+            .Select(evt => (IDictionary<string, object?>)evt)
+            .Where(dict => dict.TryGetValue(_field, out var value) && value != null);
 
-        var results = groups.Select(g =>
+        var groups = _byField == null
+            ? withField.GroupBy(_ => string.Empty)
+            : withField.GroupBy(dict => dict.TryGetValue(_byField, out var value) ? value?.ToString() ?? "" : "");
+
+        foreach (var group in groups)
         {
-            var row = new BqlRow();
-            row[_field] = g.Key;
-            row["count"] = g.Count();
-            return (dynamic)row;
-        });
+            var ranked = group
+                .GroupBy(dict => dict[_field]?.ToString() ?? "")
+                .OrderByDescending(values => values.Count())
+                .ThenBy(values => values.Key, StringComparer.Ordinal)
+                .Take(_count);
+
+            foreach (var values in ranked)
+            {
+                var row = new BqlRow();
+                if (_byField != null)
+                    row[_byField] = group.Key;
+                row[_field] = values.Key;
+                row["count"] = values.Count();
+                results.Add(row);
+            }
+        }
 
         return Task.FromResult<IEnumerable<dynamic>>(results);
     }
@@ -2089,15 +2154,15 @@ internal sealed class LegacyTimechartOperator : QueryOperator
     private readonly TimeSpan _span;
     private readonly string _aggregation;
     private readonly string? _byField;
-    private readonly string? _aggField;
+    private readonly AggregateFunction _function;
     public override string Name => "timechart";
 
     public LegacyTimechartOperator(TimeSpan span, string aggregation, string? byField, string? aggField)
     {
         _span = span;
-        _aggregation = aggregation;
+        _function = new AggregateFunction(aggregation, aggField);
+        _aggregation = _function.OutputName;
         _byField = byField;
-        _aggField = aggField;
     }
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
@@ -2156,38 +2221,7 @@ internal sealed class LegacyTimechartOperator : QueryOperator
         return Task.FromResult<IEnumerable<dynamic>>(results);
     }
 
-    private object ComputeAgg(List<dynamic> events)
-    {
-        if (_aggregation == "count") return events.Count;
-
-        var values = events
-            .Select(e =>
-            {
-                var dict = (IDictionary<string, object?>)e;
-                if (dict.TryGetValue(_aggField ?? "", out var v) && v != null)
-                {
-                    if (v is double d) return (double?)d;
-                    if (v is long l) return (double?)l;
-                    if (v is int i) return (double?)i;
-                    if (double.TryParse(v.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var p)) return (double?)p;
-                }
-                return (double?)null;
-            })
-            .Where(v => v.HasValue)
-            .Select(v => v!.Value)
-            .ToList();
-
-        if (values.Count == 0) return 0;
-
-        return _aggregation switch
-        {
-            "sum" => values.Sum(),
-            "avg" => values.Average(),
-            "min" => values.Min(),
-            "max" => values.Max(),
-            _ => (object)events.Count
-        };
-    }
+    private object? ComputeAgg(List<dynamic> events) => LegacyStatsOperator.ComputeAggregate(_function, events);
 }
 
 internal sealed class LegacyFieldAliasOperator : QueryOperator
@@ -2218,10 +2252,14 @@ internal sealed class LegacyTransactionOperator : QueryOperator
     private readonly List<string> _fields;
     private readonly TimeSpan? _maxSpan;
     private readonly int? _maxEvents;
+    private readonly string? _startsWith;
+    private readonly string? _endsWith;
     public override string Name => "transaction";
 
-    public LegacyTransactionOperator(List<string> fields, TimeSpan? maxSpan, int? maxEvents)
+    public LegacyTransactionOperator(List<string> fields, TimeSpan? maxSpan, int? maxEvents, string? startsWith = null, string? endsWith = null)
     {
+        _startsWith = startsWith;
+        _endsWith = endsWith;
         _fields = fields;
         _maxSpan = maxSpan;
         _maxEvents = maxEvents;
@@ -2236,7 +2274,7 @@ internal sealed class LegacyTransactionOperator : QueryOperator
         var groups = events.GroupBy(evt =>
         {
             var dict = (IDictionary<string, object?>)evt;
-            return string.Join("|", _fields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+            return BqlGroupKey.For(dict, _fields);
         });
 
         foreach (var group in groups)
@@ -2256,6 +2294,21 @@ internal sealed class LegacyTransactionOperator : QueryOperator
 
             foreach (var item in orderedEvents)
             {
+                // With a start marker, events outside a transaction are dropped, and a new
+                // start marker begins a new transaction.
+                if (_startsWith != null)
+                {
+                    var isStart = RawLineContains(item.Event, _startsWith);
+                    if (txn.Count == 0 && !isStart)
+                        continue;
+                    if (txn.Count > 0 && isStart)
+                    {
+                        if (_endsWith == null)
+                            results.Add(BuildTransaction(txn));
+                        txn.Clear();
+                    }
+                }
+
                 var shouldSplit = false;
 
                 if (txn.Count > 0)
@@ -2268,18 +2321,35 @@ internal sealed class LegacyTransactionOperator : QueryOperator
 
                 if (shouldSplit)
                 {
-                    results.Add(BuildTransaction(txn));
+                    // A transaction that never reached its end marker is incomplete
+                    if (_endsWith == null)
+                        results.Add(BuildTransaction(txn));
                     txn.Clear();
+                    if (_startsWith != null && !RawLineContains(item.Event, _startsWith))
+                        continue;
                 }
 
                 txn.Add(item);
+
+                if (_endsWith != null && RawLineContains(item.Event, _endsWith))
+                {
+                    results.Add(BuildTransaction(txn));
+                    txn.Clear();
+                }
             }
 
-            if (txn.Count > 0)
+            if (txn.Count > 0 && _endsWith == null)
                 results.Add(BuildTransaction(txn));
         }
 
         return Task.FromResult<IEnumerable<dynamic>>(results);
+    }
+
+    private static bool RawLineContains(dynamic evt, string text)
+    {
+        var dict = (IDictionary<string, object?>)evt;
+        return dict.TryGetValue("RawLine", out var raw)
+            && raw?.ToString()?.Contains(text, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private dynamic BuildTransaction(List<(dynamic Event, DateTime Timestamp)> txnEvents)
@@ -2354,7 +2424,7 @@ internal sealed class LegacyEventStatsOperator : QueryOperator
             var groups = events.GroupBy(evt =>
             {
                 var dict = (IDictionary<string, object?>)evt;
-                return string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""));
+                return BqlGroupKey.For(dict, _groupByFields);
             });
 
             foreach (var group in groups)
@@ -2407,7 +2477,7 @@ internal sealed class LegacyStreamStatsOperator : QueryOperator
         {
             var dict = (IDictionary<string, object?>)evt;
             var groupKey = _groupByFields.Count > 0
-                ? string.Join("|", _groupByFields.Select(f => dict.TryGetValue(f, out var v) ? v?.ToString() ?? "" : ""))
+                ? BqlGroupKey.For(dict, _groupByFields)
                 : "";
 
             if (!groupWindows.TryGetValue(groupKey, out var window))
@@ -2599,9 +2669,9 @@ internal sealed class LegacyMvExpandOperator : QueryOperator
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
         var results = new List<dynamic>();
-        var count = 0;
         foreach (var evt in input)
         {
+            var count = 0;
             var dict = (IDictionary<string, object?>)evt;
             if (!dict.TryGetValue(_field, out var val) || val == null)
             {
@@ -2645,13 +2715,46 @@ internal sealed class LegacyChartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        // Chart is essentially stats with the "over" field as primary group-by
-        var groupByFields = new List<string>();
-        if (_overField != null) groupByFields.Add(_overField);
-        if (_byField != null) groupByFields.Add(_byField);
+        // One row per `over` value. With `by`, one column per `by` value.
+        if (_overField == null || _byField == null)
+        {
+            var groupBy = new List<string>();
+            if (_overField != null) groupBy.Add(_overField);
+            if (_byField != null) groupBy.Add(_byField);
+            return new LegacyStatsOperator(_aggregations, groupBy).ExecuteAsync(input, ct);
+        }
 
-        var statsOp = new LegacyStatsOperator(_aggregations, groupByFields);
-        return statsOp.ExecuteAsync(input, ct);
+        static string Value(dynamic evt, string field) =>
+            ((IDictionary<string, object?>)evt).TryGetValue(field, out var value) ? value?.ToString() ?? "NULL" : "NULL";
+
+        var events = input.ToList();
+        var columns = events
+            .Select(evt => (string)Value(evt, _byField))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(column => column, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var rows = new List<dynamic>();
+        foreach (var over in events.GroupBy(evt => (string)Value(evt, _overField), StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var row = new BqlRow { [_overField] = over.Key };
+            foreach (var column in columns)
+            {
+                var cell = over.Where(evt => string.Equals((string)Value(evt, _byField), column, StringComparison.OrdinalIgnoreCase)).ToList();
+                foreach (var aggregate in _aggregations)
+                {
+                    var name = _aggregations.Count == 1 ? column : $"{aggregate.OutputName}: {column}";
+                    row[name] = aggregate.Name == "count" || cell.Count > 0
+                        ? LegacyStatsOperator.ComputeAggregate(aggregate, cell)
+                        : null;
+                }
+            }
+
+            rows.Add(row);
+        }
+
+        return Task.FromResult<IEnumerable<dynamic>>(rows);
     }
 }
 
@@ -2747,12 +2850,10 @@ internal sealed class LegacyRareOperator : QueryOperator
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
         var groups = input
-            .GroupBy(evt =>
-            {
-                var dict = (IDictionary<string, object?>)evt;
-                return dict.TryGetValue(_field, out var v) ? v?.ToString() ?? "" : "";
-            })
+            .Where(evt => ((IDictionary<string, object?>)evt).TryGetValue(_field, out var value) && value != null)
+            .GroupBy(evt => (string)(((IDictionary<string, object?>)evt)[_field]?.ToString() ?? ""))
             .OrderBy(g => g.Count()) // ascending = rarest first
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
             .Take(_count);
 
         var results = groups.Select(g =>
@@ -2798,10 +2899,15 @@ internal sealed class LegacyRegexOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var regex = new Regex(
-            _pattern,
-            RegexOptions.Compiled | RegexOptions.IgnoreCase,
-            TimeSpan.FromSeconds(1));
+        Regex regex;
+        try
+        {
+            regex = new Regex(_pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new QueryParseException($"Invalid regular expression '{_pattern}': {ex.Message}");
+        }
 
         var result = input.Where(evt =>
         {
@@ -2856,6 +2962,7 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
                 if (kvp.Value != null)
                 {
                     stats.ValueCount++;
+                    stats.IsTime |= kvp.Value is DateTime;
                     var strVal = kvp.Value.ToString() ?? "";
                     // Cap distinct value tracking to prevent memory exhaustion
                     if (stats.DistinctValues.Count < 100_000)
@@ -2867,6 +2974,10 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
                     {
                         stats.NumericCount++;
                         stats.Sum += numVal;
+                        // Running variance (Welford), so values needn't be kept
+                        var delta = numVal - stats.RunningMean;
+                        stats.RunningMean += delta / stats.NumericCount;
+                        stats.SquaredDeviations += delta * (numVal - stats.RunningMean);
                         stats.Min = Math.Min(stats.Min, numVal);
                         stats.Max = Math.Max(stats.Max, numVal);
                     }
@@ -2881,11 +2992,13 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
             row["field"] = kvp.Key;
             row["count"] = kvp.Value.ValueCount;
             row["distinct_count"] = kvp.Value.DistinctValues.Count;
+            row["type"] = kvp.Value.IsTime ? "time" : kvp.Value.ValueCount > 0 && kvp.Value.NumericCount == kvp.Value.ValueCount ? "numeric" : "string";
             row["is_exact"] = kvp.Value.DistinctValues.Count <= 1000;
             row["numeric_count"] = kvp.Value.NumericCount;
             row["min"] = kvp.Value.NumericCount > 0 ? kvp.Value.Min : (object?)null;
             row["max"] = kvp.Value.NumericCount > 0 ? kvp.Value.Max : (object?)null;
             row["mean"] = kvp.Value.NumericCount > 0 ? kvp.Value.Sum / kvp.Value.NumericCount : (object?)null;
+            row["stdev"] = kvp.Value.NumericCount > 1 ? Math.Sqrt(kvp.Value.SquaredDeviations / (kvp.Value.NumericCount - 1)) : (object?)null;
             row["values"] = string.Join(", ", kvp.Value.SampleValues.Take(_maxValues));
             results.Add(row);
         }
@@ -2899,6 +3012,9 @@ internal sealed class LegacyFieldSummaryOperator : QueryOperator
         public int ValueCount;
         public int NumericCount;
         public double Sum;
+        public double RunningMean;
+        public double SquaredDeviations;
+        public bool IsTime;
         public double Min = double.MaxValue;
         public double Max = double.MinValue;
         public HashSet<string> DistinctValues = new(StringComparer.OrdinalIgnoreCase);

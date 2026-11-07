@@ -256,7 +256,7 @@ public sealed class BqlQueryEngine : IQueryEngine
 
         // Tags as comma-separated string
         if (evt.Tags.Count > 0)
-            dict["Tags"] = string.Join(",", evt.Tags);
+            dict["Tags"] = evt.Tags.ToArray();
 
         // SPL field aliases for backward compatibility
         dict["_time"] = evt.Timestamp;
@@ -275,14 +275,14 @@ public sealed class BqlQueryEngine : IQueryEngine
         LimitStage l => new LegacyLimitOperator(l.Count),
         TailStage t => new LegacyTailOperator(t.Count),
         DedupStage d => new LegacyDedupOperator(d.Fields),
-        TopStage tp => new LegacyTopOperator(tp.Count, tp.Field),
+        TopStage tp => new LegacyTopOperator(tp.Count, tp.Field, tp.ByField),
         TableStage tb => new LegacyTableOperator(tb.Fields),
         EvalStage e => new LegacyEvalOperator(e.Assignments),
         RexStage r => new LegacyRexOperator(r.Pattern, r.SourceField),
         RenameStage rn => new LegacyRenameOperator(rn.Mappings),
         TimechartStage tc => new LegacyTimechartOperator(tc.Span, tc.Aggregation, tc.ByField, tc.AggregationField),
         FieldAliasStage fa => new LegacyFieldAliasOperator(fa.Aliases),
-        TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents),
+        TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents, tx.StartsWith, tx.EndsWith),
         EventStatsStage es => new LegacyEventStatsOperator(es.Aggregations, es.GroupByFields),
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
@@ -789,14 +789,14 @@ internal sealed class LegacyMacroOperator : QueryOperator
             LimitStage l => new LegacyLimitOperator(l.Count),
             TailStage t => new LegacyTailOperator(t.Count),
             DedupStage d => new LegacyDedupOperator(d.Fields),
-            TopStage tp => new LegacyTopOperator(tp.Count, tp.Field),
+            TopStage tp => new LegacyTopOperator(tp.Count, tp.Field, tp.ByField),
             TableStage tb => new LegacyTableOperator(tb.Fields),
             EvalStage e => new LegacyEvalOperator(e.Assignments),
             RexStage r => new LegacyRexOperator(r.Pattern, r.SourceField),
             RenameStage rn => new LegacyRenameOperator(rn.Mappings),
             TimechartStage tc => new LegacyTimechartOperator(tc.Span, tc.Aggregation, tc.ByField, tc.AggregationField),
             FieldAliasStage fa => new LegacyFieldAliasOperator(fa.Aliases),
-            TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents),
+            TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents, tx.StartsWith, tx.EndsWith),
             EventStatsStage es => new LegacyEventStatsOperator(es.Aggregations, es.GroupByFields),
             StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
             FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
