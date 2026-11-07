@@ -6,17 +6,13 @@ These rules prevent that.
 
 ## Which runner runs what
 
-| Event | Runner | Why |
-|-------|--------|-----|
-| `pull_request` | GitHub-hosted | Runs code that hasn't been reviewed, so it gets a disposable machine |
-| `push`, tags, `workflow_dispatch` | `[self-hosted, Linux, X64]` | Only people with write access can trigger these |
+All jobs run on `[self-hosted, Linux, X64]` while this repository is private. Only people with access to it can trigger them, and it has no forks. Release jobs cross-compile the Windows and macOS builds on Linux.
 
-Release, package and image jobs run only on tags or `main`, never for a pull request.
+Release, package and image jobs run only on tags or `main`.
 
 ## What enforces this
 
-The `runs-on` expression is a default, not a security control. A pull request can edit the workflow
-file it runs, including that expression. The controls that hold are:
+Beyond the repository being private:
 
 - **Fork pull requests need approval.** The organization requires a maintainer to approve workflow
   runs from all external contributors (`all_external_contributors`). Read the diff, including
@@ -48,11 +44,15 @@ updating Trivy also means updating both entries in that list.
 
 Do these in order:
 
-1. Enable branch protection on `main`, which requires a public repository on the current plan:
+1. Run pull requests on GitHub-hosted runners, as the organization's public repositories do:
+   `runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}`.
+   Pull requests from forks must never reach a shared self-hosted runner. That expression is only a
+   default, since a pull request can edit it, so fork approval below is what enforces this.
+2. Enable branch protection on `main`, which requires a public repository on the current plan:
    require pull requests and passing checks.
-2. Protect `.github/` with a CODEOWNERS rule, so workflow changes always get reviewed.
-3. Scan the full history for secrets.
-4. Confirm that fork pull request approval still reads `all_external_contributors` for this repository.
+3. Protect `.github/` with a CODEOWNERS rule, so workflow changes always get reviewed.
+4. Scan the full history for secrets.
+5. Confirm that fork pull request approval still reads `all_external_contributors` for this repository.
 
 ## Known limits
 
