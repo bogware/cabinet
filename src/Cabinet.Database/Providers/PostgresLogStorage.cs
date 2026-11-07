@@ -40,6 +40,7 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
             _logger.LogInformation("Initializing PostgreSQL storage");
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            await using var schemaLock = await PostgresSchemaLock.BeginAsync(conn, cancellationToken);
 
             // Main log events table with proper types
             await conn.ExecuteAsync(@"
@@ -91,6 +92,7 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
                 CREATE INDEX IF NOT EXISTS idx_log_events_fts
                 ON log_events USING GIN (to_tsvector('english', raw_line))");
 
+            await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
             _logger.LogInformation("PostgreSQL storage initialized");
         }

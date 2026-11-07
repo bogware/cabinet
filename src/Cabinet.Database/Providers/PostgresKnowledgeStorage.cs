@@ -49,6 +49,7 @@ public sealed class PostgresKnowledgeStorage : IKnowledgeStorage, IDisposable
 
             _logger.LogInformation("Initializing PostgreSQL knowledge storage");
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            await using var schemaLock = await PostgresSchemaLock.BeginAsync(conn, cancellationToken);
 
             // Lookup tables — columns and rows stored as JSONB
             await conn.ExecuteAsync(@"
@@ -108,6 +109,7 @@ public sealed class PostgresKnowledgeStorage : IKnowledgeStorage, IDisposable
                 CREATE INDEX IF NOT EXISTS idx_field_aliases_source_type
                 ON field_aliases (source_type)");
 
+            await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
             _logger.LogInformation("PostgreSQL knowledge storage initialized");
         }

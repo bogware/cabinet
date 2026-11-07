@@ -48,6 +48,7 @@ public sealed class PostgresDashboardStorage : IDashboardStorage, IDisposable
 
             _logger.LogInformation("Initializing PostgreSQL dashboard storage");
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            await using var schemaLock = await PostgresSchemaLock.BeginAsync(conn, cancellationToken);
 
             await conn.ExecuteAsync(@"
                 CREATE TABLE IF NOT EXISTS dashboards (
@@ -72,6 +73,7 @@ public sealed class PostgresDashboardStorage : IDashboardStorage, IDisposable
                 ON dashboards (created_by)
                 WHERE created_by != ''");
 
+            await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
             _logger.LogInformation("PostgreSQL dashboard storage initialized");
         }

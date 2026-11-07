@@ -42,6 +42,7 @@ public sealed class PostgresSavedQueryStorage : ISavedQueryStorage, IDisposable
 
             _logger.LogInformation("Initializing PostgreSQL saved query storage");
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            await using var schemaLock = await PostgresSchemaLock.BeginAsync(conn, cancellationToken);
 
             await conn.ExecuteAsync(@"
                 CREATE TABLE IF NOT EXISTS saved_queries (
@@ -64,6 +65,7 @@ public sealed class PostgresSavedQueryStorage : ISavedQueryStorage, IDisposable
                 ON saved_queries (created_by)
                 WHERE created_by != ''");
 
+            await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
             _logger.LogInformation("PostgreSQL saved query storage initialized");
         }

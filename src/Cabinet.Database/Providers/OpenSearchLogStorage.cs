@@ -215,6 +215,13 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 
             ThrowIfFailed(response, "query");
 
+            // Failed shards return 200 with partial hits, which would read as missing events.
+            if (response.Shards?.Failed > 0)
+            {
+                throw new InvalidOperationException(
+                    $"OpenSearch query failed on {response.Shards.Failed} shards: {response.Shards.Failures.FirstOrDefault()?.Reason?.Reason}");
+            }
+
             var hits = response.Hits.ToList();
             foreach (var hit in hits)
             {
@@ -282,6 +289,12 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
         }, cancellationToken);
 
         ThrowIfFailed(response, "count");
+        if (response.Shards?.Failed > 0)
+        {
+            throw new InvalidOperationException(
+                $"OpenSearch count failed on {response.Shards.Failed} shards: {response.Shards.Failures.FirstOrDefault()?.Reason?.Reason}");
+        }
+
         return response.Total;
     }
 

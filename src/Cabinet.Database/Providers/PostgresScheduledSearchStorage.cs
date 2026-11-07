@@ -48,6 +48,7 @@ public sealed class PostgresScheduledSearchStorage : IScheduledSearchStorage, ID
 
             _logger.LogInformation("Initializing PostgreSQL scheduled search storage");
             await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            await using var schemaLock = await PostgresSchemaLock.BeginAsync(conn, cancellationToken);
 
             await conn.ExecuteAsync(@"
                 CREATE TABLE IF NOT EXISTS scheduled_searches (
@@ -76,6 +77,7 @@ public sealed class PostgresScheduledSearchStorage : IScheduledSearchStorage, ID
                 ON scheduled_searches (enabled)
                 WHERE enabled = TRUE");
 
+            await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
             _logger.LogInformation("PostgreSQL scheduled search storage initialized");
         }

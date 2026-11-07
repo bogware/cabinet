@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <ItemGroup>
-    <ProjectReference Include="..\Cabinet.Core\Cabinet.Core.csproj" />
-    <ProjectReference Include="..\Cabinet.Storage\Cabinet.Storage.csproj" />
-  </ItemGroup>
-
-</Project>
