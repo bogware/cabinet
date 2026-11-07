@@ -1,3 +1,5 @@
+using Cabinet.Core.Models;
+using Cabinet.API.Middleware;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -18,6 +20,7 @@ public class RetentionController : ControllerBase
     /// List all retention policies with pagination.
     /// </summary>
     [HttpGet]
+    [RequireCapability(Capability.SystemHealth)]
     [ProducesResponseType(typeof(List<RetentionPolicyDto>), StatusCodes.Status200OK)]
     public IActionResult GetPolicies([FromQuery] int offset = 0, [FromQuery] int count = 100)
     {
@@ -36,6 +39,7 @@ public class RetentionController : ControllerBase
     /// Get retention policy for a specific index.
     /// </summary>
     [HttpGet("{index}")]
+    [RequireCapability(Capability.SystemHealth)]
     [ProducesResponseType(typeof(RetentionPolicyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public IActionResult GetPolicy(string index)
@@ -52,6 +56,7 @@ public class RetentionController : ControllerBase
     /// Set retention policy for an index.
     /// </summary>
     [HttpPut("{index}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(RetentionPolicyDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -74,6 +79,7 @@ public class RetentionController : ControllerBase
     /// Delete retention policy for an index.
     /// </summary>
     [HttpDelete("{index}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]

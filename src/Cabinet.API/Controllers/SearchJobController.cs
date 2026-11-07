@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,20 +18,41 @@ namespace Cabinet.API.Controllers;
 public class SearchJobController : ControllerBase
 {
     private readonly ISearchJobStorage _jobStorage;
+    private readonly IndexAccessScope? _indexScope;
     private readonly IQueryParser _queryParser;
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<SearchJobController> _logger;
+
+    /// <summary>Jobs one owner can have waiting or running.</summary>
+    internal const int MaxActiveJobsPerOwner = 10;
 
     public SearchJobController(
         ISearchJobStorage jobStorage,
         IQueryParser queryParser,
         IAuditLogger auditLogger,
-        ILogger<SearchJobController> logger)
+        ILogger<SearchJobController> logger,
+        IndexAccessScope? indexScope = null)
     {
+        _indexScope = indexScope;
         _jobStorage = jobStorage;
         _queryParser = queryParser;
         _auditLogger = auditLogger;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Reads a job, if it's the caller's. Another's looks like it doesn't exist, since a job's
+    /// results can hold data the caller isn't allowed to see. Those who manage users see all.
+    /// </summary>
+    private async Task<SearchJob?> GetOwnJobAsync(string id, CancellationToken cancellationToken)
+    {
+        var job = await _jobStorage.GetByIdAsync(id, cancellationToken);
+        if (job == null || _indexScope?.Principal == null || _indexScope.Principal.HasCapability(Capability.UserManagement))
+        {
+            return job;
+        }
+
+        return job.Owner == User.FindFirst("ClientId")?.Value ? job : null;
     }
 
     /// <summary>
@@ -58,10 +80,18 @@ public class SearchJobController : ControllerBase
             return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
         }
 
+        var owner = User.FindFirst("ClientId")?.Value ?? "unknown";
+        var ownJobs = await _jobStorage.GetAllAsync(owner, cancellationToken);
+        if (ownJobs.Count(existing => existing.Status is SearchJobStatus.Queued or SearchJobStatus.Running) >= MaxActiveJobsPerOwner)
+        {
+            return Problem(detail: $"You already have {MaxActiveJobsPerOwner} search jobs waiting or running", statusCode: 429);
+        }
+
         var job = new SearchJob
         {
             Query = request.Query,
-            Owner = User.FindFirst("ClientId")?.Value ?? "unknown",
+            Owner = owner,
+            AllowedIndexes = _indexScope?.ReadableIndexes?.ToList(),
             Limit = Math.Clamp(request.MaxResults, 1, 100_000),
             Ttl = TimeSpan.FromMinutes(Math.Clamp(request.TtlMinutes, 1, 1440))
         };
@@ -92,7 +122,7 @@ public class SearchJobController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetJob(string id, CancellationToken cancellationToken)
     {
-        var job = await _jobStorage.GetByIdAsync(id, cancellationToken);
+        var job = await GetOwnJobAsync(id, cancellationToken);
         if (job == null)
             return Problem(detail: "Search job not found", statusCode: 404);
 
@@ -112,7 +142,7 @@ public class SearchJobController : ControllerBase
         [FromQuery] int count = 1000,
         CancellationToken cancellationToken = default)
     {
-        var job = await _jobStorage.GetByIdAsync(id, cancellationToken);
+        var job = await GetOwnJobAsync(id, cancellationToken);
         if (job == null)
             return Problem(detail: "Search job not found", statusCode: 404);
 
@@ -179,7 +209,7 @@ public class SearchJobController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CancelJob(string id, CancellationToken cancellationToken)
     {
-        var job = await _jobStorage.GetByIdAsync(id, cancellationToken);
+        var job = await GetOwnJobAsync(id, cancellationToken);
         if (job == null)
             return Problem(detail: "Search job not found", statusCode: 404);
 
@@ -213,8 +243,8 @@ public class SearchJobController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteJob(string id, CancellationToken cancellationToken)
     {
-        var deleted = await _jobStorage.DeleteAsync(id, cancellationToken);
-        if (!deleted)
+        var job = await GetOwnJobAsync(id, cancellationToken);
+        if (job == null || !await _jobStorage.DeleteAsync(id, cancellationToken))
             return Problem(detail: "Search job not found", statusCode: 404);
 
         return NoContent();

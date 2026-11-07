@@ -18,13 +18,16 @@ public sealed class ScheduledSearchService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IScheduledSearchStorage _storage;
     private readonly ILogger<ScheduledSearchService> _logger;
+    private readonly ILeaderLease _lease;
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(30);
 
     public ScheduledSearchService(
         IServiceScopeFactory scopeFactory,
         IScheduledSearchStorage storage,
-        ILogger<ScheduledSearchService> logger)
+        ILogger<ScheduledSearchService> logger,
+        ILeaderLease? lease = null)
     {
+        _lease = lease ?? new SingleInstanceLease();
         _scopeFactory = scopeFactory;
         _storage = storage;
         _logger = logger;
@@ -83,7 +86,14 @@ public sealed class ScheduledSearchService : BackgroundService
         {
             try
             {
-                await CheckAndRunSearchesAsync(stoppingToken);
+                // Another instance may have changed them, and a failed load shouldn't be permanent
+                await LoadPersistedSearchesAsync(stoppingToken);
+
+                // Every instance serves these through the API, but only one runs them
+                if (_lease.IsLeader)
+                {
+                    await CheckAndRunSearchesAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -116,7 +126,13 @@ public sealed class ScheduledSearchService : BackgroundService
             {
                 _searches[search.Id] = search;
             }
-            _logger.LogInformation("Loaded {Count} persisted scheduled searches", searches.Count);
+
+            foreach (var removed in _searches.Keys.Except(searches.Select(search => search.Id)).ToList())
+            {
+                _searches.TryRemove(removed, out _);
+            }
+
+            _logger.LogDebug("Loaded {Count} persisted scheduled searches", searches.Count);
         }
         catch (Exception ex)
         {

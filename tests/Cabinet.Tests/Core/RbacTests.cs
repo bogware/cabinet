@@ -57,7 +57,7 @@ public class RbacTests
     }
 
     [Fact]
-    public void RbacPrincipal_WithIndexPermissions_GrantsAdditionalCapabilities()
+    public void RbacPrincipal_WithIndexPermissions_LimitsDataAccessToThoseGrants()
     {
         var principal = new RbacPrincipal
         {
@@ -69,9 +69,12 @@ public class RbacTests
             }
         };
 
-        // Default capabilities for viewer
-        principal.HasCapability(Capability.Search, "main").Should().BeTrue();
+        // Grants replace the role for data access, or they couldn't limit anything
+        principal.HasCapability(Capability.Search, "main").Should().BeFalse();
         principal.HasCapability(Capability.Ingest, "main").Should().BeFalse();
+
+        // The role still gives what isn't about an index's data
+        principal.HasCapability(Capability.SystemHealth, "main").Should().BeTrue();
 
         // Additional capabilities for special indexes
         principal.HasCapability(Capability.Ingest, "special-prod").Should().BeTrue();

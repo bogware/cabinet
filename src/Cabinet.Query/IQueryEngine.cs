@@ -67,6 +67,11 @@ public class QueryStatistics
     /// only saw the newest portion and their results may be incomplete.
     /// </summary>
     public bool Truncated { get; set; }
+
+    /// <summary>
+    /// A median or percentile came from a sample of its values, because there were too many to keep.
+    /// </summary>
+    public bool Approximate { get; set; }
 }
 
 public class QueryParseException : Exception

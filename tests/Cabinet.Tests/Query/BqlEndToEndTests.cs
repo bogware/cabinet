@@ -94,6 +94,117 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
     private static string? Text(IDictionary<string, object?> row, string field) =>
         row.TryGetValue(field, out var value) ? value?.ToString() : null;
 
+    // ─── Reading everything: a page continues from the last event of the one before ───
+
+    [SkippableTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PagingByCursor_WithIdenticalTimestamps_ReturnsEveryEventOnce(bool descending)
+    {
+        RequireBackend();
+        var index = $"page-{Guid.NewGuid():N}";
+        var time = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var events = Enumerable.Range(0, 250).Select(i => new LogEvent
+        {
+            RawLine = $"paged {i}",
+            Index = index,
+
+            // Long runs share a timestamp, which is where OFFSET and time-only cursors lose events
+            Timestamp = time.AddSeconds(i / 100),
+        }).ToList();
+        await _storage.StoreBatchAsync(events);
+        await OnSeededAsync();
+
+        var seen = new List<string>();
+        EventCursor? after = null;
+        while (true)
+        {
+            var page = new List<LogEvent>();
+            var context = new QueryContext { Index = index, Limit = 30, SortDescending = descending, After = after };
+            await foreach (var logEvent in _storage.QueryAsync(context))
+            {
+                page.Add(logEvent);
+            }
+
+            seen.AddRange(page.Select(logEvent => logEvent.Id));
+            if (page.Count < 30)
+            {
+                break;
+            }
+
+            after = new EventCursor(page[^1].Timestamp, page[^1].Id);
+        }
+
+        seen.Should().HaveCount(250);
+        seen.ToHashSet().Should().HaveCount(250);
+    }
+
+    // ─── Text search means the same on every backend ───
+
+    [SkippableTheory]
+    [InlineData("disk", 1)]
+    [InlineData("DISK", 1)]
+    [InlineData("disk full", 1)]
+    [InlineData("full disk", 1)]
+    [InlineData("disk gateway", 0)]
+    [InlineData("request", 2)]
+    [InlineData("requests", 0)]
+    [InlineData("requ", 0)]
+    public async Task Search_RequiresEveryWholeWord(string text, int expected)
+    {
+        (await RunAsync($"find \"{text}\"")).Should().HaveCount(expected, text);
+    }
+
+    [SkippableTheory]
+    [InlineData("connection", 1)]
+    [InlineData("nection", 0)]
+    [InlineData("var", 1)]
+    [InlineData("app log", 1)]
+    [InlineData("foo", 1)]
+    [InlineData("bar", 1)]
+    [InlineData("10.0.0.7", 1)]
+    [InlineData("0.7", 1)]
+    [InlineData("the", 1)]
+    public async Task Search_SplitsWordsAtPunctuation_WithNoStemmingOrStopWords(string text, int expected)
+    {
+        RequireBackend();
+        var index = $"search-{Guid.NewGuid():N}";
+        await _storage.StoreBatchAsync([new LogEvent
+        {
+            RawLine = "the connection to /var/log/app.log from 10.0.0.7 hit foo_bar",
+            Index = index,
+            Timestamp = DateTime.UtcNow,
+        }]);
+        await OnSeededAsync();
+
+        var found = await _engine.ExecuteAsync(new QueryExecutionContext { Query = $"find \"{text}\"", Index = index });
+
+        found.Events.Should().HaveCount(expected, text);
+    }
+
+    [SkippableFact]
+    public async Task Search_AfterAPurge_FindsTheRightEvents()
+    {
+        RequireBackend();
+        var index = $"purge-{Guid.NewGuid():N}";
+        var old = new LogEvent { RawLine = "ancient marker", Index = index, Timestamp = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+        var kept = new LogEvent { RawLine = "survivor marker", Index = index, Timestamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc) };
+        await _storage.StoreBatchAsync([old, kept]);
+        await OnSeededAsync();
+
+        await _storage.PurgeOldEventsAsync(new DateTime(2002, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        await OnSeededAsync();
+
+        var after = new LogEvent { RawLine = "newcomer marker", Index = index, Timestamp = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc) };
+        await _storage.StoreBatchAsync([after]);
+        await OnSeededAsync();
+
+        var found = await _engine.ExecuteAsync(new QueryExecutionContext { Query = "find \"marker\"", Index = index });
+
+        found.Events.Select(e => (string)((IDictionary<string, object?>)e)["RawLine"]!)
+            .Should().BeEquivalentTo("survivor marker", "newcomer marker");
+    }
+
     // ─── Idempotent writes: a sender retrying a batch must not create duplicates ───
 
     [SkippableFact]

@@ -30,7 +30,7 @@ This document describes Cabinet's architecture, key design decisions, and patter
               ┌──────────┬─────────┼──────────┬─────────────────┐
               │          │         │          │                  │
          ┌────▼───┐ ┌───▼────┐ ┌─▼──────┐ ┌▼──────────┐ ┌────▼────┐
-         │ SQLite │ │InMemory│ │Postgres│ │ OpenSearch │ │  Redis  │
+         │ SQLite │ │InMemory│ │Postgres│ │ OpenSearch │ │  AWS    │
          │        │ │ (test) │ │        │ │            │ │(optional)
          └────────┘ └────────┘ └────────┘ └───────────┘ └─────────┘
 ```
@@ -150,7 +150,7 @@ API/CLI → Services → Data → Core
 - Per-instance memory overhead compared with typed models
 - No compile-time type safety in pipeline stages
 - Serialization requires dynamic field enumeration
-- **Known issue:** This is expected to be costly for large result sets. It has not been benchmarked.
+- **Update:** Queries no longer hold every row. See `BqlStreaming.cs` and [BENCHMARKS.md](BENCHMARKS.md), where each row costs about 15 microseconds to read and build.
 
 ### ADR-005: Interface-Driven Storage (vs ORM)
 
@@ -201,7 +201,7 @@ OIDC bearer tokens are covered in ADR-008.
 - bcrypt/Argon2 are deliberately slow, which would add latency to every request
 - `ApiKeyService` looks keys up by SHA-256 hash in a dictionary. It does not do a constant-time comparison.
 
-Configuration holds the raw key. It is hashed when loaded, and only the hash is kept in memory. Validation is local on every instance and doesn't use Redis.
+Configuration holds the raw key. It is hashed when loaded, and only the hash is kept in memory. Validation is local on every instance.
 
 **Trade-offs:**
 - If the hashes leak, SHA-256 is faster to brute-force than bcrypt
@@ -330,7 +330,7 @@ finally
 | External relational database | PostgreSQL | `PostgreSQL` |
 | Existing OpenSearch cluster | OpenSearch | `OpenSearch` |
 
-No benchmarks are published yet, so this guide gives no throughput or size figures for any backend.
+[BENCHMARKS.md](BENCHMARKS.md) has measured figures for each backend on one machine.
 
 ### Metadata Storage
 
@@ -416,4 +416,4 @@ Request → Per-address limiter → Authentication → Authorization → Rate li
 
 ## Distributed Components
 
-Horizontal scaling isn't safe yet. When `Distributed:Enabled` is set, the API registers `RedisLeaderElection` and `DistributedQueryCacheService`, but nothing consults the first and request paths use the in-process `QueryCacheService` rather than the second. `DistributedRateLimiter` exists but isn't wired in.
+Several API instances can share a PostgreSQL database. Roles, search jobs, data models, alert history and field extractions live in `IDocumentStore`. A PostgreSQL advisory lock (`PostgresLeaderLease`) picks one instance to run scheduled searches, retention, search jobs and data model builds, and the server releases it if that instance dies. Rate limits and the query cache stay per instance.

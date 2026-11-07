@@ -60,7 +60,13 @@ public class InMemoryStorage : ILogStorage
         // Apply filters
         if (!string.IsNullOrWhiteSpace(context.SearchText))
         {
-            query = query.Where(e => e.RawLine.Contains(context.SearchText, StringComparison.OrdinalIgnoreCase));
+            var terms = SearchTerms.Parse(context.SearchText);
+            query = query.Where(e => SearchTerms.Matches(e.RawLine, terms));
+        }
+
+        if (context.AllowedIndexes is { } allowed)
+        {
+            query = query.Where(e => allowed.Any(pattern => IndexPermission.Matches(pattern, e.Index)));
         }
 
         if (context.StartTime.HasValue)
@@ -124,11 +130,22 @@ public class InMemoryStorage : ILogStorage
         }
 
         // Apply sorting
+        if (context.After is { } after)
+        {
+            query = context.SortDescending
+                ? query.Where(e => e.Timestamp < after.Timestamp || (e.Timestamp == after.Timestamp && string.CompareOrdinal(e.Id, after.Id) < 0))
+                : query.Where(e => e.Timestamp > after.Timestamp || (e.Timestamp == after.Timestamp && string.CompareOrdinal(e.Id, after.Id) > 0));
+        }
+
+        // ID breaks ties, so pages of events with the same time are stable
         query = context.SortField.ToLower() switch
         {
-            "timestamp" => context.SortDescending ? query.OrderByDescending(e => e.Timestamp) : query.OrderBy(e => e.Timestamp),
-            "severity" => context.SortDescending ? query.OrderByDescending(e => e.Severity) : query.OrderBy(e => e.Severity),
-            _ => context.SortDescending ? query.OrderByDescending(e => e.Timestamp) : query.OrderBy(e => e.Timestamp)
+            "severity" => context.SortDescending
+                ? query.OrderByDescending(e => e.Severity).ThenByDescending(e => e.Id, StringComparer.Ordinal)
+                : query.OrderBy(e => e.Severity).ThenBy(e => e.Id, StringComparer.Ordinal),
+            _ => context.SortDescending
+                ? query.OrderByDescending(e => e.Timestamp).ThenByDescending(e => e.Id, StringComparer.Ordinal)
+                : query.OrderBy(e => e.Timestamp).ThenBy(e => e.Id, StringComparer.Ordinal)
         };
 
         // Apply pagination
@@ -160,7 +177,13 @@ public class InMemoryStorage : ILogStorage
 
         if (!string.IsNullOrWhiteSpace(context.SearchText))
         {
-            query = query.Where(e => e.RawLine.Contains(context.SearchText, StringComparison.OrdinalIgnoreCase));
+            var terms = SearchTerms.Parse(context.SearchText);
+            query = query.Where(e => SearchTerms.Matches(e.RawLine, terms));
+        }
+
+        if (context.AllowedIndexes is { } allowed)
+        {
+            query = query.Where(e => allowed.Any(pattern => IndexPermission.Matches(pattern, e.Index)));
         }
 
         if (context.StartTime.HasValue)

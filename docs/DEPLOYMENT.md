@@ -25,7 +25,7 @@ This guide covers installing and operating Cabinet. Run a single API instance; s
 | .NET | 10 SDK to build from source. Release binaries are self-contained. |
 | Docker | With the Compose plugin, for the Compose stack |
 
-No benchmarks are published yet, so there are no tested sizing recommendations. Size CPU, memory and disk against your own ingest rate and retention.
+[docs/BENCHMARKS.md](BENCHMARKS.md) has measured figures for one machine. Use them to judge scale, then size CPU, memory and disk against your own ingest rate and retention.
 
 ### Storage Backends
 
@@ -51,14 +51,14 @@ curl http://localhost:5000/health
 # Expected: Healthy
 ```
 
-The API and dashboard are published on host port 5000 (8080 in the container). Postgres and Redis are reachable only inside the Compose network.
+The API and dashboard are published on host port 5000 (8080 in the container). Postgres is reachable only inside the Compose network.
 
 Services:
 
 | Service | Notes |
 |---------|-------|
 | `cabinet-api` | Uses PostgreSQL, with `CABINET_API_KEY` as an Enterprise-tier key. |
-| `postgres`, `redis` | Not published to the host. |
+| `postgres` | Not published to the host. |
 | `cabinet-agent` | Built from `Dockerfile.agent`. Forwards `*.log` and `*.txt` files from `./logs`, mounted at `/var/log/host`. |
 | `cabinet-cli` | Prints its version and exits. Run commands with `docker compose run --rm cabinet-cli <command>`. |
 
@@ -154,7 +154,7 @@ The setup wizard is part of the CLI. There is no web-based wizard.
 cabinet setup
 ```
 
-It supports `--non-interactive`, `--mode`, `--storage`, `--api-key`, `--server-url` and `--skip-sample-data`. It offers a `distributed` mode, but multi-instance deployment isn't safe yet; see [Scaling](#scaling).
+It supports `--non-interactive`, `--mode`, `--storage`, `--api-key`, `--server-url` and `--skip-sample-data`. For several API instances, choose PostgreSQL; see [Scaling](#scaling).
 
 ## From Source
 
@@ -315,7 +315,7 @@ ApiKeys__Keys__0__Tier=Professional    # Basic, Professional or Enterprise
 ApiKeys__Keys__0__Name=production-client
 ```
 
-The value is the raw key, which the API hashes with SHA-256 in memory. Don't store a hash here. Validation is local on every instance and doesn't use Redis. Keys are read at startup, so restart after changing them. With no keys configured, the API starts and rejects authenticated routes.
+The value is the raw key, which the API hashes with SHA-256 in memory. Don't store a hash here. Validation is local on every instance. Keys are read at startup, so restart after changing them. With no keys configured, the API starts and rejects authenticated routes.
 
 ### Rate Limiting
 
@@ -341,20 +341,30 @@ Network__TrustedProxies__0=10.0.0.5
 
 `Cors:AllowedOrigins` lists allowed origins. If the key is unset, only `http://localhost:3000` is allowed.
 
-### Redis
+### Query limits
 
 ```json
 {
-  "Distributed": {
-    "Enabled": true,
-    "RedisConnectionString": "redis:6379,password=secret,abortConnect=false",
-    "InstanceId": "cabinet-1",
-    "Cache": { "QueryResultTtlSeconds": 30 }
+  "Query": {
+    "CacheTtlSeconds": 30,
+    "Limits": {
+      "MaxRowsInMemory": 100000,
+      "MaxGroups": 100000,
+      "MaxRetainedValues": 20000000,
+      "MaxExactPercentileValues": 100000,
+      "MaxEventsScanned": 0
+    },
+    "Concurrency": {
+      "MaxConcurrent": 32,
+      "MaxConcurrentPerClient": 8,
+      "MaxStreams": 64,
+      "MaxStreamsPerClient": 4
+    }
   }
 }
 ```
 
-Redis's only role is a query result cache layer, and request paths currently use the in-process cache rather than that layer, so Redis isn't needed to run Cabinet. API key validation doesn't use Redis. Leader election is registered when this is enabled, but nothing consults it. `Distributed:Cache:QueryResultTtlSeconds` also sets the in-process cache TTL.
+These stop one query or client from taking the server down. Over `MaxConcurrent*` or `MaxStreams*`, a request gets 429 with `Retry-After`. Over `MaxGroups` or `MaxRetainedValues`, a query fails with an explanation. Over `MaxRowsInMemory`, or `MaxEventsScanned` where it's above 0, the result is marked `truncated`. Beyond `MaxExactPercentileValues`, a percentile comes from a sample and the result is marked `approximate`. Each query also has a time limit: 60 seconds for `/query/execute`, 5 minutes for streams, and 10 minutes for search jobs.
 
 ### Syslog
 
@@ -517,15 +527,24 @@ See [Runbook: Disaster Recovery](#runbook-disaster-recovery).
 
 ## Scaling
 
-Run a single API instance. Horizontal scaling isn't safe yet:
+Several API instances can run against one PostgreSQL database, behind a load balancer:
 
-- Scheduled searches fire once per replica.
-- Search jobs, data models and RBAC are local to each instance, and with OpenSearch so is all other metadata.
-- Field extractions, alert history and retention definitions are in memory on each instance.
-- Rate limits are per instance, and the audit chain head is local.
-- Leader election is registered but not consulted.
+```bash
+Storage__Type=PostgreSQL
+Storage__ConnectionString="Host=db;Database=cabinet;Username=cabinet;Password=..."
+```
 
-Scale vertically and choose the storage backend to fit your data. No benchmarks are published yet, so there are no tested throughput figures for any configuration.
+With OpenSearch as the event store, shared state needs a database of its own. Set `Storage__MetadataPostgresConnectionString`, or each instance keeps its own metadata in SQLite.
+
+All instances serve every request and see the same dashboards, saved queries, roles, search jobs and alert history. One at a time holds a PostgreSQL advisory lock and runs scheduled searches, retention, search jobs and data model builds. If it stops, another takes over within about 5 seconds, and search jobs it was running start again.
+
+What stays per instance:
+
+- Rate limits, so a client's effective limit grows with the number of instances.
+- The query cache, so instances can differ for up to `Query:CacheTtlSeconds`.
+- The audit chain head.
+
+SQLite and in-memory storage serve a single instance. See [BENCHMARKS.md](BENCHMARKS.md) for measured figures.
 
 ## Troubleshooting
 
@@ -601,7 +620,7 @@ curl -H "X-API-Key: <key>" http://localhost:5000/api/health/status
 1. Check current load:
    curl -H "X-API-Key: <key>" http://localhost:5000/api/health/metrics
 
-2. If CPU is sustained high, give the instance more CPU. Don't add replicas.
+2. If CPU is sustained high, give the instance more CPU, or on PostgreSQL add instances.
 
 3. If storage is slow, check backend health (PostgreSQL connections, OpenSearch cluster).
 

@@ -100,8 +100,8 @@ public class SetupWizardTests
     public void BuildAppSettings_Standalone_SQLite_GeneratesCorrectConfig()
     {
         var settings = BuildAppSettings("sqlite", "Data Source=cabinet.db",
-            enableSyslog: false, enableEmail: false, enableDistributed: false,
-            syslogPort: 1514, smtpHost: "", smtpFrom: "", redisConnectionString: "");
+            enableSyslog: false, enableEmail: false, 
+            syslogPort: 1514, smtpHost: "", smtpFrom: "");
 
         settings.Should().ContainKey("Storage");
         var storage = settings["Storage"] as Dictionary<string, string>;
@@ -115,15 +115,14 @@ public class SetupWizardTests
         settings.Should().ContainKey("Backup");
         settings.Should().NotContainKey("Syslog");
         settings.Should().NotContainKey("Email");
-        settings.Should().NotContainKey("Distributed");
     }
 
     [Fact]
     public void BuildAppSettings_WithSyslog_IncludesSyslogConfig()
     {
         var settings = BuildAppSettings("sqlite", "Data Source=cabinet.db",
-            enableSyslog: true, enableEmail: false, enableDistributed: false,
-            syslogPort: 1514, smtpHost: "", smtpFrom: "", redisConnectionString: "");
+            enableSyslog: true, enableEmail: false, 
+            syslogPort: 1514, smtpHost: "", smtpFrom: "");
 
         settings.Should().ContainKey("Syslog");
         var syslog = settings["Syslog"] as Dictionary<string, object>;
@@ -133,24 +132,11 @@ public class SetupWizardTests
     }
 
     [Fact]
-    public void BuildAppSettings_WithDistributed_IncludesRedisConfig()
-    {
-        var settings = BuildAppSettings("postgresql", "Host=localhost;Database=cabinet",
-            enableSyslog: false, enableEmail: false, enableDistributed: true,
-            syslogPort: 1514, smtpHost: "", smtpFrom: "", redisConnectionString: "redis.local:6379");
-
-        settings.Should().ContainKey("Distributed");
-        var distributed = settings["Distributed"] as Dictionary<string, object>;
-        distributed.Should().NotBeNull();
-        distributed!["Enabled"].Should().Be(true);
-    }
-
-    [Fact]
     public void BuildAppSettings_PostgreSQL_SetsTypeCorrectly()
     {
         var settings = BuildAppSettings("postgresql", "Host=localhost;Database=cabinet",
-            enableSyslog: false, enableEmail: false, enableDistributed: false,
-            syslogPort: 1514, smtpHost: "", smtpFrom: "", redisConnectionString: "");
+            enableSyslog: false, enableEmail: false, 
+            syslogPort: 1514, smtpHost: "", smtpFrom: "");
 
         var storage = settings["Storage"] as Dictionary<string, string>;
         storage!["Type"].Should().Be("PostgreSQL");
@@ -162,8 +148,8 @@ public class SetupWizardTests
     public void BuildAppSettings_OpenSearch_SetsTypeCorrectly()
     {
         var settings = BuildAppSettings("opensearch", "https://localhost:9200",
-            enableSyslog: false, enableEmail: false, enableDistributed: false,
-            syslogPort: 1514, smtpHost: "", smtpFrom: "", redisConnectionString: "");
+            enableSyslog: false, enableEmail: false, 
+            syslogPort: 1514, smtpHost: "", smtpFrom: "");
 
         var storage = settings["Storage"] as Dictionary<string, string>;
         storage!["Type"].Should().Be("OpenSearch");
@@ -173,9 +159,8 @@ public class SetupWizardTests
     public void BuildAppSettings_WithEmail_IncludesEmailConfig()
     {
         var settings = BuildAppSettings("sqlite", "Data Source=cabinet.db",
-            enableSyslog: false, enableEmail: true, enableDistributed: false,
-            syslogPort: 1514, smtpHost: "smtp.example.com", smtpFrom: "alerts@example.com",
-            redisConnectionString: "");
+            enableSyslog: false, enableEmail: true, 
+            syslogPort: 1514, smtpHost: "smtp.example.com", smtpFrom: "alerts@example.com");
 
         settings.Should().ContainKey("Email");
         var email = settings["Email"] as Dictionary<string, object>;
@@ -236,8 +221,8 @@ public class SetupWizardTests
 
     private static Dictionary<string, object> BuildAppSettings(
         string storageBackend, string connectionString,
-        bool enableSyslog, bool enableEmail, bool enableDistributed,
-        int syslogPort, string smtpHost, string smtpFrom, string redisConnectionString)
+        bool enableSyslog, bool enableEmail,
+        int syslogPort, string smtpHost, string smtpFrom)
     {
         var settings = new Dictionary<string, object>
         {
@@ -299,24 +284,6 @@ public class SetupWizardTests
             };
         }
 
-        if (enableDistributed)
-        {
-            settings["Distributed"] = new Dictionary<string, object>
-            {
-                ["Enabled"] = true,
-                ["RedisConnectionString"] = "SET_VIA_ENV_VAR",
-                ["InstanceId"] = Environment.MachineName,
-                ["LeaderElection"] = new Dictionary<string, object>
-                {
-                    ["Enabled"] = true,
-                    ["LeaseTimeSeconds"] = 30
-                },
-                ["Cache"] = new Dictionary<string, int>
-                {
-                    ["ApiKeyTtlSeconds"] = 60
-                }
-            };
-        }
 
         return settings;
     }

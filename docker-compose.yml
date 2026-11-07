@@ -14,18 +14,14 @@ services:
       - Storage__ConnectionString=Host=postgres;Port=5432;Database=cabinet;Username=cabinet;Password=${CABINET_DB_PASSWORD:?Set CABINET_DB_PASSWORD, see .env.example}
       - Storage__MetadataConnectionString=Data Source=/app/data/cabinet-metadata.db
       - ApiKeys__Keys__0__Key=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
-      - ApiKeys__Keys__0__Tier=Enterprise
-      - ApiKeys__Keys__0__Name=Docker Enterprise Client
-      - Distributed__Enabled=true
-      - Distributed__RedisConnectionString=redis:6379,password=${CABINET_REDIS_PASSWORD:?Set CABINET_REDIS_PASSWORD, see .env.example}
-      - Distributed__InstanceId=cabinet-docker-1
+      - ApiKeys__Keys__0__Tier=Admin
+      - ApiKeys__Keys__0__Name=Docker Admin Client
     volumes:
       - cabinet-data:/app/data
       - cabinet-logs:/app/logs
       - ./logs:/app/input:ro  # Mount host logs for analysis
     depends_on:
       - postgres
-      - redis
     networks:
       - cabinet-network
     restart: unless-stopped
@@ -100,24 +96,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis Cache (for rate limiting and caching)
-  redis:
-    image: redis:7-alpine
-    container_name: cabinet-redis
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${CABINET_REDIS_PASSWORD:?Set CABINET_REDIS_PASSWORD, see .env.example}"]
-    environment:
-      - CABINET_REDIS_PASSWORD=${CABINET_REDIS_PASSWORD:?Set CABINET_REDIS_PASSWORD, see .env.example}
-    volumes:
-      - redis-data:/data
-    networks:
-      - cabinet-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=$$CABINET_REDIS_PASSWORD redis-cli ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Grafana for Visualization
   grafana:
     image: grafana/grafana:latest
@@ -185,8 +163,6 @@ volumes:
   cabinet-agent-data:
     driver: local
   postgres-data:
-    driver: local
-  redis-data:
     driver: local
   prometheus-data:
     driver: local

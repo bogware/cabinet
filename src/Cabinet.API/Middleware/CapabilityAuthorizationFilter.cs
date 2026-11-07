@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -6,19 +7,17 @@ using Microsoft.AspNetCore.Mvc.Filters;
 namespace Cabinet.API.Middleware;
 
 /// <summary>
-/// Attribute to require a specific RBAC capability on a controller action.
-/// Works with the IRbacService to check capability grants per API key.
+/// Attribute to require a specific RBAC capability on a controller action, on at least one index.
+/// Also records the caller's principal and readable indexes in <see cref="IndexAccessScope"/>.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = true)]
 public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationFilter
 {
     private readonly Capability _capability;
-    private readonly string _indexName;
 
-    public RequireCapabilityAttribute(Capability capability, string indexName = "main")
+    public RequireCapabilityAttribute(Capability capability)
     {
         _capability = capability;
-        _indexName = indexName;
     }
 
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
@@ -36,12 +35,13 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
             return;
         }
 
-        var apiKeyHash = context.HttpContext.User?.FindFirst("ClientId")?.Value;
-        if (string.IsNullOrEmpty(apiKeyHash))
+        var user = context.HttpContext.User;
+        var principal = user == null ? null : await PrincipalResolver.ResolveAsync(user, rbac, context.HttpContext.RequestAborted);
+        if (principal == null)
         {
             // No identity to check capabilities against, so deny. Letting this through
             // would grant every capability to any principal without the claim.
-            var authenticated = context.HttpContext.User?.Identity?.IsAuthenticated == true;
+            var authenticated = user?.Identity?.IsAuthenticated == true;
             context.Result = new JsonResult(new
             {
                 error = authenticated ? "Forbidden" : "Unauthorized",
@@ -53,8 +53,16 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
             return;
         }
 
-        var hasCapability = await rbac.HasCapabilityAsync(apiKeyHash, _capability, _indexName);
-        if (!hasCapability)
+        // Which indexes it applies to is for the storage scope and the action to enforce, since
+        // only they know which index is involved.
+        var scope = context.HttpContext.RequestServices.GetService<IndexAccessScope>();
+        if (scope != null)
+        {
+            scope.Principal = principal;
+            scope.ReadableIndexes = principal.IndexesWith(Capability.Search);
+        }
+
+        if (!principal.HasCapabilityOnAnyIndex(_capability))
         {
             context.Result = new JsonResult(new
             {

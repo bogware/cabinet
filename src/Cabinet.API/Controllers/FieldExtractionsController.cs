@@ -1,3 +1,5 @@
+using Cabinet.Core.Models;
+using Cabinet.API.Middleware;
 using System.Text.RegularExpressions;
 using Cabinet.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -25,6 +27,7 @@ public class FieldExtractionsController : ControllerBase
     /// List all field extraction configurations ordered by priority.
     /// </summary>
     [HttpGet]
+    [RequireCapability(Capability.Search)]
     [ProducesResponseType(typeof(List<FieldExtraction>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetAll([FromQuery] int offset = 0, [FromQuery] int count = 100)
     {
@@ -39,6 +42,7 @@ public class FieldExtractionsController : ControllerBase
     /// Get a field extraction by ID.
     /// </summary>
     [HttpGet("{id}")]
+    [RequireCapability(Capability.Search)]
     [ProducesResponseType(typeof(FieldExtraction), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(string id)
@@ -52,6 +56,7 @@ public class FieldExtractionsController : ControllerBase
     /// Create a new field extraction configuration.
     /// </summary>
     [HttpPost]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldExtraction), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -74,6 +79,7 @@ public class FieldExtractionsController : ControllerBase
     /// Update an existing field extraction configuration.
     /// </summary>
     [HttpPut("{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldExtraction), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -97,6 +103,7 @@ public class FieldExtractionsController : ControllerBase
     /// Delete a field extraction configuration.
     /// </summary>
     [HttpDelete("{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]

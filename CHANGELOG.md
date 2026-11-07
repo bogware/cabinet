@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Queries read every matching event, a page at a time. `stats`, `timechart`, `chart`, `top`, `rare` and filters hold what they compute, not the events, and `sort` with `head` holds only the top rows.
+- Per-query limits (`Query:Limits`) and concurrency limits (`Query:Concurrency`, 429 when exceeded). A query over a limit stops with an explanation or is marked `truncated` or `approximate`. A regular expression that keeps timing out fails the query instead of using its whole time limit.
+- `benchmarks/Cabinet.Benchmarks` and published figures in `docs/BENCHMARKS.md`.
+- Per-index permissions, enforced for every read and write, including subsearches, joins, macros and search jobs.
+- The Admin API key tier, with `UserManagement`. `PUT /api/v1/roles/{id}` now works, and `GET /api/v1/roles/me` returns the caller's principal.
+- OIDC tokens get the role and index permissions their claims map to. `Sso:AutoProvision=false` is enforced.
+- Several API instances can share a PostgreSQL database, with one at a time running background work. With OpenSearch, use `Storage:MetadataPostgresConnectionString`.
+- Saved principals, alert history, field extractions, search jobs and data models persist in the metadata database.
+
 - RFC 5424 syslog with structured data, TLS syslog (`Syslog:TlsPort`), and RFC 6587 octet-counted framing.
 - systemd (`Type=notify`) and Windows service integration for the API.
 - `Authorization: Splunk <key>` authentication on `/services/collector/*` routes, alongside `X-API-Key`.
@@ -19,8 +28,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SECURITY.md`.
 - CI runs the Postgres integration tests, boots the API against a real database, validates the compose file, and runs tests in a non-UTC time zone.
 
+### Removed
+
+- Redis, along with `Distributed:*` settings, the `distributed` setup wizard mode and the Compose service. Nothing read from it. PostgreSQL now does leader election.
+- `SqliteRbacService`, and the `cabinet-rbac.db` file with it. Roles saved in it aren't carried over.
+- The `source` parameter of `DELETE /api/v1/logs`. It was ignored, so a request meant for one source could purge everything.
+
+### Fixed
+
+- Text search means the same on every backend: every whole word, ignoring case. It used to be a phrase on SQLite, stemmed words on PostgreSQL, any word on OpenSearch and a substring in memory.
+- SQLite's full-text index wrote no rowid, so searches after a purge could return the wrong events or none. It's rebuilt on upgrade.
+- `GET /api/v1/logs` with `source` or `severity` returned nothing, and its `X-Total-Count` ignored filters.
+- Live streams lost events that shared a timestamp, and events that arrived with an older time than one already sent, which agents' batches often do.
+- `/query/execute` never returned its `truncated` flag.
+- The query cache could show one caller's results to another with different access.
+- Search jobs could be read, cancelled or deleted by anyone, were left Running forever after a crash, and could run twice.
+- `sort` threw on a field holding both numbers and text.
+- A long chain of `not` could overflow the stack and kill the server.
+- `logfmt` `host=` now sets the event's host.
+- Readiness counted every event, every 10 seconds. `/metrics` runs its aggregates at most once a minute.
+
 ### Changed
 
+- `/api/v1/query/stream` requires `Export`. Dashboards and field extractions require capabilities for writing, and retention and alert acknowledgement require them at all.
+- API keys get IDs derived from the key, which stay the same across restarts.
+- `Enterprise` keys get `IndexManagement`.
+- PostgreSQL ingest uses `COPY`, and reads use an index on time and ID rather than sorting every match.
+- `pollIntervalMs` on live streams has a minimum of 500.
 - Every ingest route parses lines the same way: REST, HEC `/event` and `/raw`, so the agent too. Events get severity, fields and the time in the line. A HEC event's `time` is used only when the line has none. A source type that isn't a parser's stays as a label.
 - Timestamps: ISO 8601 with `T` or an offset, log4j commas, nginx error log dates and syslog dates are recognized. Times without an offset are UTC. A syslog date with no year that would be in the future is from last year.
 - Severity: words match whole words, and mentions like `0 errors`, `failed=0` or `no errors` don't count. A declared level beats words in the message. In JSON, only the level field counts.

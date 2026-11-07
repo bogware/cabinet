@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Cabinet.Core.Interfaces;
@@ -16,12 +17,14 @@ namespace Cabinet.API.Controllers;
 public class IndexController : ControllerBase
 {
     private readonly ILogStorage _storage;
+    private readonly IndexAccessScope? _indexScope;
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<IndexController> _logger;
 
-    public IndexController(ILogStorage storage, IAuditLogger auditLogger, ILogger<IndexController> logger)
+    public IndexController(ILogStorage storage, IAuditLogger auditLogger, ILogger<IndexController> logger, IndexAccessScope? indexScope = null)
     {
-        _storage = storage;
+        _indexScope = indexScope;
+        _storage = indexScope?.Restrict(storage) ?? storage;
         _auditLogger = auditLogger;
         _logger = logger;
     }
@@ -90,6 +93,11 @@ public class IndexController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ClearIndex(string name, CancellationToken cancellationToken = default)
     {
+        if (_indexScope?.Principal != null && !_indexScope.Can(Capability.IndexManagement, name))
+        {
+            return Problem(detail: $"Not allowed to manage index '{name}'", statusCode: 403);
+        }
+
         if (string.IsNullOrWhiteSpace(name) || name.Length > 256)
             return Problem(detail: "Invalid index name", statusCode: 400);
 

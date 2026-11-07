@@ -68,6 +68,7 @@ public class KnowledgeController : ControllerBase
     /// Create a lookup table
     /// </summary>
     [HttpPost("lookups")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(LookupTable), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -113,6 +114,7 @@ public class KnowledgeController : ControllerBase
     /// Update a lookup table
     /// </summary>
     [HttpPut("lookups/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(LookupTable), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -164,6 +166,7 @@ public class KnowledgeController : ControllerBase
     /// Delete a lookup table
     /// </summary>
     [HttpDelete("lookups/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -229,6 +232,7 @@ public class KnowledgeController : ControllerBase
     /// Create a query macro
     /// </summary>
     [HttpPost("macros")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(QueryMacro), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -284,6 +288,7 @@ public class KnowledgeController : ControllerBase
     /// Update a query macro
     /// </summary>
     [HttpPut("macros/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(QueryMacro), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -341,6 +346,7 @@ public class KnowledgeController : ControllerBase
     /// Delete a query macro
     /// </summary>
     [HttpDelete("macros/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -390,6 +396,7 @@ public class KnowledgeController : ControllerBase
     /// Create a field alias
     /// </summary>
     [HttpPost("aliases")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldAlias), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -448,6 +455,7 @@ public class KnowledgeController : ControllerBase
     /// Update a field alias
     /// </summary>
     [HttpPut("aliases/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(FieldAlias), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -489,6 +497,7 @@ public class KnowledgeController : ControllerBase
     /// Delete a field alias
     /// </summary>
     [HttpDelete("aliases/{id}")]
+    [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -544,6 +553,7 @@ public class KnowledgeController : ControllerBase
     /// Imported objects receive new IDs to prevent collisions.
     /// </summary>
     [HttpPost("import")]
+    [RequireCapability(Capability.IndexManagement)]
     [Authorize(Policy = "RequireWritePermission")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

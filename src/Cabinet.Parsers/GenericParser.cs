@@ -183,7 +183,14 @@ public partial class GenericParser : BaseLogParser
                 var value = match.Groups["quoted"].Success ? match.Groups["quoted"].Value
                     : match.Groups["single"].Success ? match.Groups["single"].Value
                     : match.Groups["bare"].Value;
-                logEvent.SetField(match.Groups["key"].Value, TypedValue(value));
+                var key = match.Groups["key"].Value;
+                if (key.Equals("host", StringComparison.OrdinalIgnoreCase) || key.Equals("hostname", StringComparison.OrdinalIgnoreCase))
+                {
+                    logEvent.Host = value;
+                    continue;
+                }
+
+                logEvent.SetField(key, TypedValue(value));
             }
         }
         catch (RegexMatchTimeoutException ex)

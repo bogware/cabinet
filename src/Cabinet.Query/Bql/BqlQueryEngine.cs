@@ -21,6 +21,10 @@ public sealed class BqlQueryEngine : IQueryEngine
     private readonly INaturalLanguageTranslator? _nlTranslator;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
+    private readonly QueryLimits _limits;
+
+    /// <summary>Events read from storage at a time.</summary>
+    private const int PageSize = 10_000;
 
     public BqlQueryEngine(
         ILogStorage storage,
@@ -28,8 +32,10 @@ public sealed class BqlQueryEngine : IQueryEngine
         BqlOptimizer optimizer,
         ILogger<BqlQueryEngine> logger,
         INaturalLanguageTranslator? nlTranslator = null,
-        IKnowledgeStorage? knowledgeStorage = null)
+        IKnowledgeStorage? knowledgeStorage = null,
+        QueryLimits? limits = null)
     {
+        _limits = limits ?? new QueryLimits();
         _storage = storage;
         _parser = parser;
         _optimizer = optimizer;
@@ -72,11 +78,7 @@ public sealed class BqlQueryEngine : IQueryEngine
             bqlQuery.Stages.Count - optimized.RemainingStages.Count,
             optimized.RemainingStages.Count);
 
-        // Fetch events from storage with pushed-down predicates
-        long eventsScanned = 0;
-        List<dynamic> events;
-
-        // A bare count needs no events, so it isn't subject to the read limit
+        // A bare count needs no events
         if (context.Mode != QueryMode.Direct && IsBareCount(optimized.RemainingStages, out var countColumn))
         {
             var count = await _storage.GetCountAsync(optimized.StorageContext, cancellationToken);
@@ -95,42 +97,22 @@ public sealed class BqlQueryEngine : IQueryEngine
             };
         }
 
-        // Determine the effective limit for streaming — cap storage reads to avoid OOM
-        var maxFetchLimit = optimized.StorageContext.Limit;
+        var budget = new QueryBudget(_limits);
+        var plan = CreatePlan(optimized.RemainingStages, context.Limit, budget);
 
-        if (context.Mode == QueryMode.Direct && !string.IsNullOrEmpty(context.Path))
-        {
-            // Direct mode: read from file
-            events = await ReadFromFileAsync(context.Path, cancellationToken);
-            eventsScanned = events.Count;
-        }
-        else
-        {
-            // Indexed mode: stream from storage with pushed-down predicates
-            // Only materialize up to the fetch limit to avoid unbounded memory usage
-            events = new List<dynamic>(Math.Min(maxFetchLimit, 10000));
-            await foreach (var evt in _storage.QueryAsync(optimized.StorageContext, cancellationToken))
-            {
-                events.Add(ConvertToExpando(evt));
-                eventsScanned++;
+        // Read only until the first stateful stage has what it needs. It holds what it computes,
+        // not the events, so the number of events read isn't limited by memory.
+        var eventsScanned = await FeedAsync(plan, optimized.StorageContext, context, budget, cancellationToken);
 
-                if (eventsScanned >= maxFetchLimit)
-                    break;
-            }
-        }
-
-        // Execute remaining pipeline stages
-        IEnumerable<dynamic> result = events;
-        foreach (var stage in optimized.RemainingStages)
+        // The stages left work on that stage's output, which is bounded
+        var result = plan.Sink.Complete();
+        foreach (var op in plan.RemainingOperators)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var op = ConvertStageToOperator(stage);
-            if (op != null)
-                result = await op.ExecuteAsync(result, cancellationToken);
+            result = await op.ExecuteAsync(result, cancellationToken);
         }
 
-        // Materialize and apply final limit
-        var finalEvents = result.Take(context.Limit).ToList();
+        var finalEvents = Cancellable(result, cancellationToken).Take(context.Limit).ToList();
 
         // Extract columns from the first event
         var columns = finalEvents.Count > 0
@@ -148,12 +130,240 @@ public sealed class BqlQueryEngine : IQueryEngine
                 EventsScanned = eventsScanned,
                 EventsMatched = finalEvents.Count,
                 ExecutionTime = sw.Elapsed,
-                Truncated = eventsScanned >= maxFetchLimit
-                    && optimized.RemainingStages.Count > 0
-                    && optimized.RemainingStages[0] is not LimitStage
+                Truncated = budget.Truncated,
+                Approximate = budget.Approximate
             }
         };
     }
+
+    /// <summary>
+    /// Splits a pipeline into the stages that work row by row, the first stage that holds state,
+    /// and whatever follows it.
+    /// </summary>
+    private PipelinePlan CreatePlan(List<BqlStage> stages, int resultLimit, QueryBudget budget)
+    {
+        var rowOperators = new List<QueryOperator>();
+        var index = 0;
+        var readsEvents = stages.Count == 0 || stages[0] is not (MakeResultsStage or InputLookupStage or MultisearchStage);
+
+        if (readsEvents)
+        {
+            while (index < stages.Count && IsRowStage(stages[index]))
+            {
+                rowOperators.Add(ConvertStageToOperator(stages[index], budget)!);
+                index++;
+            }
+        }
+
+        IRowSink sink;
+        var stage = index < stages.Count ? stages[index] : null;
+        var following = index + 1 < stages.Count ? stages[index + 1] : null;
+        var maxRows = _limits.MaxRowsInMemory;
+
+        switch (stage)
+        {
+            case null:
+                sink = new TakeSink(resultLimit);
+                break;
+            case LimitStage limit when limit.Count <= maxRows:
+                sink = new TakeSink(limit.Count);
+                index++;
+                break;
+            case TailStage tail when tail.Count <= maxRows:
+                sink = new TailSink(tail.Count);
+                index++;
+                break;
+            case SortStage sort when following is LimitStage head && head.Count <= maxRows:
+                sink = new TopRowsSink(new LegacySortOperator(sort.Fields), head.Count);
+                index += 2;
+                break;
+            case SortStage sort when following == null && resultLimit <= maxRows:
+                sink = new TopRowsSink(new LegacySortOperator(sort.Fields), resultLimit);
+                index++;
+                break;
+            case StatsStage stats:
+                sink = new StatsSink(stats.Aggregations, stats.GroupByFields, budget);
+                index++;
+                break;
+            case TimechartStage timechart:
+                sink = new LegacyTimechartOperator(timechart.Span, timechart.Aggregation, timechart.ByField, timechart.AggregationField).CreateSink(budget);
+                index++;
+                break;
+            case ChartStage chart:
+                sink = new LegacyChartOperator(chart.Aggregations, chart.OverField, chart.ByField).CreateSink(budget);
+                index++;
+                break;
+            case TopStage top:
+                sink = new LegacyTopOperator(top.Count, top.Field, top.ByField).CreateSink(budget);
+                index++;
+                break;
+            case RareStage rare:
+                sink = new LegacyRareOperator(rare.Count, rare.Field).CreateSink(budget);
+                index++;
+                break;
+            default:
+                sink = new MaterializeSink(budget);
+                break;
+        }
+
+        var remaining = stages
+            .Skip(index)
+            .Select(remainingStage => ConvertStageToOperator(remainingStage, budget))
+            .Where(op => op != null)
+            .Select(op => op!)
+            .ToList();
+
+        return new PipelinePlan(readsEvents, rowOperators, sink, remaining);
+    }
+
+    /// <summary>Stages that handle each row on its own, so they can run a batch at a time.</summary>
+    private static bool IsRowStage(BqlStage stage) => stage is
+        SearchStage or WhereStage or EvalStage or RexStage or RenameStage or RegexStage
+        or FieldAliasStage or FillNullStage or BucketStage or TableStage;
+
+    private async Task<long> FeedAsync(
+        PipelinePlan plan,
+        QueryContext storageContext,
+        QueryExecutionContext context,
+        QueryBudget budget,
+        CancellationToken cancellationToken)
+    {
+        if (!plan.ReadsEvents)
+        {
+            return 0;
+        }
+
+        var scanned = 0L;
+        var batches = context.Mode == QueryMode.Direct && !string.IsNullOrEmpty(context.Path)
+            ? ReadFileBatchesAsync(context.Path, cancellationToken)
+            : ReadStorageBatchesAsync(storageContext, plan, cancellationToken);
+
+        await foreach (var batch in batches.WithCancellation(cancellationToken))
+        {
+            scanned += batch.Count;
+
+            IEnumerable<dynamic> rows = batch;
+            foreach (var op in plan.RowOperators)
+            {
+                rows = await op.ExecuteAsync(rows, cancellationToken);
+            }
+
+            foreach (object row in Cancellable(rows, cancellationToken))
+            {
+                plan.Sink.Add(row);
+                if (plan.Sink.IsDone)
+                {
+                    return scanned;
+                }
+            }
+
+            if (_limits.MaxEventsScanned > 0 && scanned >= _limits.MaxEventsScanned)
+            {
+                budget.Truncated = true;
+                return scanned;
+            }
+        }
+
+        return scanned;
+    }
+
+    /// <summary>
+    /// Reads every match a page at a time. Each page continues from the last event of the one
+    /// before, so a deep page costs the same as the first, and events arriving during the read
+    /// can't shift rows between pages.
+    /// </summary>
+    private async IAsyncEnumerable<List<dynamic>> ReadStorageBatchesAsync(
+        QueryContext template,
+        PipelinePlan plan,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        EventCursor? after = null;
+
+        while (true)
+        {
+            // Without filters ahead of it, a sink needing few rows needs only that many events.
+            var wanted = plan.RowOperators.Count == 0 ? plan.Sink.Remaining : null;
+            var pageSize = wanted is { } remaining ? Math.Clamp(remaining, 1, PageSize) : PageSize;
+
+            var page = template.Clone();
+            page.Limit = pageSize;
+            page.After = after;
+
+            var batch = new List<dynamic>(pageSize);
+            LogEvent? last = null;
+            await foreach (var evt in _storage.QueryAsync(page, cancellationToken))
+            {
+                batch.Add(ConvertToExpando(evt));
+                last = evt;
+            }
+
+            if (batch.Count > 0)
+            {
+                yield return batch;
+            }
+
+            if (batch.Count < pageSize || last == null)
+            {
+                yield break;
+            }
+
+            after = new EventCursor(last.Timestamp, last.Id);
+        }
+    }
+
+    private static async IAsyncEnumerable<List<dynamic>> ReadFileBatchesAsync(
+        string path,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+        {
+            yield break;
+        }
+
+        var fileTime = File.GetLastWriteTimeUtc(path);
+        var lineNumber = 0L;
+        var batch = new List<dynamic>(PageSize);
+        await foreach (var line in File.ReadLinesAsync(path, cancellationToken))
+        {
+            lineNumber++;
+            var row = new BqlRow();
+            var dict = (IDictionary<string, object?>)row;
+            dict["RawLine"] = line;
+            dict["Timestamp"] = fileTime;
+            dict["SourceFile"] = path;
+            dict["LineNumber"] = lineNumber;
+            batch.Add(row);
+
+            if (batch.Count == PageSize)
+            {
+                yield return batch;
+                batch = new List<dynamic>(PageSize);
+            }
+        }
+
+        if (batch.Count > 0)
+        {
+            yield return batch;
+        }
+    }
+
+    /// <summary>
+    /// Stages evaluate lazily, so this is where a slow one notices the query's time is up.
+    /// </summary>
+    private static IEnumerable<dynamic> Cancellable(IEnumerable<dynamic> rows, CancellationToken cancellationToken)
+    {
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return row;
+        }
+    }
+
+    private sealed record PipelinePlan(
+        bool ReadsEvents,
+        List<QueryOperator> RowOperators,
+        IRowSink Sink,
+        List<QueryOperator> RemainingOperators);
 
     /// <summary>
     /// Stream query results without materializing all events in memory.
@@ -193,24 +403,33 @@ public sealed class BqlQueryEngine : IQueryEngine
             optimized.RemainingStages.Count,
             optimized.RemainingStages.Count == 0);
 
-        if (optimized.RemainingStages.Count == 0)
+        if (optimized.RemainingStages.All(IsRowStage))
         {
-            // No pipeline stages remain — stream directly from storage without materialization
+            // Only row stages remain, so nothing has to be held in memory
             var count = 0;
-            var maxFetchLimit = optimized.StorageContext.Limit;
-
-            await foreach (var evt in _storage.QueryAsync(optimized.StorageContext, token))
+            var budget = new QueryBudget(_limits);
+            var plan = CreatePlan(optimized.RemainingStages, context.Limit, budget);
+            await foreach (var batch in ReadStorageBatchesAsync(optimized.StorageContext, plan with { Sink = new MaterializeSink(budget) }, token))
             {
-                yield return ConvertToExpando(evt);
-                count++;
+                IEnumerable<dynamic> rows = batch;
+                foreach (var op in plan.RowOperators)
+                {
+                    rows = await op.ExecuteAsync(rows, token);
+                }
 
-                if (count >= maxFetchLimit)
-                    yield break;
+                foreach (var row in Cancellable(rows, token))
+                {
+                    yield return row;
+                    if (++count >= context.Limit)
+                    {
+                        yield break;
+                    }
+                }
             }
         }
         else
         {
-            // Pipeline stages require materialization — execute fully, then yield results
+            // A stage holds state, so the results only exist once it has seen its whole input
             var result = await ExecuteAsync(context, token);
             foreach (var evt in result.Events)
             {
@@ -266,7 +485,7 @@ public sealed class BqlQueryEngine : IQueryEngine
         return expando;
     }
 
-    private QueryOperator? ConvertStageToOperator(BqlStage stage) => stage switch
+    private QueryOperator? ConvertStageToOperator(BqlStage stage, QueryBudget budget) => stage switch
     {
         SearchStage s => new LegacySearchOperator(s.SearchText),
         WhereStage w => new LegacyWhereOperator(w.Condition),
@@ -303,39 +522,16 @@ public sealed class BqlQueryEngine : IQueryEngine
         LookupStage lk => _knowledgeStorage != null
             ? new LegacyLookupOperator(lk.LookupSource, lk.KeyField, lk.OutputFields, _knowledgeStorage)
             : new LegacyPassthroughOperator("lookup"),
-        AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
-        JoinStage j => new LegacyJoinOperator(j.JoinField, j.JoinType, j.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
+        AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
+        JoinStage j => new LegacyJoinOperator(j.JoinField, j.JoinType, j.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
         MacroStage m => _knowledgeStorage != null
             ? new LegacyMacroOperator(m.MacroName, m.Arguments, _storage, _parser, _optimizer, _knowledgeStorage, _logger)
             : new LegacyPassthroughOperator("macro"),
         SubsearchStage ss => new LegacySubsearchOperator(ss.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
-        MultisearchStage ms => new LegacyMultisearchOperator(ms.SearchQueries, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
+        MultisearchStage ms => new LegacyMultisearchOperator(ms.SearchQueries, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
         _ => new LegacyPassthroughOperator(stage.GetType().Name)
     };
 
-    private static async Task<List<dynamic>> ReadFromFileAsync(string path, CancellationToken cancellationToken)
-    {
-        var events = new List<dynamic>();
-        if (!File.Exists(path))
-        {
-            return events;
-        }
-
-        var fileTime = File.GetLastWriteTimeUtc(path);
-        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var expando = new BqlRow();
-            var dict = (IDictionary<string, object?>)expando;
-            dict["RawLine"] = lines[i];
-            dict["Timestamp"] = fileTime;
-            dict["SourceFile"] = path;
-            dict["LineNumber"] = (long)(i + 1);
-            events.Add(expando);
-        }
-
-        return events;
-    }
 }
 
 /// <summary>
@@ -350,6 +546,7 @@ internal sealed class LegacyAppendOperator : QueryOperator
     private readonly BqlOptimizer _optimizer;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
+    private readonly QueryBudget _budget;
     public override string Name => "append";
 
     public LegacyAppendOperator(
@@ -358,14 +555,28 @@ internal sealed class LegacyAppendOperator : QueryOperator
         BqlParser parser,
         BqlOptimizer optimizer,
         IKnowledgeStorage? knowledgeStorage,
-        ILogger<BqlQueryEngine> logger)
+        ILogger<BqlQueryEngine> logger,
+        QueryBudget budget)
     {
+        _budget = budget;
         _subsearchQuery = subsearchQuery;
         _storage = storage;
         _parser = parser;
         _optimizer = optimizer;
         _knowledgeStorage = knowledgeStorage;
         _logger = logger;
+    }
+
+    private List<dynamic> CapRows(List<dynamic> rows)
+    {
+        if (rows.Count <= _budget.Limits.MaxRowsInMemory)
+        {
+            return rows;
+        }
+
+        _budget.Truncated = true;
+        rows.RemoveRange(_budget.Limits.MaxRowsInMemory, rows.Count - _budget.Limits.MaxRowsInMemory);
+        return rows;
     }
 
     public override async Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
@@ -393,9 +604,9 @@ internal sealed class LegacyAppendOperator : QueryOperator
             var combined = new List<dynamic>(mainResults.Count + subResult.Events.Count);
             combined.AddRange(mainResults);
             combined.AddRange(subResult.Events);
-            return combined;
+            return CapRows(combined);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
         {
             _logger.LogWarning(ex, "Append subsearch failed: {Query}", _subsearchQuery);
             // On subsearch failure, return original results unchanged (Splunk behavior)
@@ -418,6 +629,7 @@ internal sealed class LegacyMultisearchOperator : QueryOperator
     private readonly BqlOptimizer _optimizer;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
+    private readonly QueryBudget _budget;
     public override string Name => "multisearch";
 
     public LegacyMultisearchOperator(
@@ -426,8 +638,10 @@ internal sealed class LegacyMultisearchOperator : QueryOperator
         BqlParser parser,
         BqlOptimizer optimizer,
         IKnowledgeStorage? knowledgeStorage,
-        ILogger<BqlQueryEngine> logger)
+        ILogger<BqlQueryEngine> logger,
+        QueryBudget budget)
     {
+        _budget = budget;
         _searchQueries = searchQueries;
         _storage = storage;
         _parser = parser;
@@ -461,8 +675,16 @@ internal sealed class LegacyMultisearchOperator : QueryOperator
 
                 var subResult = await subEngine.ExecuteAsync(context, ct);
                 combined.AddRange(subResult.Events);
+
+                // Each sub-search is limited, but their sum has to be as well.
+                if (combined.Count > _budget.Limits.MaxRowsInMemory)
+                {
+                    _budget.Truncated = true;
+                    combined.RemoveRange(_budget.Limits.MaxRowsInMemory, combined.Count - _budget.Limits.MaxRowsInMemory);
+                    break;
+                }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
             {
                 _logger.LogWarning(ex, "Multisearch sub-query failed: {Query}", query);
                 // On individual sub-query failure, skip it and continue with the rest (Splunk behavior)
@@ -487,6 +709,7 @@ internal sealed class LegacyJoinOperator : QueryOperator
     private readonly BqlOptimizer _optimizer;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
+    private readonly QueryBudget _budget;
     private const int MaxSubsearchResults = 50_000;
     public override string Name => "join";
 
@@ -498,8 +721,10 @@ internal sealed class LegacyJoinOperator : QueryOperator
         BqlParser parser,
         BqlOptimizer optimizer,
         IKnowledgeStorage? knowledgeStorage,
-        ILogger<BqlQueryEngine> logger)
+        ILogger<BqlQueryEngine> logger,
+        QueryBudget budget)
     {
+        _budget = budget;
         _joinField = joinField;
         _joinType = joinType;
         _subsearchQuery = subsearchQuery;
@@ -610,7 +835,7 @@ internal sealed class LegacyJoinOperator : QueryOperator
 
             return results;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
         {
             _logger.LogWarning(ex, "Join subsearch failed: {Query}", _subsearchQuery);
             return mainResults;
@@ -813,7 +1038,7 @@ internal sealed class LegacyMacroOperator : QueryOperator
             UntableStage ut => new LegacyUntableOperator(ut.RowField, ut.ColumnField, ut.ValueField),
             InputLookupStage il => new LegacyInputLookupOperator(il.LookupName, _knowledgeStorage),
             LookupStage lk => new LegacyLookupOperator(lk.LookupSource, lk.KeyField, lk.OutputFields, _knowledgeStorage),
-            AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
+            AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, new QueryBudget(new QueryLimits())),
             SubsearchStage sub => new LegacySubsearchOperator(sub.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
             _ => new LegacyPassthroughOperator(stage.GetType().Name)
         };
@@ -936,7 +1161,7 @@ internal sealed class LegacySubsearchOperator : QueryOperator
 
             return filtered;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
         {
             _logger.LogWarning(ex, "Subsearch failed: {Query}", _subsearchQuery);
             // On failure, return original results unchanged

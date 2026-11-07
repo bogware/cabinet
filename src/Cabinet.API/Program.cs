@@ -338,9 +338,8 @@ try
         var dataModelStorage = scope.ServiceProvider.GetRequiredService<IDataModelStorage>();
         await dataModelStorage.InitializeAsync();
 
-        // Initialize RBAC database
-        var rbacService = scope.ServiceProvider.GetRequiredService<Cabinet.API.Services.SqliteRbacService>();
-        await rbacService.InitializeAsync();
+        // Initialize the store for shared state
+        await scope.ServiceProvider.GetRequiredService<IDocumentStore>().InitializeAsync();
 
         // Initialize encryption service (if configured)
         var encryptionService = scope.ServiceProvider.GetRequiredService<EncryptionService>();
@@ -411,8 +410,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
 
     // RBAC and audit logging — database-backed with config fallback
     services.AddSingleton<Cabinet.API.Services.ConfigurationRbacService>();
-    services.AddSingleton<Cabinet.API.Services.SqliteRbacService>();
-    services.AddSingleton<IRbacService>(sp => sp.GetRequiredService<Cabinet.API.Services.SqliteRbacService>());
+    services.AddSingleton<IRbacService, Cabinet.API.Services.StoredRbacService>();
+    services.AddHttpContextAccessor();
+    services.AddScoped<Cabinet.API.Authentication.IndexAccessScope>();
     services.AddSingleton<Cabinet.API.Services.SerilogAuditLogger>();
     services.AddSingleton<IAuditLogger>(sp =>
         new Cabinet.API.Services.TamperEvidentAuditLogger(
@@ -442,10 +442,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
 
     // Alert system
     services.AddCabinetAlerts();
-    services.AddSingleton<IAlertHistoryStorage, InMemoryAlertHistoryStorage>();
 
     // Field extraction storage
-    services.AddSingleton<IFieldExtractionStorage, InMemoryFieldExtractionStorage>();
 
     // Email alert channel (if configured)
     if (configuration.GetValue<bool>("Email:Enabled"))
@@ -501,17 +499,28 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<Cabinet.Query.Bql.BqlOptimizer>();
     services.AddScoped<Cabinet.Query.IQueryParser>(sp => sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>());
     services.AddScoped<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator, Cabinet.Query.NaturalLanguage.RuleBasedTranslator>();
-    services.AddScoped<IQueryEngine, Cabinet.Query.Bql.BqlQueryEngine>();
+
+    // The engine reads through the caller's index scope, so subsearches, joins and macros are
+    // limited the same as the query around them.
+    services.AddScoped<IQueryEngine>(sp => new Cabinet.Query.Bql.BqlQueryEngine(
+        sp.GetRequiredService<Cabinet.API.Authentication.IndexAccessScope>().Restrict(sp.GetRequiredService<ILogStorage>()),
+        sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>(),
+        sp.GetRequiredService<Cabinet.Query.Bql.BqlOptimizer>(),
+        sp.GetRequiredService<ILogger<Cabinet.Query.Bql.BqlQueryEngine>>(),
+        sp.GetService<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator>(),
+        sp.GetService<IKnowledgeStorage>(),
+        sp.GetRequiredService<Cabinet.Query.Bql.QueryLimits>()));
+    services.AddSingleton(configuration.GetSection("Query:Limits").Get<Cabinet.Query.Bql.QueryLimits>() ?? new Cabinet.Query.Bql.QueryLimits());
+    services.AddSingleton(configuration.GetSection("Query:Concurrency").Get<Cabinet.API.Middleware.ConcurrencyOptions>() ?? new Cabinet.API.Middleware.ConcurrencyOptions());
+    services.AddSingleton<Cabinet.API.Middleware.ConcurrencyLimiter>();
 
     // Query result cache — accelerates dashboard refreshes with TTL-based caching.
-    // In distributed mode, wraps with Redis L2 cache + pub/sub invalidation.
-    var queryResultTtl = configuration.GetValue("Distributed:Cache:QueryResultTtlSeconds", 30);
+    // Each instance has its own, which can differ from another's for up to the TTL.
+    var queryResultTtl = configuration.GetValue("Query:CacheTtlSeconds", 30);
     services.AddSingleton<Cabinet.API.Services.QueryCacheService>(sp =>
         new Cabinet.API.Services.QueryCacheService(
             sp.GetRequiredService<ILogger<Cabinet.API.Services.QueryCacheService>>(),
             TimeSpan.FromSeconds(queryResultTtl)));
-
-    // Distributed query cache (registered later if Redis is available — see distributed section below)
 
     // Async search jobs — background execution for long-running queries
     services.AddHostedService<Cabinet.API.Services.SearchJobService>();
@@ -575,49 +584,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<RetentionService>();
     services.AddHostedService<RetentionBackgroundService>();
 
-    // Distributed infrastructure (Redis coordination, caching, rate limiting)
-    var distributedConfig = configuration.GetSection("Distributed");
-    // Keys are validated in-process on every instance. Authorization results are never
-    // cached in Redis, where anyone with access could forge a valid one.
     services.AddSingleton<Cabinet.API.Authentication.IApiKeyService, Cabinet.API.Services.ApiKeyService>();
-
-    var distributedEnabled = configuration.GetValue<bool>("Distributed:Enabled");
-    var redisConnectionString = configuration["Distributed:RedisConnectionString"];
-
-    if (distributedEnabled && !string.IsNullOrEmpty(redisConnectionString))
-    {
-        var instanceId = configuration["Distributed:InstanceId"] ?? Environment.MachineName;
-
-        services.AddSingleton(sp => new Cabinet.API.Infrastructure.RedisConnectionManager(
-            redisConnectionString,
-            sp.GetRequiredService<ILogger<Cabinet.API.Infrastructure.RedisConnectionManager>>()));
-
-        services.AddSingleton(sp => new Cabinet.API.Infrastructure.RedisLeaderElection(
-            sp.GetRequiredService<Cabinet.API.Infrastructure.RedisConnectionManager>(),
-            instanceId,
-            sp.GetRequiredService<ILogger<Cabinet.API.Infrastructure.RedisLeaderElection>>(),
-            leaseDuration: TimeSpan.FromSeconds(configuration.GetValue("Distributed:LeaderElection:LeaseTimeSeconds", 30)),
-            renewalInterval: TimeSpan.FromSeconds(configuration.GetValue("Distributed:LeaderElection:RenewalIntervalSeconds", 10))));
-
-        // Distributed query cache — L2 Redis cache with pub/sub invalidation across instances
-        services.AddSingleton<Cabinet.API.Services.DistributedQueryCacheService>(sp =>
-            new Cabinet.API.Services.DistributedQueryCacheService(
-                sp.GetRequiredService<Cabinet.API.Services.QueryCacheService>(),
-                sp.GetRequiredService<Cabinet.API.Infrastructure.RedisConnectionManager>(),
-                sp.GetRequiredService<ILogger<Cabinet.API.Services.DistributedQueryCacheService>>(),
-                TimeSpan.FromSeconds(configuration.GetValue("Distributed:Cache:QueryResultTtlSeconds", 60))));
-
-        // Only log the host:port, never credentials — extract first part that doesn't contain '='
-        var redisHost = redisConnectionString.Split(',')
-            .Select(p => p.Trim())
-            .FirstOrDefault(p => !p.Contains('=')) ?? "***";
-        Log.Information("Distributed mode enabled (Redis: {Redis}, Instance: {Instance})",
-            redisHost, instanceId);
-    }
-    else
-    {
-        Log.Information("Single-instance mode (set Distributed:Enabled=true for multi-instance)");
-    }
 }
 
 void ValidateConfiguration(IConfiguration configuration)
@@ -649,15 +616,6 @@ void ValidateConfiguration(IConfiguration configuration)
         var connStr = configuration["Storage:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connStr))
             throw new InvalidOperationException("Storage:ConnectionString is required for OpenSearch backend");
-    }
-
-    // Validate distributed configuration
-    var distributedEnabled = configuration.GetValue<bool>("Distributed:Enabled");
-    if (distributedEnabled)
-    {
-        var redisConn = configuration["Distributed:RedisConnectionString"];
-        if (string.IsNullOrWhiteSpace(redisConn))
-            throw new InvalidOperationException("Distributed:RedisConnectionString is required when Distributed:Enabled=true");
     }
 
     // Validate syslog ports

@@ -88,26 +88,26 @@ search error | sort -timestamp | head 10
 | Syslog listener | Working | RFC 3164 and RFC 5424 over UDP, TCP and TLS. Off by default, and Compose doesn't publish the port. |
 | Forwarding agent | Available | Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
 | Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
-| BQL query engine | Available | Every example in the guide runs as a test. Queries read at most 100,000 events, except a bare `stats count`, and flag results as `truncated` beyond that. |
+| BQL query engine | Available | Every example in the guide runs as a test. Filters, `stats`, `timechart`, `chart`, `top`, `rare` and `sort | head` read every matching event without holding them in memory. Stages that need all their rows at once hold up to 100,000 and flag results as `truncated` beyond that. See [benchmarks](docs/BENCHMARKS.md). |
 | Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
 | Web dashboard | Available | Served from the API outside the Development environment. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
-| Async search jobs | Available | Stored per instance. |
+| Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |
 | Scheduled searches | Available | Cron-based. Require an Enterprise-tier key. |
 | Alert channels | Available | Console, file, email, and webhook with generic, Slack, Discord, Teams and PagerDuty formats. |
 | Alert history API | Not implemented | `/api/v1/alerts` reads an in-memory store that nothing writes to, so it stays empty. |
-| API key authentication | Available | `X-API-Key` header, with Basic, Professional and Enterprise tiers. |
-| Roles and capabilities per endpoint | Available | Tiers map to fixed roles. |
-| Per-index RBAC | Not implemented | Capability checks always evaluate index `main`. |
-| Index and user management routes | Not implemented | No tier has the required capabilities, so these return 403 for every configured key. |
-| OIDC | Partial | Tokens are validated and claims mapped, but capability checks have no principal for an OIDC subject, so capability-protected routes return 403. |
+| API key authentication | Available | `X-API-Key` header, with Basic, Professional, Enterprise and Admin tiers. |
+| Roles and capabilities per endpoint | Available | A test fails if an endpoint has no capability check. |
+| Per-index RBAC | Available | Grants limit a principal to some indexes for every read and write, including subsearches and search jobs. |
+| Index and user management routes | Available | `IndexManagement` from the Enterprise tier, `UserManagement` from the Admin tier. |
+| OIDC | Available | Bearer tokens, with claims mapped to roles and index grants. Tested end to end against a local identity provider. |
 | SAML, LDAP | Not implemented | Configuration models only. |
-| Rate limiting | Available | In-process, per address and per key. |
+| Rate limiting | Available | Per address and per key, counted separately on each instance. Queries and streams also have concurrency limits. |
 | Audit log | Partial | Hash-chained in the log output only. |
 | Global retention | Available | `Storage:RetentionDays`. 0 (the default) keeps everything. |
 | Per-index retention | Not implemented | `/api/v1/retention` stores definitions in memory and doesn't enforce them. |
 | Log parsers | Available | JSON, CEF, Apache, Nginx, CSV, Generic. |
-| Data models | Partial | Listing and `tstats` routes exist, but creating or deleting a model returns 403 for every configured key. |
+| Data models | Available | Pre-aggregated summaries for `tstats`. |
 | Field extractions | Partial | CRUD only. Definitions are held in memory and aren't applied to queries. |
 | Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers and on-demand moderation detection at `/api/v1/detection/*`. |
 | Security detection rules | Not implemented | Nothing runs at ingest. |
@@ -118,16 +118,14 @@ search error | sort -timestamp | head 10
 | Encryption at rest | Not implemented | The service is initialized, but nothing calls it. |
 | PII and field masking | Not implemented | The service is registered, but never applied. |
 | Hot/warm/cold tiering, S3 archival | Not implemented | |
-| Horizontal scaling, leader election | Not implemented | Run a single API instance. |
-| Redis rate limiting | Not implemented | Not wired in. |
+| Multiple API instances | Available | On PostgreSQL, sharing all state except the audit chain head. One instance at a time runs background work. |
 | Server-side multi-line merging | Not implemented | The agent merges multi-line events; the API does not. |
 | Prometheus alert rules | Not implemented | Grafana dashboard and scrape config only. |
 
 ## Known limitations
 
-- **Run one API instance.** Scheduled searches fire once per replica, and search jobs, data models, RBAC and the audit chain head are per instance.
-- **Redis does almost nothing today.** Its only role is a query result cache layer, and request paths currently use the in-process cache. API key validation never touches Redis.
-- **No benchmarks are published yet.** The repository has no throughput or scale figures, so measure against your own workload.
+- **Multiple instances need PostgreSQL.** With OpenSearch, set `Storage:MetadataPostgresConnectionString`. SQLite and in-memory storage serve one instance. Rate limits and the query cache are per instance.
+- **Aggregates read every event through the API process.** They aren't pushed down to the database yet, so `stats` over a billion events takes a long time. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - **Agent delivery has edge cases.** Lines are lost if a file is deleted before they're read, for example during a long agent outage. If the registry file is lost, files are read again from the start under new event IDs. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#agent-behaviour).
 - **The audit log is not tamper-proof.** Events are hash-chained in log output, there is no verifier, and the chain head is local to each instance.
 - **The built-in SQLite backup** copies the database file without WAL consistency and has no restore. Use `sqlite3 cabinet.db ".backup ..."`, or `pg_dump` for PostgreSQL.

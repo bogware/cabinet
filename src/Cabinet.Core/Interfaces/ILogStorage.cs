@@ -58,6 +58,13 @@ public interface ILogStorage
 }
 
 /// <summary>
+/// A position in a timestamp-ordered read: the last event already seen.
+/// </summary>
+/// <param name="Timestamp">That event's timestamp, as read from storage.</param>
+/// <param name="Id">That event's ID.</param>
+public sealed record EventCursor(DateTime Timestamp, string Id);
+
+/// <summary>
 /// Query context for filtering and pagination
 /// </summary>
 public class QueryContext
@@ -81,6 +88,11 @@ public class QueryContext
     /// Index filter — scope query to a specific logical index
     /// </summary>
     public string? Index { get; set; }
+
+    /// <summary>
+    /// Index patterns the caller may read: names, or prefixes ending in *. Null means every index.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedIndexes { get; set; }
 
     /// <summary>
     /// Source type filter (string-based, e.g., "Apache", "Generic")
@@ -121,6 +133,16 @@ public class QueryContext
     /// Skip records
     /// </summary>
     public int Skip { get; set; }
+
+    /// <summary>
+    /// Continue after this event, in the query's sort order. Unlike <see cref="Skip"/>, a deep page
+    /// costs the same as the first, and events added meanwhile don't shift the results. Only for
+    /// sorting by timestamp, where events with the same time are ordered by ID.
+    /// </summary>
+    public EventCursor? After { get; set; }
+
+    /// <summary>A copy of this context, to change for one page of a query.</summary>
+    public QueryContext Clone() => (QueryContext)MemberwiseClone();
 
     /// <summary>
     /// Maximum allowed limit for any query to prevent DoS

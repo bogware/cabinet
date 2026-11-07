@@ -10,7 +10,7 @@ public sealed class LogEvent
 {
     public LogEvent()
     {
-        Fields = new ConcurrentDictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        Fields = new ConcurrentDictionary<string, object?>(concurrencyLevel: 1, capacity: 8, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

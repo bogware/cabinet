@@ -31,10 +31,6 @@ public sealed class ConfigurationRbacService : IRbacService
             Id = apiKeyHash,
             DisplayName = keyInfo.ClientName,
             Role = role,
-            IndexPermissions = new List<IndexPermission>
-            {
-                new() { IndexPattern = "*", Capabilities = RbacPrincipal.GetRoleCapabilities(role) }
-            }
         };
 
         return principal;
@@ -52,16 +48,20 @@ public sealed class ConfigurationRbacService : IRbacService
         if (principal == null)
             return Array.Empty<string>();
 
-        // Return the index patterns from the principal's permissions
-        var indexes = principal.IndexPermissions
-            .Select(p => p.IndexPattern)
-            .Distinct()
+        return principal.IndexesWith(Capability.Search) ?? (IReadOnlyList<string>)["*"];
+    }
+
+    public async Task<IReadOnlyList<RbacPrincipal>> ListPrincipalsAsync(CancellationToken cancellationToken = default)
+    {
+        var keys = await _apiKeyService.GetActiveKeysAsync();
+        return keys
+            .Select(key => new RbacPrincipal { Id = key.Id, DisplayName = key.ClientName, Role = MapTierToRole(key.Tier) })
             .ToList();
-        return indexes;
     }
 
     private static SystemRole MapTierToRole(string tier) => tier.ToLowerInvariant() switch
     {
+        "admin" => SystemRole.SuperAdmin,
         "enterprise" => SystemRole.Admin,
         "professional" => SystemRole.Analyst,
         "basic" => SystemRole.Viewer,

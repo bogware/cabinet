@@ -57,7 +57,7 @@ public partial class SqliteLogStorage : ILogStorage
     }
 
     /// <summary>Current schema version. Increment when adding migrations.</summary>
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -85,8 +85,11 @@ public partial class SqliteLogStorage : ILogStorage
             await ApplyMigrationV1(connection);
         }
 
-        // Future migrations go here:
-        // if (currentVersion < 2) { await ApplyMigrationV2(connection); }
+        // v2: Full-text index on rowid, and paging by time and ID
+        if (currentVersion < 2)
+        {
+            await ApplyMigrationV2(connection);
+        }
 
         // Verify FTS5 integrity and rebuild if corrupted
         await VerifyAndRepairFtsAsync(connection);
@@ -115,6 +118,57 @@ public partial class SqliteLogStorage : ILogStorage
                 _logger.LogError(rebuildEx, "FTS5 rebuild failed — full-text search may be unavailable");
             }
         }
+    }
+
+    /// <summary>
+    /// Version 1's triggers wrote to the full-text index without a rowid. The index is external
+    /// content, so it finds rows by rowid, and after a purge a search could return the wrong events
+    /// or none. This rebuilds the index from the events, and adds the index that pages by time.
+    /// </summary>
+    private static async Task ApplyMigrationV2(SqliteConnection connection)
+    {
+        await connection.ExecuteAsync(@"
+            DROP TRIGGER IF EXISTS log_events_ai;
+            DROP TRIGGER IF EXISTS log_events_ad;
+            DROP TRIGGER IF EXISTS log_events_au;
+            DROP TABLE IF EXISTS log_events_fts;
+
+            CREATE VIRTUAL TABLE log_events_fts USING fts5(
+                raw_line, content=log_events, content_rowid=rowid
+            );
+
+            CREATE TRIGGER log_events_ai AFTER INSERT ON log_events
+            BEGIN
+                INSERT INTO log_events_fts(rowid, raw_line)
+                VALUES (new.rowid, new.raw_line);
+            END;
+
+            CREATE TRIGGER log_events_ad AFTER DELETE ON log_events
+            BEGIN
+                INSERT INTO log_events_fts(log_events_fts, rowid, raw_line)
+                VALUES ('delete', old.rowid, old.raw_line);
+            END;
+
+            CREATE TRIGGER log_events_au AFTER UPDATE ON log_events
+            BEGIN
+                INSERT INTO log_events_fts(log_events_fts, rowid, raw_line)
+                VALUES ('delete', old.rowid, old.raw_line);
+                INSERT INTO log_events_fts(rowid, raw_line)
+                VALUES (new.rowid, new.raw_line);
+            END;
+
+            INSERT INTO log_events_fts(log_events_fts) VALUES ('rebuild');
+
+            CREATE INDEX IF NOT EXISTS idx_timestamp_id ON log_events(timestamp DESC, id DESC);
+
+            -- Without this, a query on one index reads all of it and sorts, for every page
+            CREATE INDEX IF NOT EXISTS idx_index_timestamp_id ON log_events(index_name, timestamp DESC, id DESC);
+            DROP INDEX IF EXISTS idx_timestamp;
+        ");
+
+        await connection.ExecuteAsync(
+            "INSERT INTO _schema_version (version, applied_at, description) VALUES (@v, @at, @desc)",
+            new { v = 2, at = DateTime.UtcNow.ToString("o"), desc = "Rebuild FTS on rowid; page by timestamp and id" });
     }
 
     private static async Task ApplyMigrationV1(SqliteConnection connection)
@@ -413,15 +467,22 @@ public partial class SqliteLogStorage : ILogStorage
         return stats;
     }
 
+    /// <summary>Turns an index pattern into a LIKE pattern, escaping the text around its wildcard.</summary>
+    private static string IndexPatternToLike(string pattern)
+    {
+        var escaped = pattern.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+        return escaped.EndsWith('*') ? $"{escaped[..^1]}%" : escaped;
+    }
+
     private string BuildQuerySql(QueryContext context, bool useFts = true)
     {
         var sql = new StringBuilder();
         sql.Append("SELECT * FROM ");
 
-        if (!string.IsNullOrEmpty(context.SearchText) && useFts)
+        if (SearchTerms.Parse(context.SearchText).Count > 0 && useFts)
         {
-            sql.Append(@"log_events WHERE id IN (
-                SELECT id FROM log_events_fts WHERE log_events_fts MATCH @SearchText
+            sql.Append(@"log_events WHERE rowid IN (
+                SELECT rowid FROM log_events_fts WHERE log_events_fts MATCH @SearchText
             )");
         }
         else if (!string.IsNullOrEmpty(context.SearchText))
@@ -451,6 +512,12 @@ public partial class SqliteLogStorage : ILogStorage
 
         if (!string.IsNullOrEmpty(context.Index))
             sql.Append(" AND index_name = @IndexName");
+
+        if (context.AllowedIndexes != null)
+        {
+            var conditions = context.AllowedIndexes.Select((_, i) => $"index_name LIKE @AllowedIndex{i} ESCAPE '\\'");
+            sql.Append($" AND ({string.Join(" OR ", conditions.DefaultIfEmpty("1=0"))})");
+        }
 
         if (context.FieldFilters != null)
         {
@@ -489,7 +556,17 @@ public partial class SqliteLogStorage : ILogStorage
             ? context.SortField
             : "timestamp";
 
-        sql.Append($" ORDER BY {sortField} {(context.SortDescending ? "DESC" : "ASC")}");
+        var direction = context.SortDescending ? "DESC" : "ASC";
+        if (context.After != null)
+        {
+            sql.Append(context.SortDescending
+                ? " AND (timestamp, id) < (@AfterTimestamp, @AfterId)"
+                : " AND (timestamp, id) > (@AfterTimestamp, @AfterId)");
+            sortField = "timestamp";
+        }
+
+        // ID breaks ties, so pages of events with the same time are stable
+        sql.Append($" ORDER BY {sortField} {direction}, id {direction}");
         sql.Append($" LIMIT {context.Limit} OFFSET {context.Skip}");
 
         return sql.ToString();
@@ -501,8 +578,8 @@ public partial class SqliteLogStorage : ILogStorage
 
         if (!string.IsNullOrEmpty(context.SearchText))
         {
-            sql.Append(@"SELECT COUNT(*) FROM log_events WHERE id IN (
-                SELECT id FROM log_events_fts WHERE log_events_fts MATCH @SearchText
+            sql.Append(@"SELECT COUNT(*) FROM log_events WHERE rowid IN (
+                SELECT rowid FROM log_events_fts WHERE log_events_fts MATCH @SearchText
             )");
         }
         else
@@ -527,6 +604,12 @@ public partial class SqliteLogStorage : ILogStorage
 
         if (!string.IsNullOrEmpty(context.Index))
             sql.Append(" AND index_name = @IndexName");
+
+        if (context.AllowedIndexes != null)
+        {
+            var conditions = context.AllowedIndexes.Select((_, i) => $"index_name LIKE @AllowedIndex{i} ESCAPE '\\'");
+            sql.Append($" AND ({string.Join(" OR ", conditions.DefaultIfEmpty("1=0"))})");
+        }
 
         // Apply field filters (matching QueryAsync behavior)
         if (context.FieldFilters != null)
@@ -562,10 +645,20 @@ public partial class SqliteLogStorage : ILogStorage
     {
         var parameters = new DynamicParameters();
         // Wrap search text in double quotes to escape FTS5 query syntax operators (AND, OR, NOT, *)
-        var safeSearchText = context.SearchText != null
-            ? "\"" + context.SearchText.Replace("\"", "\"\"") + "\""
+        // Every term has to appear in the line, as on the other backends
+        var terms = SearchTerms.Parse(context.SearchText);
+        var safeSearchText = terms.Count > 0
+            ? "raw_line : (" + string.Join(" AND ", terms.Select(term => $"\"{term}\"")) + ")"
             : null;
         parameters.Add("SearchText", safeSearchText);
+        parameters.Add("AfterTimestamp", context.After?.Timestamp.Ticks);
+        var allowed = context.AllowedIndexes ?? [];
+        for (var i = 0; i < allowed.Count; i++)
+        {
+            parameters.Add($"AllowedIndex{i}", IndexPatternToLike(allowed[i]));
+        }
+
+        parameters.Add("AfterId", context.After?.Id);
         // LIKE-based fallback parameter (used when FTS is unavailable)
         parameters.Add("SearchTextLike", context.SearchText != null ? $"%{context.SearchText}%" : null);
         parameters.Add("StartTime", context.StartTime?.Ticks);

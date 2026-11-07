@@ -62,7 +62,7 @@ public static class RateLimitingExtensions
     {
         return tier.ToUpper() switch
         {
-            "ENTERPRISE" => RateLimitPartition.GetTokenBucketLimiter(
+            "ADMIN" or "ENTERPRISE" => RateLimitPartition.GetTokenBucketLimiter(
                 apiKey,
                 _ => new TokenBucketRateLimiterOptions
                 {

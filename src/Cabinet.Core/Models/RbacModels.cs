@@ -62,15 +62,19 @@ public sealed class IndexPermission
     /// <summary>
     /// Check if this permission grants access to a specific index
     /// </summary>
-    public bool MatchesIndex(string indexName)
+    public bool MatchesIndex(string indexName) => Matches(IndexPattern, indexName);
+
+    /// <summary>
+    /// Check if a pattern (a name, a prefix ending in *, or * alone) matches an index
+    /// </summary>
+    public static bool Matches(string pattern, string indexName)
     {
-        if (IndexPattern == "*") return true;
-        if (IndexPattern.EndsWith('*'))
+        if (pattern == "*") return true;
+        if (pattern.EndsWith('*'))
         {
-            var prefix = IndexPattern[..^1];
-            return indexName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            return indexName.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase);
         }
-        return string.Equals(IndexPattern, indexName, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(pattern, indexName, StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -82,13 +86,19 @@ public sealed class RbacPrincipal
     /// <summary>Unique identifier for this principal</summary>
     public required string Id { get; set; }
 
+    /// <summary>Capabilities that act on an index's data, so that grants can limit them to some indexes</summary>
+    public const Capability IndexScopedCapabilities = Capability.Search | Capability.Ingest | Capability.Export | Capability.IndexManagement;
+
     /// <summary>Display name</summary>
     public string? DisplayName { get; set; }
 
     /// <summary>System role (provides baseline capabilities)</summary>
     public SystemRole Role { get; set; } = SystemRole.Viewer;
 
-    /// <summary>Per-index permission grants (overrides/extends role defaults)</summary>
+    /// <summary>
+    /// Per-index permission grants. With none, the role's capabilities apply to every index. With
+    /// any, capabilities that act on an index's data apply only to the indexes granted them.
+    /// </summary>
     public List<IndexPermission> IndexPermissions { get; set; } = new();
 
     /// <summary>Additional capabilities beyond role defaults</summary>
@@ -99,16 +109,15 @@ public sealed class RbacPrincipal
     /// </summary>
     public Capability GetEffectiveCapabilities(string indexName)
     {
-        var roleCapabilities = GetRoleCapabilities(Role);
-
-        // SuperAdmin bypasses all index restrictions
         if (Role == SystemRole.SuperAdmin)
             return Capability.All;
 
-        // Start with role defaults
-        var effective = roleCapabilities | AdditionalCapabilities;
+        var granted = GetRoleCapabilities(Role) | AdditionalCapabilities;
+        if (IndexPermissions.Count == 0)
+            return granted;
 
-        // Apply index-specific permissions
+        // Grants decide data access, so that granting one index really does limit the principal to it
+        var effective = (GetRoleCapabilities(Role) & ~IndexScopedCapabilities) | AdditionalCapabilities;
         foreach (var perm in IndexPermissions)
         {
             if (perm.MatchesIndex(indexName))
@@ -118,6 +127,36 @@ public sealed class RbacPrincipal
         }
 
         return effective;
+    }
+
+    /// <summary>
+    /// Index patterns where this principal has a capability, or null if it has it on every index.
+    /// </summary>
+    public IReadOnlyList<string>? IndexesWith(Capability capability)
+    {
+        if (Role == SystemRole.SuperAdmin || (AdditionalCapabilities & capability) == capability)
+            return null;
+
+        if (IndexPermissions.Count == 0)
+            return (GetRoleCapabilities(Role) & capability) == capability ? null : Array.Empty<string>();
+
+        var patterns = IndexPermissions
+            .Where(perm => (perm.Capabilities & capability) == capability)
+            .Select(perm => perm.IndexPattern)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return patterns.Contains("*") ? null : patterns;
+    }
+
+    /// <summary>
+    /// Check if this principal has a capability on at least one index
+    /// </summary>
+    public bool HasCapabilityOnAnyIndex(Capability capability)
+    {
+        if ((capability & IndexScopedCapabilities) == 0)
+            return HasCapability(capability);
+
+        return IndexesWith(capability) is not { Count: 0 };
     }
 
     /// <summary>
@@ -135,7 +174,7 @@ public sealed class RbacPrincipal
     {
         SystemRole.Viewer => Capability.Search | Capability.SystemHealth,
         SystemRole.Analyst => Capability.Search | Capability.Ingest | Capability.SavedQueries | Capability.Detection | Capability.SystemHealth,
-        SystemRole.Admin => Capability.Search | Capability.Ingest | Capability.SavedQueries | Capability.Detection | Capability.Export | Capability.Alerts | Capability.SystemHealth,
+        SystemRole.Admin => Capability.Search | Capability.Ingest | Capability.SavedQueries | Capability.Detection | Capability.Export | Capability.IndexManagement | Capability.Alerts | Capability.SystemHealth,
         SystemRole.SuperAdmin => Capability.All,
         _ => Capability.None
     };

@@ -103,6 +103,14 @@ public sealed class IngestParsingTests
         logEvent.GetField<string>("user").Should().Be("a b");
     }
 
+    [Fact]
+    public async Task Logfmt_HostIsTheEventsHost()
+    {
+        var logEvent = await Parser.ParseAsync("level=info host=web-1 msg=ok");
+
+        logEvent.Host.Should().Be("web-1");
+    }
+
     [Theory]
     [InlineData("""{"time":1772600767,"msg":"x"}""")]
     [InlineData("""{"time":1772600767000,"msg":"x"}""")]

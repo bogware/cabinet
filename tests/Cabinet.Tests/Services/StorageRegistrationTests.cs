@@ -47,12 +47,19 @@ public sealed class StorageRegistrationTests : IDisposable
         provider.GetRequiredService<ISavedQueryStorage>().Should().BeOfType<PostgresSavedQueryStorage>();
     }
 
-    [Theory]
-    [InlineData("PostgreSQL", PostgresConnectionString)]
-    [InlineData("OpenSearch", "https://search.invalid:9200")]
-    public async Task RemoteBackend_SqliteStoresInitializeOnMetadataDatabase(string storageType, string connectionString)
+    [Fact]
+    public void Postgres_SharesDocumentsAndLeadership()
     {
-        using var provider = BuildProvider(storageType, connectionString);
+        using var provider = BuildProvider("PostgreSQL", PostgresConnectionString);
+
+        provider.GetRequiredService<IDocumentStore>().Should().BeOfType<PostgresDocumentStore>();
+        provider.GetRequiredService<ILeaderLease>().Should().BeOfType<PostgresLeaderLease>();
+    }
+
+    [Fact]
+    public async Task OpenSearch_KeepsDocumentsOnMetadataDatabase()
+    {
+        using var provider = BuildProvider("OpenSearch", "https://search.invalid:9200");
 
         await provider.GetRequiredService<ISearchJobStorage>().InitializeAsync();
         await provider.GetRequiredService<IDataModelStorage>().InitializeAsync();
@@ -77,7 +84,9 @@ public sealed class StorageRegistrationTests : IDisposable
         using var provider = BuildProvider("SQLite", $"Data Source={Path.Combine(_directory, "logs.db")}");
 
         provider.GetRequiredService<IDashboardStorage>().Should().BeOfType<SqliteDashboardStorage>();
-        provider.GetRequiredService<ISearchJobStorage>().Should().BeOfType<SqliteSearchJobStorage>();
+        provider.GetRequiredService<ISearchJobStorage>().Should().BeOfType<DocumentSearchJobStorage>();
+        provider.GetRequiredService<IDocumentStore>().Should().BeOfType<SqliteDocumentStore>();
+        provider.GetRequiredService<ILeaderLease>().Should().BeOfType<SingleInstanceLease>();
     }
 
     [Fact]
@@ -86,7 +95,8 @@ public sealed class StorageRegistrationTests : IDisposable
         using var provider = BuildProvider("Memory", string.Empty);
 
         provider.GetRequiredService<IDashboardStorage>().Should().BeOfType<InMemoryDashboardStorage>();
-        provider.GetRequiredService<ISearchJobStorage>().Should().BeOfType<InMemorySearchJobStorage>();
+        provider.GetRequiredService<ISearchJobStorage>().Should().BeOfType<DocumentSearchJobStorage>();
+        provider.GetRequiredService<IDocumentStore>().Should().BeOfType<InMemoryDocumentStore>();
     }
 
     public void Dispose()

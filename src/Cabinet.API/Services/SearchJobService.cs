@@ -1,3 +1,5 @@
+using Cabinet.API.Authentication;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
@@ -15,6 +17,8 @@ public sealed class SearchJobService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<SearchJobService> _logger;
     private readonly SemaphoreSlim _concurrencyLimiter;
+    private readonly ILeaderLease _lease;
+    private readonly ConcurrentDictionary<string, Task> _running = new();
     private const int MaxConcurrentJobs = 4;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PurgeInterval = TimeSpan.FromMinutes(5);
@@ -22,11 +26,13 @@ public sealed class SearchJobService : BackgroundService
     public SearchJobService(
         ISearchJobStorage storage,
         IServiceScopeFactory scopeFactory,
-        ILogger<SearchJobService> logger)
+        ILogger<SearchJobService> logger,
+        ILeaderLease? lease = null)
     {
         _storage = storage;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _lease = lease ?? new SingleInstanceLease();
         _concurrencyLimiter = new SemaphoreSlim(MaxConcurrentJobs, MaxConcurrentJobs);
     }
 
@@ -35,42 +41,33 @@ public sealed class SearchJobService : BackgroundService
         _logger.LogInformation("Search job service started (max {MaxConcurrent} concurrent jobs)", MaxConcurrentJobs);
 
         var lastPurge = DateTime.UtcNow;
+        var wasLeader = false;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                // Purge expired jobs periodically
-                if (DateTime.UtcNow - lastPurge > PurgeInterval)
+                if (_lease.IsLeader)
                 {
-                    var purged = await _storage.PurgeExpiredAsync(stoppingToken);
-                    if (purged > 0)
-                        _logger.LogInformation("Purged {Count} expired search jobs", purged);
-                    lastPurge = DateTime.UtcNow;
-                }
-
-                // Find queued jobs
-                var allJobs = await _storage.GetAllAsync(cancellationToken: stoppingToken);
-                var queuedJobs = allJobs.Where(j => j.Status == SearchJobStatus.Queued).ToList();
-
-                foreach (var job in queuedJobs)
-                {
-                    if (stoppingToken.IsCancellationRequested) break;
-
-                    await _concurrencyLimiter.WaitAsync(stoppingToken);
-
-                    // Fire and forget — the semaphore limits concurrency
-                    _ = Task.Run(async () =>
+                    if (!wasLeader)
                     {
-                        try
-                        {
-                            await ExecuteJobAsync(job, stoppingToken);
-                        }
-                        finally
-                        {
-                            _concurrencyLimiter.Release();
-                        }
-                    }, stoppingToken);
+                        await RequeueAbandonedJobsAsync(stoppingToken);
+                        wasLeader = true;
+                    }
+
+                    if (DateTime.UtcNow - lastPurge > PurgeInterval)
+                    {
+                        var purged = await _storage.PurgeExpiredAsync(stoppingToken);
+                        if (purged > 0)
+                            _logger.LogInformation("Purged {Count} expired search jobs", purged);
+                        lastPurge = DateTime.UtcNow;
+                    }
+
+                    await StartQueuedJobsAsync(stoppingToken);
+                }
+                else
+                {
+                    wasLeader = false;
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -82,8 +79,86 @@ public sealed class SearchJobService : BackgroundService
                 _logger.LogError(ex, "Error in search job processing loop");
             }
 
-            await Task.Delay(PollInterval, stoppingToken);
+            try
+            {
+                await Task.Delay(PollInterval, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
         }
+
+        // A job that's stopping records why, so wait for that
+        await Task.WhenAll(_running.Values);
+    }
+
+    /// <summary>
+    /// A job left Running with nothing running it belonged to an instance that died. Run it again.
+    /// </summary>
+    private async Task RequeueAbandonedJobsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var job in await _storage.GetAllAsync(cancellationToken: cancellationToken))
+        {
+            if (job.Status == SearchJobStatus.Running && !_running.ContainsKey(job.Id))
+            {
+                var full = await _storage.GetByIdAsync(job.Id, cancellationToken) ?? job;
+                full.Status = SearchJobStatus.Queued;
+                full.Progress = 0;
+                await _storage.UpdateAsync(full, cancellationToken);
+                _logger.LogWarning("Search job {JobId} was abandoned by a stopped instance; running it again", job.Id);
+            }
+        }
+    }
+
+    private async Task StartQueuedJobsAsync(CancellationToken stoppingToken)
+    {
+        var jobs = await _storage.GetAllAsync(cancellationToken: stoppingToken);
+        foreach (var job in jobs.Where(j => j.Status == SearchJobStatus.Queued && !_running.ContainsKey(j.Id)))
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+            await _concurrencyLimiter.WaitAsync(stoppingToken);
+
+            _running[job.Id] = Task.Run(async () =>
+            {
+                try
+                {
+                    await ExecuteJobAsync(job, stoppingToken);
+                }
+                finally
+                {
+                    _running.TryRemove(job.Id, out _);
+                    _concurrencyLimiter.Release();
+                }
+            }, CancellationToken.None);
+        }
+    }
+
+    private async Task WatchForCancellationAsync(string jobId, CancellationTokenSource running, CancellationToken finished)
+    {
+        try
+        {
+            while (!finished.IsCancellationRequested)
+            {
+                await Task.Delay(PollInterval, finished);
+                if (await IsCancelledAsync(jobId, finished))
+                {
+                    await running.CancelAsync();
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The job finished, so there's nothing left to watch
+            return;
+        }
+    }
+
+    private async Task<bool> IsCancelledAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var job = await _storage.GetByIdAsync(jobId, cancellationToken);
+        return job is null or { Status: SearchJobStatus.Cancelled };
     }
 
     private async Task ExecuteJobAsync(SearchJob job, CancellationToken stoppingToken)
@@ -98,10 +173,17 @@ public sealed class SearchJobService : BackgroundService
         try
         {
             using var scope = _scopeFactory.CreateScope();
+
+            // The owner's access, as of when they submitted it
+            scope.ServiceProvider.GetRequiredService<IndexAccessScope>().ReadableIndexes = job.AllowedIndexes;
             var queryEngine = scope.ServiceProvider.GetRequiredService<IQueryEngine>();
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             timeoutCts.CancelAfter(TimeSpan.FromMinutes(10)); // 10 min max for async jobs
+
+            // Someone can cancel or delete it on any instance, so its stored state decides
+            using var finished = new CancellationTokenSource();
+            var watching = WatchForCancellationAsync(job.Id, timeoutCts, finished.Token);
 
             var context = new QueryExecutionContext
             {
@@ -114,7 +196,22 @@ public sealed class SearchJobService : BackgroundService
             job.Progress = 10;
             await _storage.UpdateAsync(job, stoppingToken);
 
-            var result = await queryEngine.ExecuteAsync(context, timeoutCts.Token);
+            QueryResult result;
+            try
+            {
+                result = await queryEngine.ExecuteAsync(context, timeoutCts.Token);
+            }
+            finally
+            {
+                await finished.CancelAsync();
+                await watching;
+            }
+
+            if (await IsCancelledAsync(job.Id, stoppingToken))
+            {
+                _logger.LogInformation("Search job {JobId} was cancelled", job.Id);
+                return;
+            }
 
             job.Progress = 90;
             await _storage.UpdateAsync(job, stoppingToken);
@@ -145,6 +242,12 @@ public sealed class SearchJobService : BackgroundService
         }
         catch (Exception ex)
         {
+            if (ex is OperationCanceledException && await IsCancelledAsync(job.Id, CancellationToken.None))
+            {
+                _logger.LogInformation("Search job {JobId} was cancelled", job.Id);
+                return;
+            }
+
             _logger.LogError(ex, "Search job {JobId} failed", job.Id);
             job.Status = SearchJobStatus.Failed;
             job.CompletedAt = DateTime.UtcNow;

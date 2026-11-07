@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using Cabinet.Core.Interfaces;
+using Cabinet.Core.Models;
 
 namespace Cabinet.API.Middleware;
 
@@ -12,6 +13,31 @@ namespace Cabinet.API.Middleware;
 /// </summary>
 public sealed class MetricsMiddleware
 {
+    // Prometheus scrapes every few seconds, and these stats scan the whole table
+    private static readonly TimeSpan StatsCacheDuration = TimeSpan.FromSeconds(60);
+    private readonly SemaphoreSlim _statsLock = new(1, 1);
+    private StorageStats? _cachedStats;
+    private DateTime _cachedStatsAt;
+
+    private async Task<StorageStats> GetCachedStatsAsync(ILogStorage storage, CancellationToken cancellationToken)
+    {
+        await _statsLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_cachedStats == null || DateTime.UtcNow - _cachedStatsAt >= StatsCacheDuration)
+            {
+                _cachedStats = await storage.GetStatsAsync(cancellationToken);
+                _cachedStatsAt = DateTime.UtcNow;
+            }
+
+            return _cachedStats;
+        }
+        finally
+        {
+            _statsLock.Release();
+        }
+    }
+
     private readonly RequestDelegate _next;
 
     public MetricsMiddleware(RequestDelegate next)
@@ -49,7 +75,7 @@ public sealed class MetricsMiddleware
         }
     }
 
-    private static async Task WriteMetricsAsync(HttpContext context)
+    private async Task WriteMetricsAsync(HttpContext context)
     {
         context.Response.ContentType = "text/plain; version=0.0.4; charset=utf-8";
         context.Response.StatusCode = 200;
@@ -84,7 +110,7 @@ public sealed class MetricsMiddleware
             {
                 // Timeout storage stats to prevent hanging the metrics endpoint
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var stats = await storage.GetStatsAsync(cts.Token);
+                var stats = await GetCachedStatsAsync(storage, cts.Token);
                 sb.AppendLine("# HELP cabinet_events_total Total number of stored log events.");
                 sb.AppendLine("# TYPE cabinet_events_total gauge");
                 sb.AppendLine($"cabinet_events_total {stats.TotalEvents}");

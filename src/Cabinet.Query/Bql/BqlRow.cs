@@ -26,8 +26,10 @@ public sealed class BqlRow : Dictionary<string, object?>
             ["log_level"] = "LogLevel",
         };
 
+        // Called for every field of every row. All aliases have one of these lengths, which saves
+        // hashing most names twice.
         private static string Canonical(string name) =>
-            Aliases.TryGetValue(name, out var canonical) ? canonical : name;
+            name.Length is 5 or 8 or 9 or 11 && Aliases.TryGetValue(name, out var canonical) ? canonical : name;
 
         public bool Equals(string? x, string? y)
         {

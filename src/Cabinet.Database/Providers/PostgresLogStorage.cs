@@ -6,6 +6,7 @@ using Cabinet.Core.Models;
 using Dapper;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Cabinet.Database.Providers;
 
@@ -15,6 +16,12 @@ namespace Cabinet.Database.Providers;
 /// </summary>
 public sealed class PostgresLogStorage : ILogStorage, IDisposable
 {
+    private const string InsertColumns = "id, timestamp, source_type, severity, server_id, raw_line, source_file, line_number, parser_name, fields, tags, index_time, index_name";
+
+    // Splits text at anything but letters and digits, as the other backends do. The default parser
+    // would keep /var/log/app.log as one word, so searching for "log" wouldn't find it.
+    private const string SearchVector = "to_tsvector('simple'::regconfig, regexp_replace(raw_line, '[^[:alnum:]]+', ' ', 'g'))";
+
     private readonly string _connectionString;
     private readonly ILogger<PostgresLogStorage> _logger;
     private readonly NpgsqlDataSource _dataSource;
@@ -61,10 +68,17 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )");
 
-            // BRIN index on timestamp — optimal for time-series append-only data
+            // Every read is by time, newest first, a page at a time. This index answers one without
+            // sorting all the matches, which a BRIN index can't.
             await conn.ExecuteAsync(@"
-                CREATE INDEX IF NOT EXISTS idx_log_events_timestamp_brin
-                ON log_events USING BRIN (timestamp) WITH (pages_per_range = 32)");
+                CREATE INDEX IF NOT EXISTS idx_log_events_timestamp_id
+                ON log_events (timestamp DESC, id DESC)");
+            await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_timestamp_brin");
+
+            // Most reads are on one index. Without this, each page reads all of it and sorts.
+            await conn.ExecuteAsync(@"
+                CREATE INDEX IF NOT EXISTS idx_log_events_index_timestamp_id
+                ON log_events (index_name, timestamp DESC, id DESC)");
 
             // B-tree indexes for common filters
             await conn.ExecuteAsync(@"
@@ -88,9 +102,10 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
                 CREATE INDEX IF NOT EXISTS idx_log_events_tags ON log_events USING GIN (tags)");
 
             // Full-text search index on raw_line
-            await conn.ExecuteAsync(@"
-                CREATE INDEX IF NOT EXISTS idx_log_events_fts
-                ON log_events USING GIN (to_tsvector('english', raw_line))");
+            await conn.ExecuteAsync($@"
+                CREATE INDEX IF NOT EXISTS idx_log_events_search
+                ON log_events USING GIN ({SearchVector})");
+            await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_fts");
 
             await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
@@ -125,21 +140,60 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
         await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await conn.BeginTransactionAsync(cancellationToken);
 
-        var inserted = 0;
-        foreach (var batch in eventList.Chunk(500))
+        // COPY is far cheaper than a statement per row, but can't skip an existing ID. So it loads
+        // a temporary table, and one INSERT moves the rows, ignoring IDs already stored.
+        await conn.ExecuteAsync(
+            "CREATE TEMP TABLE log_events_load (LIKE log_events INCLUDING DEFAULTS) ON COMMIT DROP",
+            transaction: transaction);
+
+        await using (var importer = await conn.BeginBinaryImportAsync(
+            $"COPY log_events_load ({InsertColumns}) FROM STDIN (FORMAT BINARY)", cancellationToken))
         {
-            inserted += await conn.ExecuteAsync(@"
-                INSERT INTO log_events (id, timestamp, source_type, severity, server_id, raw_line, source_file, line_number, parser_name, fields, tags, index_time, index_name)
-                VALUES (@Id, @Timestamp, @SourceType, @Severity, @Host, @RawLine, @SourceFile, @LineNumber, @ParserName, @Fields::jsonb, @Tags, @IndexTime, @IndexName)
-                ON CONFLICT (id) DO NOTHING",
-                batch.Select(MapToParams),
-                transaction);
+            foreach (var logEvent in eventList)
+            {
+                await importer.StartRowAsync(cancellationToken);
+                await importer.WriteAsync(logEvent.Id, NpgsqlDbType.Text, cancellationToken);
+                await importer.WriteAsync(DateTime.SpecifyKind(logEvent.Timestamp, DateTimeKind.Utc), NpgsqlDbType.TimestampTz, cancellationToken);
+                await importer.WriteAsync(logEvent.SourceType, NpgsqlDbType.Text, cancellationToken);
+                await importer.WriteAsync((short)logEvent.Severity, NpgsqlDbType.Smallint, cancellationToken);
+                await WriteNullableAsync(importer, logEvent.Host, cancellationToken);
+                await importer.WriteAsync(RemoveNulls(logEvent.RawLine), NpgsqlDbType.Text, cancellationToken);
+                await WriteNullableAsync(importer, logEvent.SourceFile, cancellationToken);
+                await importer.WriteAsync(logEvent.LineNumber, NpgsqlDbType.Bigint, cancellationToken);
+                await WriteNullableAsync(importer, logEvent.ParserName, cancellationToken);
+                await importer.WriteAsync(RemoveNulls(JsonSerializer.Serialize(logEvent.Fields)), NpgsqlDbType.Jsonb, cancellationToken);
+                await importer.WriteAsync(logEvent.Tags.ToArray(), NpgsqlDbType.Array | NpgsqlDbType.Text, cancellationToken);
+                await importer.WriteAsync(DateTime.SpecifyKind(logEvent.IndexTime, DateTimeKind.Utc), NpgsqlDbType.TimestampTz, cancellationToken);
+                await importer.WriteAsync(logEvent.Index, NpgsqlDbType.Text, cancellationToken);
+            }
+
+            await importer.CompleteAsync(cancellationToken);
         }
+
+        var inserted = await conn.ExecuteAsync(
+            $"INSERT INTO log_events ({InsertColumns}) SELECT {InsertColumns} FROM log_events_load ON CONFLICT (id) DO NOTHING",
+            transaction: transaction);
 
         await transaction.CommitAsync(cancellationToken);
         _logger.LogDebug("Batch stored {Count} events", inserted);
         return inserted;
     }
+
+    private static async Task WriteNullableAsync(NpgsqlBinaryImporter importer, string? value, CancellationToken cancellationToken)
+    {
+        if (value == null)
+        {
+            await importer.WriteNullAsync(cancellationToken);
+        }
+        else
+        {
+            await importer.WriteAsync(RemoveNulls(value), NpgsqlDbType.Text, cancellationToken);
+        }
+    }
+
+    /// <summary>Postgres text can't hold a NUL character, and a stray one mustn't lose the batch.</summary>
+    private static string RemoveNulls(string value) =>
+        value.Contains('\0') ? value.Replace("\0", string.Empty, StringComparison.Ordinal) : value;
 
     public async IAsyncEnumerable<LogEvent> QueryAsync(
         QueryContext context,
@@ -334,6 +388,15 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
         AppendFilters(sb, p, context);
 
+        if (context.After != null)
+        {
+            sb.Append(context.SortDescending
+                ? " AND (timestamp, id) < (@AfterTimestamp, @AfterId)"
+                : " AND (timestamp, id) > (@AfterTimestamp, @AfterId)");
+            p.Add("AfterTimestamp", context.After.Timestamp);
+            p.Add("AfterId", context.After.Id);
+        }
+
         // Sort
         var sortCol = context.SortField.ToLowerInvariant() switch
         {
@@ -342,7 +405,9 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
             "sourcetype" or "source_type" => "source_type",
             _ => "timestamp"
         };
-        sb.Append(context.SortDescending ? $" ORDER BY {sortCol} DESC" : $" ORDER BY {sortCol} ASC");
+
+        // ID breaks ties, so pages of events with the same time are stable
+        sb.Append(context.SortDescending ? $" ORDER BY {sortCol} DESC, id DESC" : $" ORDER BY {sortCol} ASC, id ASC");
 
         if (includeLimit)
         {
@@ -364,10 +429,11 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
 
     private static void AppendFilters(StringBuilder sb, DynamicParameters p, QueryContext context)
     {
-        if (!string.IsNullOrWhiteSpace(context.SearchText) && context.SearchText != "*")
+        var terms = SearchTerms.Parse(context.SearchText);
+        if (terms.Count > 0)
         {
-            sb.Append(" AND to_tsvector('english', raw_line) @@ websearch_to_tsquery('english', @SearchText)");
-            p.Add("SearchText", context.SearchText);
+            sb.Append($" AND {SearchVector} @@ plainto_tsquery('simple', @SearchText)");
+            p.Add("SearchText", string.Join(' ', terms));
         }
 
         if (context.StartTime.HasValue)
@@ -404,6 +470,17 @@ public sealed class PostgresLogStorage : ILogStorage, IDisposable
         {
             sb.Append(" AND index_name = @IndexName");
             p.Add("IndexName", context.Index);
+        }
+
+        if (context.AllowedIndexes != null)
+        {
+            var conditions = context.AllowedIndexes.Select((_, i) => $"index_name ILIKE @AllowedIndex{i} ESCAPE '\\'").ToList();
+            sb.Append($" AND ({(conditions.Count == 0 ? "FALSE" : string.Join(" OR ", conditions))})");
+            for (var i = 0; i < context.AllowedIndexes.Count; i++)
+            {
+                var escaped = context.AllowedIndexes[i].Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+                p.Add($"AllowedIndex{i}", escaped.EndsWith('*') ? $"{escaped[..^1]}%" : escaped);
+            }
         }
 
         if (context.Tags != null && context.Tags.Count > 0)

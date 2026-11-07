@@ -1,3 +1,4 @@
+using Cabinet.Core.Interfaces;
 
 namespace Cabinet.API.Services;
 
@@ -27,7 +28,8 @@ public class RetentionBackgroundService : BackgroundService
                 using var scope = _serviceProvider.CreateScope();
                 var retentionService = scope.ServiceProvider.GetService<RetentionService>();
 
-                if (retentionService != null)
+                // One instance is enough. It's checked hourly, so a new leader starts within the hour.
+                if (retentionService != null && _serviceProvider.GetService<ILeaderLease>()?.IsLeader != false)
                 {
                     await retentionService.ApplyRetentionPoliciesAsync(stoppingToken);
                 }

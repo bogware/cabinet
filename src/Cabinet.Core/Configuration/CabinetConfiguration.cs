@@ -54,11 +54,6 @@ public class CabinetConfiguration
     public CLIConfiguration CLI { get; set; } = new();
 
     /// <summary>
-    /// Distributed deployment configuration (Redis, leader election, caching)
-    /// </summary>
-    public DistributedConfiguration Distributed { get; set; } = new();
-
-    /// <summary>
     /// Syslog listener configuration
     /// </summary>
     public SyslogListenerConfiguration Syslog { get; set; } = new();
@@ -296,72 +291,3 @@ public class CLIConfiguration
     public bool UseColorOutput { get; set; } = true;
 }
 
-/// <summary>
-/// Configuration for distributed deployment (multi-instance, Redis coordination)
-/// </summary>
-public class DistributedConfiguration
-{
-    /// <summary>
-    /// Enable distributed mode. When false, single-instance in-memory patterns are used.
-    /// </summary>
-    public bool Enabled { get; set; }
-
-    /// <summary>
-    /// Redis connection string for coordination, caching, and rate limiting.
-    /// Required when Enabled is true.
-    /// </summary>
-    public string? RedisConnectionString { get; set; }
-
-    /// <summary>
-    /// Unique instance identifier. Defaults to machine name.
-    /// In Kubernetes, set to the pod name via downward API.
-    /// </summary>
-    public string InstanceId { get; set; } = Environment.MachineName;
-
-    /// <summary>
-    /// Leader election configuration for background services
-    /// </summary>
-    public LeaderElectionConfiguration LeaderElection { get; set; } = new();
-
-    /// <summary>
-    /// Cache TTL configuration
-    /// </summary>
-    public CacheConfiguration Cache { get; set; } = new();
-}
-
-/// <summary>
-/// Leader election settings for coordinating background services across instances
-/// </summary>
-public class LeaderElectionConfiguration
-{
-    /// <summary>
-    /// Enable leader election for background services (retention, etc.)
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
-    /// <summary>
-    /// Lease duration in seconds. If the leader fails to renew, another instance can take over.
-    /// </summary>
-    public int LeaseTimeSeconds { get; set; } = 30;
-
-    /// <summary>
-    /// How often to renew the lease (should be less than LeaseTimeSeconds)
-    /// </summary>
-    public int RenewalIntervalSeconds { get; set; } = 10;
-}
-
-/// <summary>
-/// Cache TTL settings for distributed caching
-/// </summary>
-public class CacheConfiguration
-{
-    /// <summary>
-    /// Default cache TTL in seconds
-    /// </summary>
-    public int DefaultTtlSeconds { get; set; } = 300;
-
-    /// <summary>
-    /// TTL for cached query results
-    /// </summary>
-    public int QueryResultTtlSeconds { get; set; } = 30;
-}

@@ -17,14 +17,19 @@ namespace Cabinet.API.Controllers;
 [ApiController]
 [Route("api/v1/[controller]")]
 [Authorize]
+[LimitConcurrency]
 public class QueryController : ControllerBase
 {
+    private static string QueryErrorDetail(QueryParseException ex) =>
+        ex is Cabinet.Query.Bql.QueryLimitExceededException ? ex.Message : $"Invalid query syntax: {ex.Message}";
+
     private readonly IQueryEngine _queryEngine;
     private readonly IQueryParser _queryParser;
     private readonly ISavedQueryStorage _savedQueryStorage;
     private readonly IAuditLogger _auditLogger;
     private readonly INaturalLanguageTranslator? _nlTranslator;
     private readonly Services.QueryCacheService? _queryCache;
+    private readonly Cabinet.API.Authentication.IndexAccessScope? _indexScope;
     private readonly ILogger<QueryController> _logger;
 
     public QueryController(
@@ -34,8 +39,10 @@ public class QueryController : ControllerBase
         IAuditLogger auditLogger,
         ILogger<QueryController> logger,
         INaturalLanguageTranslator? nlTranslator = null,
-        Services.QueryCacheService? queryCache = null)
+        Services.QueryCacheService? queryCache = null,
+        Cabinet.API.Authentication.IndexAccessScope? indexScope = null)
     {
+        _indexScope = indexScope;
         _queryEngine = queryEngine;
         _queryParser = queryParser;
         _savedQueryStorage = savedQueryStorage;
@@ -76,7 +83,7 @@ public class QueryController : ControllerBase
             var useCache = request.UseCache;
             if (useCache && _queryCache != null)
             {
-                var cached = _queryCache.TryGet(request.Query);
+                var cached = _queryCache.TryGet(request.Query, _indexScope?.CacheKey);
                 if (cached != null)
                 {
                     var cacheTime = DateTime.UtcNow - startTime;
@@ -87,7 +94,9 @@ public class QueryController : ControllerBase
                         Results = cached.Events.Cast<object>().Take(50_000).ToList(),
                         Count = Math.Min(cached.Events.Count, 50_000),
                         ExecutionTimeMs = (int)cacheTime.TotalMilliseconds,
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        Truncated = cached.Statistics?.Truncated == true,
+                        Approximate = cached.Statistics?.Approximate == true
                     });
                 }
             }
@@ -103,7 +112,7 @@ public class QueryController : ControllerBase
             // Cache the result for future requests
             if (_queryCache != null)
             {
-                _queryCache.Set(request.Query, result);
+                _queryCache.Set(request.Query, result, _indexScope?.CacheKey);
                 Response.Headers["X-Cache"] = "MISS";
             }
 
@@ -139,12 +148,14 @@ public class QueryController : ControllerBase
                 Results = resultList,
                 Count = resultList.Count,
                 ExecutionTimeMs = (int)executionTime.TotalMilliseconds,
-                Timestamp = DateTime.UtcNow
+                Timestamp = DateTime.UtcNow,
+                Truncated = truncated,
+                Approximate = result.Statistics?.Approximate == true
             });
         }
         catch (QueryParseException ex)
         {
-            return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+            return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -165,7 +176,7 @@ public class QueryController : ControllerBase
     /// without materializing all events in memory.
     /// </summary>
     [HttpPost("stream")]
-    [RequireCapability(Capability.Search)]
+    [RequireCapability(Capability.Export)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task StreamQuery([FromBody] QueryRequest request, CancellationToken cancellationToken)
@@ -198,7 +209,7 @@ public class QueryController : ControllerBase
         {
             Response.StatusCode = StatusCodes.Status400BadRequest;
             await Response.WriteAsJsonAsync(
-                new ProblemDetails { Detail = $"Invalid query syntax: {ex.Message}", Status = 400, Title = "Bad Request" },
+                new ProblemDetails { Detail = QueryErrorDetail(ex), Status = 400, Title = "Bad Request" },
                 cancellationToken);
             return;
         }
@@ -332,7 +343,7 @@ public class QueryController : ControllerBase
         }
         catch (QueryParseException ex)
         {
-            return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+            return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
         }
 
         var savedQuery = new SavedQuery
@@ -425,7 +436,7 @@ public class QueryController : ControllerBase
             }
             catch (QueryParseException ex)
             {
-                return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+                return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
             }
             existing.Query = request.Query;
         }
@@ -596,7 +607,7 @@ public class QueryController : ControllerBase
         }
         catch (QueryParseException ex)
         {
-            return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+            return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
         }
     }
 
@@ -662,7 +673,7 @@ public class QueryController : ControllerBase
         }
         catch (QueryParseException ex)
         {
-            return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+            return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -715,7 +726,7 @@ public class QueryController : ControllerBase
         }
         catch (QueryParseException ex)
         {
-            return Problem(detail: $"Invalid query syntax: {ex.Message}", statusCode: 400);
+            return Problem(detail: QueryErrorDetail(ex), statusCode: 400);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -830,9 +841,14 @@ public class QueryResponse
     public DateTime Timestamp { get; set; }
 
     /// <summary>
-    /// True when more events matched than could be read, so results may be incomplete.
+    /// True when a stage needed more rows than a query can hold, so results may be incomplete.
     /// </summary>
     public bool Truncated { get; set; }
+
+    /// <summary>
+    /// True when a median or percentile came from a sample of its values.
+    /// </summary>
+    public bool Approximate { get; set; }
 }
 
 public class ValidationResponse

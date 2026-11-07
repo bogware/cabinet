@@ -28,12 +28,12 @@ dotnet run --project src/Cabinet.API   # Dashboard: http://localhost:5068
 # Build cross-platform release artifacts + .deb packages into dist/
 ./scripts/build-release.sh 1.0.0
 
-# Docker stack (API on host port 5000, CLI, Agent, Postgres, Redis)
+# Docker stack (API on host port 5000, CLI, Agent, Postgres)
 # Optional profiles: monitoring (Grafana/Prometheus), development (LocalStack)
 docker-compose up -d
 ```
 
-Dev API keys (development only): `dev-basic-key`, `dev-professional-key`, `dev-enterprise-key` — pass via `X-API-Key` header.
+Dev API keys (development only): `dev-basic-key`, `dev-professional-key`, `dev-enterprise-key`, `dev-admin-key` — pass via `X-API-Key` header.
 
 ## Build Configuration (enforced repo-wide via `Directory.Build.props`)
 
@@ -66,7 +66,7 @@ Rules to preserve when adding code:
 
 ### Storage is pluggable behind `ILogStorage` (`Cabinet.Core/Interfaces/ILogStorage.cs`)
 
-Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQL (prod), OpenSearch (enterprise). Selection is by `Storage:Type` config (`SQLite`, `Memory`, `PostgreSQL`/`Postgres`, `OpenSearch`/`Elasticsearch`; validated at startup in `Program.cs`). If a remote backend is unreachable at startup, the API retries, then exits with a failure code; there is no fallback backend. Stores with no implementation on the selected backend use a local SQLite database (`Storage:MetadataConnectionString`, see `Infrastructure/StorageRegistration.cs`), so that metadata is per-instance. When adding a backend, implement all `ILogStorage` methods, follow the volatile + `SemaphoreSlim` init pattern (see ARCHITECTURE.md "Thread-Safety Patterns"), parameterize **all** queries, and register in `Program.cs`'s storage switch.
+Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQL (prod), OpenSearch (enterprise). Selection is by `Storage:Type` config (`SQLite`, `Memory`, `PostgreSQL`/`Postgres`, `OpenSearch`/`Elasticsearch`; validated at startup in `Program.cs`). If a remote backend is unreachable at startup, the API retries, then exits with a failure code; there is no fallback backend. Metadata lives on the backend where it can (`Infrastructure/StorageRegistration.cs`). On OpenSearch it uses a local SQLite database (`Storage:MetadataConnectionString`), or PostgreSQL with `Storage:MetadataPostgresConnectionString`. New shared state goes in `IDocumentStore`. Work only one instance may do checks `ILeaderLease`. When adding a backend, implement all `ILogStorage` methods, follow the volatile + `SemaphoreSlim` init pattern (see ARCHITECTURE.md "Thread-Safety Patterns"), parameterize **all** queries, and register in `Program.cs`'s storage switch.
 
 ### Optional extensions
 
@@ -86,7 +86,7 @@ Hand-written recursive-descent parser (~3000 lines in `Bql/BqlParser.cs`) — no
 Text → BqlLexer → BqlParser → AST → BqlOptimizer (predicate pushdown) → BqlQueryEngine → Results
 ```
 
-The optimizer pushes only the leading run of filters, and only predicates every backend evaluates exactly like the pipeline (search text, `severity >=`, `host =`, `source_type =`, time range, sort by time); everything else runs as pipeline stages. Don't push a predicate unless backends match pipeline semantics; `BqlEndToEndTests` runs the same queries on all four backends. Rows are `BqlRow`, a dictionary with case-insensitive field names and aliases, because stages (`eval`, `rename`, `rex`, `stats`) change the schema at runtime. Materializing rows is a known bottleneck for large results (ADR-004 / PERF-01). Queries reading more than `QueryContext.MaxLimit` events set `Statistics.Truncated`.
+The optimizer pushes only the leading run of filters, and only predicates every backend evaluates exactly like the pipeline (search text, `severity >=`, `host =`, `source_type =`, time range, sort by time); everything else runs as pipeline stages. Don't push a predicate unless backends match pipeline semantics; `BqlEndToEndTests` runs the same queries on all four backends. Rows are `BqlRow`, a dictionary with case-insensitive field names and aliases, because stages (`eval`, `rename`, `rex`, `stats`) change the schema at runtime. `BqlQueryEngine` reads storage a page at a time with `QueryContext.After` and feeds a pipeline's leading row stages into its first stateful stage, an `IRowSink` (`BqlStreaming.cs`), so memory follows what's computed rather than events read. Stages that need all their rows hold up to `QueryLimits.MaxRowsInMemory` and set `Statistics.Truncated`. Every aggregate goes through `AggregateAccumulator`. Text search means one thing everywhere: `SearchTerms`.
 
 ### Identity & auth
 
@@ -100,7 +100,7 @@ Order as wired in `Program.cs`, omitting logging, CORS, and static files:
 
 `IpRateLimitingMiddleware (pre-auth) → Authentication (API key / OIDC) → Authorization → ASP.NET rate limiter → [RequireCapability] filter → Controller`
 
-Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`. Each deployment serves one organization; there is no multi-tenancy. Audit log is SHA-256 hash-chained (`TamperEvidentAuditLogger`).
+Capability checks are per-controller or per-action attributes, not middleware, so a new endpoint has no RBAC check unless you add `[RequireCapability]`; `EveryEndpoint_RequiresACapability` fails if you don't. The attribute checks a capability on any index and records the caller in the scoped `IndexAccessScope`. Reads go through `IndexRestrictedLogStorage` to enforce it, so anything reading `ILogStorage` for a caller must use `scope.Restrict(storage)`, and writes and deletes check `scope.Can(capability, index)`. Each deployment serves one organization; there is no multi-tenancy. Audit log is SHA-256 hash-chained (`TamperEvidentAuditLogger`).
 
 ## Code Conventions
 

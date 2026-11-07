@@ -45,6 +45,9 @@ public sealed class SearchJob
     /// <summary>Who submitted the job</summary>
     public string? Owner { get; set; }
 
+    /// <summary>Index patterns the owner could read when submitting it. Null means every index.</summary>
+    public List<string>? AllowedIndexes { get; set; }
+
     /// <summary>Optional index scope</summary>
     public string? Index { get; set; }
 

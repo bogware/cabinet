@@ -58,6 +58,7 @@ public class AlertsController : ControllerBase
     /// Acknowledge an alert.
     /// </summary>
     [HttpPost("{id}/acknowledge")]
+    [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(typeof(AlertRecord), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> AcknowledgeAlert(string id)

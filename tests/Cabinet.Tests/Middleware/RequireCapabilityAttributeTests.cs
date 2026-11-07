@@ -65,8 +65,8 @@ public class RequireCapabilityAttributeTests
     [Fact]
     public async Task ClientWithoutCapability_IsForbidden()
     {
-        _rbac.Setup(r => r.HasCapabilityAsync("client", Capability.Export, "main", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+        _rbac.Setup(r => r.GetPrincipalAsync("client", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RbacPrincipal { Id = "client", Role = SystemRole.Viewer });
         var context = CreateContext(Authenticated(new Claim("ClientId", "client")));
 
         await new RequireCapabilityAttribute(Capability.Export).OnAuthorizationAsync(context);
@@ -77,8 +77,8 @@ public class RequireCapabilityAttributeTests
     [Fact]
     public async Task ClientWithCapability_IsAllowed()
     {
-        _rbac.Setup(r => r.HasCapabilityAsync("client", Capability.Search, "main", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        _rbac.Setup(r => r.GetPrincipalAsync("client", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RbacPrincipal { Id = "client", Role = SystemRole.Viewer });
         var context = CreateContext(Authenticated(new Claim("ClientId", "client")));
 
         await new RequireCapabilityAttribute(Capability.Search).OnAuthorizationAsync(context);

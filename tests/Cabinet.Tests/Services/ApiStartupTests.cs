@@ -335,6 +335,7 @@ public sealed class ApiStartupTests : IAsyncLifetime
         var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
         startInfo.Environment["Storage__Type"] = "PostgreSQL";
         startInfo.Environment["Storage__ConnectionString"] = connectionString;
+        startInfo.Environment["Storage__RetentionDays"] = "0";
         startInfo.Environment["Storage__MetadataConnectionString"] =
             $"Data Source={Path.Combine(_workingDirectory, "metadata.db")}";
 

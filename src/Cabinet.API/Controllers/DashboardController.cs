@@ -82,6 +82,7 @@ public class DashboardController : ControllerBase
     /// Create a new dashboard
     /// </summary>
     [HttpPost]
+    [RequireCapability(Capability.SavedQueries)]
     [ProducesResponseType(typeof(Dashboard), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -152,6 +153,7 @@ public class DashboardController : ControllerBase
     /// Update a dashboard
     /// </summary>
     [HttpPut("{id}")]
+    [RequireCapability(Capability.SavedQueries)]
     [ProducesResponseType(typeof(Dashboard), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]
@@ -227,6 +229,7 @@ public class DashboardController : ControllerBase
     /// Delete a dashboard
     /// </summary>
     [HttpDelete("{id}")]
+    [RequireCapability(Capability.SavedQueries)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [Authorize(Policy = "RequireWritePermission")]

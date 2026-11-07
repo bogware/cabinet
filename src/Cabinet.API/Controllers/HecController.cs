@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Cabinet.Parsers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
@@ -20,13 +21,15 @@ public class HecController : ControllerBase
 {
     private readonly ILogStorage _storage;
     private readonly LogLineParser _lineParser;
+    private readonly IndexAccessScope? _indexScope;
     private readonly IAuditLogger _auditLogger;
     private readonly Services.QueryCacheService? _queryCache;
     private readonly ILogger<HecController> _logger;
 
     public HecController(ILogStorage storage, LogLineParser lineParser, IAuditLogger auditLogger, ILogger<HecController> logger,
-        Services.QueryCacheService? queryCache = null)
+        Services.QueryCacheService? queryCache = null, IndexAccessScope? indexScope = null)
     {
+        _indexScope = indexScope;
         _storage = storage;
         _lineParser = lineParser;
         _auditLogger = auditLogger;
@@ -87,7 +90,13 @@ public class HecController : ControllerBase
                     continue;
                 }
 
-                events.Add(await ConvertHecEventAsync(hecEvent, cancellationToken));
+                var converted = await ConvertHecEventAsync(hecEvent, cancellationToken);
+                if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, converted.Index))
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new HecResponse { Text = $"Not allowed to ingest into index '{converted.Index}'", Code = 6 });
+                }
+
+                events.Add(converted);
             }
             catch (JsonException ex)
             {
@@ -195,6 +204,11 @@ public class HecController : ControllerBase
             logEvent.Host = host ?? logEvent.Host;
             logEvent.Index = index ?? "main";
             logEvent.SourceFile = source;
+            if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, logEvent.Index))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new HecResponse { Text = $"Not allowed to ingest into index '{logEvent.Index}'", Code = 6 });
+            }
+
 
             events.Add(logEvent);
         }

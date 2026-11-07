@@ -1,3 +1,4 @@
+using Cabinet.Core.Models;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -289,14 +290,16 @@ public sealed class BqlParser : IQueryParser
 
     private BqlExpression ParseNotExpression()
     {
-        if (Current.IsKeyword("not"))
+        // In a loop: recursing here would let a long chain of "not" overflow the stack.
+        var negations = 0;
+        while (Current.IsKeyword("not"))
         {
             Advance();
-            var operand = ParseNotExpression();
-            return new NotExpression(operand);
+            negations++;
         }
 
-        return ParseComparison();
+        var expression = ParseComparison();
+        return negations % 2 == 0 ? negations == 0 ? expression : new NotExpression(new NotExpression(expression)) : new NotExpression(expression);
     }
 
     private BqlExpression ParseComparison()
@@ -1676,20 +1679,19 @@ public sealed class BqlParser : IQueryParser
 
 internal sealed class LegacySearchOperator : QueryOperator
 {
-    private readonly string _pattern;
+    private readonly IReadOnlyList<string> _terms;
     public override string Name => "search";
 
-    public LegacySearchOperator(string pattern) { _pattern = pattern.Trim('"'); }
+    public LegacySearchOperator(string pattern) { _terms = SearchTerms.Parse(pattern); }
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        if (_pattern == "*") return Task.FromResult(input);
+        if (_terms.Count == 0) return Task.FromResult(input);
 
         var result = input.Where(evt =>
         {
             var dict = (IDictionary<string, object?>)evt;
-            var rawLine = dict.TryGetValue("RawLine", out var rl) ? rl?.ToString() : null;
-            return rawLine?.Contains(_pattern, StringComparison.OrdinalIgnoreCase) == true;
+            return SearchTerms.Matches(dict.TryGetValue("RawLine", out var line) ? line?.ToString() : null, _terms);
         });
 
         return Task.FromResult(result);
@@ -1705,8 +1707,9 @@ internal sealed class LegacyWhereOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var result = input.Where(evt => BqlExpressionEvaluator.EvaluateBool(_condition, (IDictionary<string, object?>)evt));
-        return Task.FromResult(result);
+        var rows = (IEnumerable<object>)input;
+        return Task.FromResult<IEnumerable<dynamic>>(
+            rows.Where(row => BqlExpressionEvaluator.EvaluateBool(_condition, (IDictionary<string, object?>)row)));
     }
 }
 
@@ -1722,166 +1725,30 @@ internal sealed class LegacyStatsOperator : QueryOperator
         _groupByFields = groupBy;
     }
 
+    internal List<AggregateFunction> Aggregations => _aggregations;
+
+    internal List<string> GroupByFields => _groupByFields;
+
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        // Safety: materialization is bounded upstream — BqlQueryEngine caps storage reads via
-        // QueryContext.Limit (default 10K) and BqlOptimizer.MaxFetchLimit (500K for aggregations).
-        var events = input.ToList();
-
-        if (_groupByFields.Count == 0)
+        var sink = new StatsSink(_aggregations, _groupByFields, new QueryBudget(new QueryLimits()));
+        foreach (object row in input)
         {
-            // No grouping — always produce a single row (even if empty set)
-            var row = new BqlRow();
-            foreach (var agg in _aggregations)
-                row[agg.OutputName] = ComputeAggregate(agg, events);
-            return Task.FromResult<IEnumerable<dynamic>>(new[] { (dynamic)row });
+            sink.Add(row);
         }
 
-        // Empty set with grouping returns empty (no groups to show)
-        if (events.Count == 0)
-        {
-            return Task.FromResult<IEnumerable<dynamic>>(Array.Empty<dynamic>());
-        }
-
-        // Group by
-        var groups = events.GroupBy(evt =>
-        {
-            var dict = (IDictionary<string, object?>)evt;
-            return BqlGroupKey.For(dict, _groupByFields);
-        });
-
-        var results = new List<dynamic>();
-        foreach (var group in groups)
-        {
-            // Materialize group once — avoids re-enumeration per aggregation function
-            var groupList = group.ToList();
-            var row = new BqlRow();
-            var first = (IDictionary<string, object?>)groupList[0];
-
-            foreach (var field in _groupByFields)
-                row[field] = first.TryGetValue(field, out var v) ? v : null;
-
-            foreach (var agg in _aggregations)
-                row[agg.OutputName] = ComputeAggregate(agg, groupList);
-
-            results.Add(row);
-        }
-
-        return Task.FromResult<IEnumerable<dynamic>>(results);
+        return Task.FromResult(sink.Complete());
     }
 
     internal static object? ComputeAggregate(AggregateFunction agg, List<dynamic> events)
     {
-        if (agg.Name == "count")
+        var accumulator = new AggregateAccumulator(agg, new QueryBudget(new QueryLimits()));
+        foreach (var row in events)
         {
-            return agg.Field == null
-                ? events.Count
-                : events.Count(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field, out var value) && value != null);
+            accumulator.Add((IDictionary<string, object?>)row);
         }
 
-        if (agg.Name == "dc" || agg.Name == "distinct_count")
-        {
-            return events
-                .Select(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field ?? "", out var v) ? v?.ToString() : null)
-                .Where(v => v != null)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
-        }
-
-        var values = events
-            .Select(e => GetNumericValue((IDictionary<string, object?>)e, agg.Field ?? ""))
-            .Where(v => v.HasValue)
-            .Select(v => v!.Value)
-            .ToList();
-
-        if (values.Count == 0)
-        {
-            // min and max also work on text
-            if (agg.Name is "min" or "max")
-            {
-                var text = events
-                    .Select(e => ((IDictionary<string, object?>)e).TryGetValue(agg.Field ?? "", out var v) ? v?.ToString() : null)
-                    .Where(v => v != null)
-                    .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                return text.Count == 0 ? null : agg.Name == "min" ? text[0] : text[^1];
-            }
-
-            return null;
-        }
-
-        // Handle percentile variants first (perc95, p99, etc.)
-        if (agg.Name.StartsWith("perc") || agg.Name == "percentile" ||
-            (agg.Name.StartsWith("p") && agg.Name.Length > 1 && char.IsDigit(agg.Name[1])))
-        {
-            return ComputePercentile(values, agg);
-        }
-
-        object? result = agg.Name switch
-        {
-            "sum" => values.Sum(),
-            "avg" or "mean" => values.Average(),
-            "min" => values.Min(),
-            "max" => values.Max(),
-            "median" => ComputeMedian(values),
-            "stdev" or "stdevp" => ComputeStdev(values, population: agg.Name == "stdevp"),
-            "variance" or "varp" => ComputeVariance(values, population: agg.Name == "varp"),
-            _ => throw new QueryParseException($"Unknown aggregate function: {agg.Name}")
-        };
-
-        // The sample deviation of a single value is undefined, which isn't a JSON number
-        return result is double number && !double.IsFinite(number) ? null : result;
-    }
-
-    private static double ComputeMedian(List<double> values)
-    {
-        var sorted = values.OrderBy(v => v).ToList();
-        var mid = sorted.Count / 2;
-        return sorted.Count % 2 == 0
-            ? (sorted[mid - 1] + sorted[mid]) / 2.0
-            : sorted[mid];
-    }
-
-    private static double ComputeStdev(List<double> values, bool population)
-    {
-        return Math.Sqrt(ComputeVariance(values, population));
-    }
-
-    private static double ComputeVariance(List<double> values, bool population = false)
-    {
-        if (values.Count == 0) return 0;
-        if (!population && values.Count == 1) return double.NaN;
-        var avg = values.Average();
-        var sumSquares = values.Sum(v => (v - avg) * (v - avg));
-        return population ? sumSquares / values.Count : sumSquares / (values.Count - 1);
-    }
-
-    private static double ComputePercentile(List<double> values, AggregateFunction agg)
-    {
-        if (values.Count == 0) return 0.0;
-
-        // percentile(field) defaults to 95th, perc95(field) uses 95
-        var percentile = 95.0;
-        var name = agg.Name.ToLowerInvariant();
-        if (name.StartsWith("perc") && double.TryParse(name[4..], NumberStyles.Any, CultureInfo.InvariantCulture, out var p))
-            percentile = p;
-        else if (name.StartsWith("p") && double.TryParse(name[1..], NumberStyles.Any, CultureInfo.InvariantCulture, out var p2))
-            percentile = p2;
-
-        // Clamp percentile to valid range
-        percentile = Math.Clamp(percentile, 0.0, 100.0);
-
-        var sorted = values.OrderBy(v => v).ToList();
-        if (sorted.Count == 1) return sorted[0];
-
-        var index = (percentile / 100.0) * (sorted.Count - 1);
-        var lower = (int)Math.Floor(index);
-        var upper = (int)Math.Ceiling(index);
-        lower = Math.Clamp(lower, 0, sorted.Count - 1);
-        upper = Math.Clamp(upper, 0, sorted.Count - 1);
-        if (lower == upper) return sorted[lower];
-        var fraction = index - lower;
-        return sorted[lower] + fraction * (sorted[upper] - sorted[lower]);
+        return accumulator.Result();
     }
 
     internal static double? GetNumericValue(IDictionary<string, object?> dict, string field)
@@ -1902,27 +1769,34 @@ internal sealed class LegacySortOperator : QueryOperator
 
     public LegacySortOperator(List<SortField> fields) { _fields = fields; }
 
-    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default) =>
+        Task.FromResult(Order(input));
+
+    /// <summary>Orders rows. Rows that compare equal keep their order.</summary>
+    internal IEnumerable<dynamic> Order(IEnumerable<dynamic> input)
     {
-        if (_fields.Count == 0) return Task.FromResult(input);
+        if (_fields.Count == 0)
+        {
+            return input;
+        }
 
         var first = _fields[0];
-        IOrderedEnumerable<dynamic> ordered = first.Descending
-            ? input.OrderByDescending(e => GetSortValue(e, first.Field))
-            : input.OrderBy(e => GetSortValue(e, first.Field));
+        var ordered = first.Descending
+            ? input.OrderByDescending<dynamic, object?>(e => GetSortValue(e, first.Field), BqlValueComparer.Instance)
+            : input.OrderBy<dynamic, object?>(e => GetSortValue(e, first.Field), BqlValueComparer.Instance);
 
         for (var i = 1; i < _fields.Count; i++)
         {
             var f = _fields[i];
             ordered = f.Descending
-                ? ordered.ThenByDescending(e => GetSortValue(e, f.Field))
-                : ordered.ThenBy(e => GetSortValue(e, f.Field));
+                ? ordered.ThenByDescending<dynamic, object?>(e => GetSortValue(e, f.Field), BqlValueComparer.Instance)
+                : ordered.ThenBy<dynamic, object?>(e => GetSortValue(e, f.Field), BqlValueComparer.Instance);
         }
 
-        return Task.FromResult<IEnumerable<dynamic>>(ordered);
+        return ordered;
     }
 
-    private static object? GetSortValue(dynamic evt, string field)
+    private static object? GetSortValue(object evt, string field)
     {
         var dict = (IDictionary<string, object?>)evt;
         return dict.TryGetValue(field, out var v) ? v : null;
@@ -1936,6 +1810,8 @@ internal sealed class LegacyLimitOperator : QueryOperator
 
     public LegacyLimitOperator(int count) { _count = count; }
 
+    internal int Count => _count;
+
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default) =>
         Task.FromResult(input.Take(_count));
 }
@@ -1946,6 +1822,8 @@ internal sealed class LegacyTailOperator : QueryOperator
     public override string Name => "tail";
 
     public LegacyTailOperator(int count) { _count = count; }
+
+    internal int Count => _count;
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
@@ -1990,35 +1868,34 @@ internal sealed class LegacyTopOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var results = new List<dynamic>();
-        var withField = input
-            .Select(evt => (IDictionary<string, object?>)evt)
-            .Where(dict => dict.TryGetValue(_field, out var value) && value != null);
-
-        var groups = _byField == null
-            ? withField.GroupBy(_ => string.Empty)
-            : withField.GroupBy(dict => dict.TryGetValue(_byField, out var value) ? value?.ToString() ?? "" : "");
-
-        foreach (var group in groups)
+        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        foreach (object row in input)
         {
-            var ranked = group
-                .GroupBy(dict => dict[_field]?.ToString() ?? "")
-                .OrderByDescending(values => values.Count())
-                .ThenBy(values => values.Key, StringComparer.Ordinal)
-                .Take(_count);
-
-            foreach (var values in ranked)
-            {
-                var row = new BqlRow();
-                if (_byField != null)
-                    row[_byField] = group.Key;
-                row[_field] = values.Key;
-                row["count"] = values.Count();
-                results.Add(row);
-            }
+            sink.Add(row);
         }
 
-        return Task.FromResult<IEnumerable<dynamic>>(results);
+        return Task.FromResult(sink.Complete());
+    }
+
+    internal IRowSink CreateSink(QueryBudget budget) => new ValueCountSink(_field, _byField, budget, Rank);
+
+    private IEnumerable<dynamic> Rank(IEnumerable<KeyValuePair<string, long>> counts, string? group)
+    {
+        foreach (var (value, count) in counts
+            .OrderByDescending(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(_count))
+        {
+            var row = new BqlRow();
+            if (_byField != null)
+            {
+                row[_byField] = group;
+            }
+
+            row[_field] = value;
+            row["count"] = AggregateAccumulator.CountValue(count);
+            yield return row;
+        }
     }
 }
 
@@ -2075,6 +1952,8 @@ internal sealed class LegacyRexOperator : QueryOperator
 {
     private readonly string _pattern;
     private readonly string _sourceField;
+    private Regex? _regex;
+    private RegexTimeoutTracker? _timeouts;
     public override string Name => "rex";
 
     public LegacyRexOperator(string pattern, string sourceField)
@@ -2085,11 +1964,11 @@ internal sealed class LegacyRexOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        // Compile regex once with a timeout to prevent ReDoS from user-supplied patterns
-        var regex = new Regex(
-            _pattern,
-            RegexOptions.Compiled,
-            TimeSpan.FromSeconds(1));
+        // Runs for each batch of a query, so compile once. The timeout guards against ReDoS.
+        _regex ??= new Regex(_pattern, RegexOptions.Compiled, RegexTimeoutTracker.PerEvent);
+        _timeouts ??= new RegexTimeoutTracker(_pattern);
+        var regex = _regex;
+        var timeouts = _timeouts;
 
         var result = input.Select(evt =>
         {
@@ -2111,7 +1990,7 @@ internal sealed class LegacyRexOperator : QueryOperator
                 }
                 catch (RegexMatchTimeoutException)
                 {
-                    // Skip this event if the regex takes too long (likely ReDoS pattern)
+                    timeouts.Record();
                 }
             }
             return evt;
@@ -2152,7 +2031,6 @@ internal sealed class LegacyRenameOperator : QueryOperator
 internal sealed class LegacyTimechartOperator : QueryOperator
 {
     private readonly TimeSpan _span;
-    private readonly string _aggregation;
     private readonly string? _byField;
     private readonly AggregateFunction _function;
     public override string Name => "timechart";
@@ -2161,67 +2039,21 @@ internal sealed class LegacyTimechartOperator : QueryOperator
     {
         _span = span;
         _function = new AggregateFunction(aggregation, aggField);
-        _aggregation = _function.OutputName;
         _byField = byField;
     }
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var events = input.ToList();
-        var results = new List<dynamic>();
-
-        // Group events into time buckets
-        var buckets = events
-            .Select(e =>
-            {
-                var dict = (IDictionary<string, object?>)e;
-                var ts = dict.TryGetValue("Timestamp", out var v) && v is DateTime dt
-                    ? dt
-                    : DateTime.MinValue;
-                return (Event: e, Timestamp: ts);
-            })
-            .Where(x => x.Timestamp != DateTime.MinValue)
-            .GroupBy(x =>
-            {
-                var ticks = x.Timestamp.Ticks;
-                var bucketTicks = _span.Ticks;
-                return new DateTime((ticks / bucketTicks) * bucketTicks, DateTimeKind.Utc);
-            })
-            .OrderBy(g => g.Key);
-
-        foreach (var bucket in buckets)
+        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        foreach (object row in input)
         {
-            if (_byField != null)
-            {
-                // Sub-group by the by-field
-                var subGroups = bucket.GroupBy(x =>
-                {
-                    var dict = (IDictionary<string, object?>)x.Event;
-                    return dict.TryGetValue(_byField, out var v) ? v?.ToString() ?? "" : "";
-                });
-
-                foreach (var sub in subGroups)
-                {
-                    var row = new BqlRow();
-                    row["_time"] = bucket.Key;
-                    row[_byField] = sub.Key;
-                    row[_aggregation] = ComputeAgg(sub.Select(x => x.Event).ToList());
-                    results.Add(row);
-                }
-            }
-            else
-            {
-                var row = new BqlRow();
-                row["_time"] = bucket.Key;
-                row[_aggregation] = ComputeAgg(bucket.Select(x => x.Event).ToList());
-                results.Add(row);
-            }
+            sink.Add(row);
         }
 
-        return Task.FromResult<IEnumerable<dynamic>>(results);
+        return Task.FromResult(sink.Complete());
     }
 
-    private object? ComputeAgg(List<dynamic> events) => LegacyStatsOperator.ComputeAggregate(_function, events);
+    internal IRowSink CreateSink(QueryBudget budget) => new TimechartSink(_span, _function, _byField, budget);
 }
 
 internal sealed class LegacyFieldAliasOperator : QueryOperator
@@ -2715,46 +2547,27 @@ internal sealed class LegacyChartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        // One row per `over` value. With `by`, one column per `by` value.
-        if (_overField == null || _byField == null)
+        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        foreach (object row in input)
         {
-            var groupBy = new List<string>();
-            if (_overField != null) groupBy.Add(_overField);
-            if (_byField != null) groupBy.Add(_byField);
-            return new LegacyStatsOperator(_aggregations, groupBy).ExecuteAsync(input, ct);
+            sink.Add(row);
         }
 
-        static string Value(dynamic evt, string field) =>
-            ((IDictionary<string, object?>)evt).TryGetValue(field, out var value) ? value?.ToString() ?? "NULL" : "NULL";
+        return Task.FromResult(sink.Complete());
+    }
 
-        var events = input.ToList();
-        var columns = events
-            .Select(evt => (string)Value(evt, _byField))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(column => column, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var rows = new List<dynamic>();
-        foreach (var over in events.GroupBy(evt => (string)Value(evt, _overField), StringComparer.OrdinalIgnoreCase)
-                     .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+    /// <summary>One row per <c>over</c> value. With <c>by</c>, one column per <c>by</c> value.</summary>
+    internal IRowSink CreateSink(QueryBudget budget)
+    {
+        if (_overField != null && _byField != null)
         {
-            var row = new BqlRow { [_overField] = over.Key };
-            foreach (var column in columns)
-            {
-                var cell = over.Where(evt => string.Equals((string)Value(evt, _byField), column, StringComparison.OrdinalIgnoreCase)).ToList();
-                foreach (var aggregate in _aggregations)
-                {
-                    var name = _aggregations.Count == 1 ? column : $"{aggregate.OutputName}: {column}";
-                    row[name] = aggregate.Name == "count" || cell.Count > 0
-                        ? LegacyStatsOperator.ComputeAggregate(aggregate, cell)
-                        : null;
-                }
-            }
-
-            rows.Add(row);
+            return new ChartSink(_aggregations, _overField, _byField, budget);
         }
 
-        return Task.FromResult<IEnumerable<dynamic>>(rows);
+        var groupBy = new List<string>();
+        if (_overField != null) groupBy.Add(_overField);
+        if (_byField != null) groupBy.Add(_byField);
+        return new StatsSink(_aggregations, groupBy, budget);
     }
 }
 
@@ -2849,34 +2662,36 @@ internal sealed class LegacyRareOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var groups = input
-            .Where(evt => ((IDictionary<string, object?>)evt).TryGetValue(_field, out var value) && value != null)
-            .GroupBy(evt => (string)(((IDictionary<string, object?>)evt)[_field]?.ToString() ?? ""))
-            .OrderBy(g => g.Count()) // ascending = rarest first
-            .ThenBy(g => g.Key, StringComparer.Ordinal)
-            .Take(_count);
-
-        var results = groups.Select(g =>
+        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        foreach (object row in input)
         {
-            var row = new BqlRow();
-            row[_field] = g.Key;
-            row["count"] = g.Count();
-            row["percent"] = 0.0; // filled in below
-            return (dynamic)row;
-        }).ToList();
-
-        // Compute percentages
-        var total = results.Sum(r => (int)((IDictionary<string, object?>)r)["count"]!);
-        if (total > 0)
-        {
-            foreach (var r in results)
-            {
-                var dict = (IDictionary<string, object?>)r;
-                dict["percent"] = Math.Round((int)dict["count"]! * 100.0 / total, 2);
-            }
+            sink.Add(row);
         }
 
-        return Task.FromResult<IEnumerable<dynamic>>(results);
+        return Task.FromResult(sink.Complete());
+    }
+
+    internal IRowSink CreateSink(QueryBudget budget) => new ValueCountSink(_field, null, budget, (counts, _) => Rank(counts));
+
+    private IEnumerable<dynamic> Rank(IEnumerable<KeyValuePair<string, long>> counts)
+    {
+        var rarest = counts
+            .OrderBy(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(_count)
+            .ToList();
+
+        var total = rarest.Sum(pair => pair.Value);
+        return rarest.Select(pair =>
+        {
+            var row = new BqlRow
+            {
+                [_field] = pair.Key,
+                ["count"] = AggregateAccumulator.CountValue(pair.Value),
+                ["percent"] = total > 0 ? Math.Round(pair.Value * 100.0 / total, 2) : 0.0,
+            };
+            return (dynamic)row;
+        }).ToList();
     }
 }
 
@@ -2888,6 +2703,8 @@ internal sealed class LegacyRegexOperator : QueryOperator
     private readonly string _field;
     private readonly string _pattern;
     private readonly bool _negate;
+    private Regex? _regex;
+    private RegexTimeoutTracker? _timeouts;
     public override string Name => "regex";
 
     public LegacyRegexOperator(string field, string pattern, bool negate)
@@ -2899,15 +2716,19 @@ internal sealed class LegacyRegexOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        Regex regex;
+        // Runs for each batch of a query, so compile once.
         try
         {
-            regex = new Regex(_pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+            _regex ??= new Regex(_pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeoutTracker.PerEvent);
         }
         catch (ArgumentException ex)
         {
             throw new QueryParseException($"Invalid regular expression '{_pattern}': {ex.Message}");
         }
+
+        _timeouts ??= new RegexTimeoutTracker(_pattern);
+        var regex = _regex;
+        var timeouts = _timeouts;
 
         var result = input.Where(evt =>
         {
@@ -2920,6 +2741,7 @@ internal sealed class LegacyRegexOperator : QueryOperator
             }
             catch (RegexMatchTimeoutException)
             {
+                timeouts.Record();
                 return false;
             }
         });

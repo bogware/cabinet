@@ -22,6 +22,8 @@ public class SearchJobControllerTests
     public SearchJobControllerTests()
     {
         _jobStorage = new Mock<ISearchJobStorage>();
+        _jobStorage.Setup(s => s.GetAllAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<SearchJob>());
         _queryParser = new Mock<IQueryParser>();
         _auditLogger = new Mock<IAuditLogger>();
         var logger = new Mock<ILogger<SearchJobController>>();
@@ -209,6 +211,8 @@ public class SearchJobControllerTests
     [Fact]
     public async Task DeleteJob_Found_ReturnsNoContent()
     {
+        _jobStorage.Setup(s => s.GetByIdAsync("job-123", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SearchJob { Id = "job-123", Query = "find *" });
         _jobStorage.Setup(s => s.DeleteAsync("job-123", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 

@@ -40,6 +40,8 @@ public class ApiKeyService : IApiKeyService
             var keyHash = HashKey(key);
             _keysByHash[keyHash] = new ApiKeyInfo
             {
+                // From the key, so roles and ownership survive a restart and match on all instances
+                Id = PrincipalIdFor(keyHash),
                 Key = keyHash, // Store hash, not raw key
                 ClientName = name,
                 Tier = tier,
@@ -105,6 +107,7 @@ public class ApiKeyService : IApiKeyService
         var keyHash = HashKey(apiKey);
         _keysByHash[keyHash] = new ApiKeyInfo
         {
+            Id = PrincipalIdFor(keyHash),
             Key = keyHash, // Store hash only
             ClientName = clientName,
             Tier = tier,
@@ -150,11 +153,17 @@ public class ApiKeyService : IApiKeyService
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// A key's public ID. Part of its hash, which identifies it without letting anyone test guesses
+    /// of the key against the full hash.
+    /// </summary>
+    internal static string PrincipalIdFor(string keyHash) => $"key-{keyHash[..16]}";
+
     private static List<string> GetDefaultPermissions(string tier)
     {
         return tier.ToUpper() switch
         {
-            "ENTERPRISE" => new List<string> { "Read", "Write", "Delete", "Admin" },
+            "ADMIN" or "ENTERPRISE" => new List<string> { "Read", "Write", "Delete", "Admin" },
             "PROFESSIONAL" => new List<string> { "Read", "Write" },
             "BASIC" => new List<string> { "Read" },
             _ => new List<string> { "Read" }

@@ -21,8 +21,13 @@ public class StorageHealthCheck : IHealthCheck
     {
         try
         {
-            var count = await _storage.GetCountAsync(null, cancellationToken);
-            return HealthCheckResult.Healthy($"Storage accessible. {count} events stored.");
+            // Reads one event. Counting them all takes minutes on a large table.
+            await foreach (var _ in _storage.QueryAsync(new QueryContext { Limit = 1 }, cancellationToken))
+            {
+                break;
+            }
+
+            return HealthCheckResult.Healthy("Storage accessible.");
         }
         catch (Exception ex)
         {

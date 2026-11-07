@@ -24,24 +24,60 @@ Keys are validated locally on each instance by looking up their SHA-256 hash in 
 
 ### API Key Tiers
 
-Each tier maps to a fixed role. Rate limits are hardcoded per key.
+Each tier maps to a role. Rate limits are hardcoded per key.
 
 | Tier | Role | Rate limit | Capabilities |
 |------|------|-----------|--------------|
 | Basic | Viewer | 100 req/min | Search, SystemHealth |
 | Professional | Analyst | 1,000 req/min | Basic, plus Ingest, SavedQueries, Detection |
-| Enterprise | Admin | 10,000 req/min | Professional, plus Export, Alerts |
+| Enterprise | Admin | 10,000 req/min | Professional, plus Export, Alerts, IndexManagement |
+| Admin | SuperAdmin | 10,000 req/min | Everything, including UserManagement |
 
-Creating, updating or deleting dashboards, knowledge objects, saved queries, field extractions, retention definitions and scheduled searches also requires write permission, which Professional and Enterprise keys have.
+Creating, updating or deleting dashboards, knowledge objects, saved queries, field extractions, retention definitions and scheduled searches also requires write permission, which every tier above Basic has.
 
-No tier has `IndexManagement` or `UserManagement`. These routes therefore return 403 for every configured key:
+### Roles and index permissions
 
-- `DELETE /api/v1/logs`
-- `DELETE /api/v1/indexes/{name}`
-- `POST` and `DELETE` on `/api/v1/datamodels`
-- All of `/api/v1/roles`. `PUT /api/v1/roles/{apiKeyHash}` is also not implemented and would return 501.
+`GET /api/v1/roles/me` returns the caller's own principal, whose `clientId` identifies it. An API key's ID comes from the key, so it stays the same across restarts and instances.
 
-Capability checks always evaluate index `main`; per-index permissions are not implemented. OIDC bearer tokens are validated, but capability checks have no principal for an OIDC subject, so routes that require a capability return 403 for them.
+With `UserManagement`, `PUT /api/v1/roles/{clientId}` overrides a principal's role and index access:
+
+```json
+{
+  "role": "Analyst",
+  "indexPermissions": [
+    { "indexPattern": "team-*", "capabilities": ["Search", "Ingest"] }
+  ]
+}
+```
+
+With no `indexPermissions`, the role applies to every index. With any, `Search`, `Ingest`, `Export` and `IndexManagement` apply only to the indexes granted them, and the role still gives everything else. A pattern is a name, a prefix ending in `*`, or `*`.
+
+A limited principal sees only its indexes in every read, including subsearches, joins, macros, search jobs and index listings. Purging all events and creating scheduled searches need access to every index.
+
+### OIDC
+
+Send a token as `Authorization: Bearer <token>`. `Sso:RoleMappings` maps claims to roles and index permissions:
+
+```json
+{
+  "Sso": {
+    "Enabled": true,
+    "Oidc": { "Authority": "https://idp.example.com", "ClientId": "cabinet" },
+    "AutoProvision": false,
+    "RoleMappings": [
+      { "ClaimType": "groups", "ClaimValue": "ops", "Role": "Admin" },
+      {
+        "ClaimType": "groups",
+        "ClaimValue": "team-a",
+        "Role": "Analyst",
+        "IndexPermissions": [{ "IndexPattern": "team-a-*", "Capabilities": "Search, Ingest" }]
+      }
+    ]
+  }
+}
+```
+
+The first matching mapping applies. With `AutoProvision` on, the default, anyone else gets `DefaultRole`. With it off, anyone else gets 403. A principal saved through `/api/v1/roles` with the ID `oidc-<subject>` overrides the mapping.
 
 ### Development Keys
 
@@ -52,6 +88,7 @@ Available only when `ASPNETCORE_ENVIRONMENT=Development`:
 | `dev-basic-key` | Basic |
 | `dev-professional-key` | Professional |
 | `dev-enterprise-key` | Enterprise |
+| `dev-admin-key` | Admin |
 
 ## Response Formats
 
@@ -255,7 +292,7 @@ curl -X POST http://localhost:5000/api/v1/query/execute \
 
 #### POST /api/v1/query/stream: Stream results
 
-Same request body. Responds with `application/x-ndjson`, up to 100,000 rows.
+Requires `Export`. Same request body. Responds with `application/x-ndjson`, and reads every matching event, up to `limit` rows. Rows arrive as they're found, unless a stage has to see all its input first.
 
 #### POST /api/v1/query/validate: Validate BQL syntax
 

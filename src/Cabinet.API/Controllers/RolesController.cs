@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Cabinet.Core.Interfaces;
@@ -25,6 +26,20 @@ public class RolesController : ControllerBase
         _rbacService = rbacService;
         _auditLogger = auditLogger;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// The caller's own principal, including the ID to use when changing its role
+    /// </summary>
+    [HttpGet("me")]
+    [ProducesResponseType(typeof(RbacPrincipalDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetCurrentPrincipal(CancellationToken cancellationToken = default)
+    {
+        var principal = await PrincipalResolver.ResolveAsync(User, _rbacService, cancellationToken);
+        return principal == null
+            ? Problem(detail: "This identity has no capabilities assigned", statusCode: 403)
+            : Ok(MapToDto(principal));
     }
 
     /// <summary>

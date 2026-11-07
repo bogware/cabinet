@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Cabinet.API.Middleware;
@@ -18,6 +19,8 @@ namespace Cabinet.API.Controllers;
 [Authorize]
 public class ScheduledSearchController : ControllerBase
 {
+    private readonly IndexAccessScope? _indexScope;
+
     private readonly ScheduledSearchService _scheduledSearchService;
     private readonly IQueryParser _queryParser;
     private readonly IAuditLogger _auditLogger;
@@ -27,8 +30,9 @@ public class ScheduledSearchController : ControllerBase
         ScheduledSearchService scheduledSearchService,
         IQueryParser queryParser,
         IAuditLogger auditLogger,
-        ILogger<ScheduledSearchController> logger)
+        ILogger<ScheduledSearchController> logger, IndexAccessScope? indexScope = null)
     {
+        _indexScope = indexScope;
         _scheduledSearchService = scheduledSearchService;
         _queryParser = queryParser;
         _auditLogger = auditLogger;
@@ -100,6 +104,12 @@ public class ScheduledSearchController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> CreateScheduledSearch([FromBody] CreateScheduledSearchRequest request)
     {
+        // It runs with no caller to limit it, and its alerts would reveal what it finds
+        if (_indexScope is { CanReadEveryIndex: false })
+        {
+            return Problem(detail: "Scheduled searches run over every index, so they need Search on all of them", statusCode: 403);
+        }
+
         if (string.IsNullOrWhiteSpace(request.Name))
             return Problem(detail: "Name is required", statusCode: 400);
         if (string.IsNullOrWhiteSpace(request.Query))
@@ -193,6 +203,12 @@ public class ScheduledSearchController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdateScheduledSearch(string id, [FromBody] UpdateScheduledSearchRequest request)
     {
+        // It runs with no caller to limit it, and its alerts would reveal what it finds
+        if (_indexScope is { CanReadEveryIndex: false })
+        {
+            return Problem(detail: "Scheduled searches run over every index, so they need Search on all of them", statusCode: 403);
+        }
+
         var search = _scheduledSearchService.Get(id);
         if (search == null)
             return Problem(detail: "Scheduled search not found", statusCode: 404);

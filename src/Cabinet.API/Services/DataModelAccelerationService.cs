@@ -17,6 +17,7 @@ public sealed class DataModelAccelerationService : BackgroundService
     private readonly ConcurrentDictionary<string, DataModel> _models = new();
     private readonly ConcurrentDictionary<string, List<DataModelSummary>> _summaries = new();
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILeaderLease _lease;
     private readonly IDataModelStorage _storage;
     private readonly ILogger<DataModelAccelerationService> _logger;
     private static readonly TimeSpan RebuildInterval = TimeSpan.FromMinutes(15);
@@ -26,8 +27,10 @@ public sealed class DataModelAccelerationService : BackgroundService
     public DataModelAccelerationService(
         IServiceScopeFactory scopeFactory,
         IDataModelStorage storage,
-        ILogger<DataModelAccelerationService> logger)
+        ILogger<DataModelAccelerationService> logger,
+        ILeaderLease? lease = null)
     {
+        _lease = lease ?? new SingleInstanceLease();
         _scopeFactory = scopeFactory;
         _storage = storage;
         _logger = logger;
@@ -161,7 +164,10 @@ public sealed class DataModelAccelerationService : BackgroundService
                 foreach (var model in _models.Values.Where(m => m.AccelerationEnabled))
                 {
                     if (stoppingToken.IsCancellationRequested) break;
-                    await RebuildModelAsync(model, stoppingToken);
+                    if (_lease.IsLeader)
+                    {
+                        await RebuildModelAsync(model, stoppingToken);
+                    }
                 }
 
                 // Periodically persist summaries to storage

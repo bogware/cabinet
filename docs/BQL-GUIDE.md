@@ -36,6 +36,8 @@ Field names ignore case, so `host` and `Host` are the same field. `source_type`,
 
 `search status=500` and `search a=1 OR b=2` filter on fields, as `where` does, with unquoted values read as text. Other search text is a text search.
 
+A text search means the same on every backend. The text splits into words at anything that isn't a letter or digit, case doesn't matter, and every word has to appear in the line as a whole word. `connection failed` finds `failed: Connection reset`, but not `reconnection failed`, and `app` finds `/var/log/app.log`. There's no stemming, so `request` doesn't find `requests`.
+
 ### Time Ranges
 
 ```

@@ -80,7 +80,10 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                     .Settings(s => s
                         .NumberOfShards(2)
                         .NumberOfReplicas(1)
-                        .Setting("index.refresh_interval", "5s"))
+                        .Setting("index.refresh_interval", "5s")
+                        .Analysis(a => a
+                            .Tokenizers(tk => tk.Pattern("cabinet_words", pt => pt.Pattern(@"[^\p{L}\p{N}]+")))
+                            .Analyzers(an => an.Custom("cabinet_search", c => c.Tokenizer("cabinet_words").Filters("lowercase")))))
                     .Map<OpenSearchLogEvent>(m => m
                         .Properties(p => p
                             .Keyword(k => k.Name(n => n.Id))
@@ -90,6 +93,7 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                             .Number(n => n.Name(nm => nm.Severity).Type(NumberType.Integer))
                             .Keyword(k => k.Name(n => n.Host))
                             .Text(tx => tx.Name(n => n.RawLine)
+                                .Analyzer("cabinet_search")
                                 .Fields(f => f.Keyword(kw => kw.Name("keyword").IgnoreAbove(256))))
                             .Keyword(k => k.Name(n => n.SourceFile))
                             .Number(n => n.Name(nm => nm.LineNumber).Type(NumberType.Long))
@@ -198,7 +202,11 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
         var searchDescriptor = BuildSearchDescriptor(context);
         var toSkip = context.Skip;
         var toReturn = context.Limit;
-        IReadOnlyCollection<object>? after = null;
+
+        // Sort values are the date in whole milliseconds and the ID
+        IReadOnlyCollection<object>? after = context.After == null
+            ? null
+            : new object[] { new DateTimeOffset(DateTime.SpecifyKind(context.After.Timestamp, DateTimeKind.Utc)).ToUnixTimeMilliseconds(), context.After.Id };
 
         while (toReturn > 0)
         {
@@ -407,9 +415,18 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
 
             var queries = new List<Func<QueryContainerDescriptor<OpenSearchLogEvent>, QueryContainer>>();
 
-            if (!string.IsNullOrWhiteSpace(context.SearchText) && context.SearchText != "*")
+            if (context.AllowedIndexes is { } allowed)
             {
-                queries.Add(q => q.Match(m => m.Field(f => f.RawLine).Query(context.SearchText)));
+                queries.Add(q => q.Bool(b => b
+                    .MinimumShouldMatch(1)
+                    .Should(allowed.Select(pattern => (Func<QueryContainerDescriptor<OpenSearchLogEvent>, QueryContainer>)(sq =>
+                        sq.Wildcard(w => w.Field(f => f.IndexName).Value(pattern).CaseInsensitive(true)))).ToArray())));
+            }
+
+            var terms = SearchTerms.Parse(context.SearchText);
+            if (terms.Count > 0)
+            {
+                queries.Add(q => q.Match(m => m.Field(f => f.RawLine).Operator(Operator.And).Query(string.Join(' ', terms))));
             }
 
             if (context.StartTime.HasValue || context.EndTime.HasValue)
@@ -485,9 +502,9 @@ public sealed class OpenSearchLogStorage : ILogStorage, IDisposable
                 "sourcetype" or "source_type" => "sourceType",
                 _ => "timestamp"
             };
-            s.Sort(so => (context.SortDescending
-                ? so.Descending(sortField)
-                : so.Ascending(sortField)).Ascending("id"));
+            s.Sort(so => context.SortDescending
+                ? so.Descending(sortField).Descending("id")
+                : so.Ascending(sortField).Ascending("id"));
 
             return s;
         };

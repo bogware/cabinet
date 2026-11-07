@@ -21,51 +21,13 @@ public static class ILogStorageExtensions
         string? sortBy = null,
         bool descending = true)
     {
-        var context = new QueryContext
-        {
-            SearchText = search,
-            Skip = skip,
-            Limit = limit,
-            SortDescending = descending,
-            FieldFilters = filter?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)
-        };
+        var context = ToQueryContext(filter, search);
+        context.Skip = skip;
+        context.Limit = limit;
+        context.SortDescending = descending;
 
         if (!string.IsNullOrEmpty(sortBy))
             context.SortField = sortBy;
-
-        // Parse common filters
-        if (filter != null && filter.TryGetValue("source_type", out var sourceType))
-        {
-            context.SourceType = sourceType?.ToString();
-        }
-
-        if (filter != null && filter.TryGetValue("severity", out var severity) && Enum.TryParse<LogSeverity>(severity?.ToString(), out var sev))
-        {
-            context.MinSeverity = sev;
-        }
-
-        if (filter != null && filter.TryGetValue("server_id", out var serverId))
-        {
-            context.Host = serverId?.ToString();
-        }
-
-        if (filter != null && filter.TryGetValue("index", out var index))
-        {
-            context.Index = index?.ToString();
-        }
-
-        // Extract time range filters into QueryContext for native storage-level filtering
-        if (filter != null && filter.TryGetValue("timestamp_gte", out var startTime) && startTime is DateTime start)
-        {
-            context.StartTime = start;
-            context.FieldFilters?.Remove("timestamp_gte");
-        }
-
-        if (filter != null && filter.TryGetValue("timestamp_lte", out var endTime) && endTime is DateTime end)
-        {
-            context.EndTime = end;
-            context.FieldFilters?.Remove("timestamp_lte");
-        }
 
         var results = new List<LogEvent>();
         await foreach (var evt in storage.QueryAsync(context, cancellationToken))
@@ -88,15 +50,65 @@ public static class ILogStorageExtensions
     /// <summary>
     /// Get event count with filter (legacy API)
     /// </summary>
-    public static Task<long> GetEventCountAsync(this ILogStorage storage, Dictionary<string, object> filter, CancellationToken cancellationToken = default)
+    public static Task<long> GetEventCountAsync(
+        this ILogStorage storage,
+        Dictionary<string, object> filter,
+        CancellationToken cancellationToken = default,
+        string? search = null)
     {
-        var context = new QueryContext
-        {
-            FieldFilters = filter?.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value),
-            Limit = 0 // We only want count
-        };
+        var context = ToQueryContext(filter, search);
+        context.Limit = 0; // We only want count
 
         return storage.GetCountAsync(context, cancellationToken);
+    }
+
+    /// <summary>
+    /// Turns a filter into a context. Names with their own column become native filters, so that
+    /// they aren't also looked for as custom fields, which no event would have.
+    /// </summary>
+    private static QueryContext ToQueryContext(Dictionary<string, object>? filter, string? search)
+    {
+        var context = new QueryContext { SearchText = search };
+        if (filter == null)
+        {
+            return context;
+        }
+
+        var fields = new Dictionary<string, object?>();
+        foreach (var (key, value) in filter)
+        {
+            switch (key)
+            {
+                case "source_type":
+                    context.SourceType = value?.ToString();
+                    break;
+                case "severity":
+                    if (Enum.TryParse<LogSeverity>(value?.ToString(), ignoreCase: true, out var severity))
+                    {
+                        context.MinSeverity = severity;
+                    }
+
+                    break;
+                case "server_id":
+                    context.Host = value?.ToString();
+                    break;
+                case "index":
+                    context.Index = value?.ToString();
+                    break;
+                case "timestamp_gte" when value is DateTime start:
+                    context.StartTime = start;
+                    break;
+                case "timestamp_lte" when value is DateTime end:
+                    context.EndTime = end;
+                    break;
+                default:
+                    fields[key] = value;
+                    break;
+            }
+        }
+
+        context.FieldFilters = fields.Count > 0 ? fields : null;
+        return context;
     }
 
     /// <summary>

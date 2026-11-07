@@ -102,7 +102,18 @@ public sealed class SyslogListenerService : BackgroundService
         // Bind everything first. Someone who turned the listener on needs to know it isn't
         // listening, so these failures stop the server rather than leaving a line in a log.
         var certificate = _config.TlsPort > 0 ? LoadCertificate(_config) : null;
-        using var udp = new UdpClient(new IPEndPoint(address, _config.UdpPort));
+        UdpClient udp;
+        try
+        {
+            udp = new UdpClient(new IPEndPoint(address, _config.UdpPort));
+        }
+        catch (SocketException ex)
+        {
+            _listening.TrySetException(ex);
+            throw;
+        }
+
+        using var udpClient = udp;
         var tcp = new TcpListener(address, _config.TcpPort);
         var tls = certificate == null ? null : new TcpListener(address, _config.TlsPort);
 
@@ -136,6 +147,11 @@ public sealed class SyslogListenerService : BackgroundService
                 _messages.Writer.TryComplete();
                 await processing;
             }
+        }
+        catch (SocketException ex)
+        {
+            _listening.TrySetException(ex);
+            throw;
         }
         finally
         {

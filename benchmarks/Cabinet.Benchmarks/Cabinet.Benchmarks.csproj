@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cabinet.Core\Cabinet.Core.csproj" />
+    <ProjectReference Include="..\..\src\Cabinet.Parsers\Cabinet.Parsers.csproj" />
+    <ProjectReference Include="..\..\src\Cabinet.Storage\Cabinet.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Cabinet.Database\Cabinet.Database.csproj" />
+    <ProjectReference Include="..\..\src\Cabinet.Query\Cabinet.Query.csproj" />
+  </ItemGroup>
+
+</Project>

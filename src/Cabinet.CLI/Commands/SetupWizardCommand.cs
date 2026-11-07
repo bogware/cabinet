@@ -24,7 +24,7 @@ public sealed class SetupWizardCommand : Command
 
         var modeOption = new Option<string?>(
             "--mode",
-            "Deployment mode: standalone, docker, distributed, agent");
+            "Deployment mode: standalone, docker, agent");
 
         var storageOption = new Option<string?>(
             "--storage",
@@ -85,8 +85,6 @@ internal sealed class SetupWizard
     private int _apiPort = 5000;
     private bool _enableSyslog;
     private int _syslogPort = 1514;
-    private bool _enableDistributed;
-    private string _redisConnectionString = "localhost:6379";
     private bool _enableEmail;
     private string _smtpHost = string.Empty;
     private string _smtpFrom = string.Empty;
@@ -125,9 +123,6 @@ internal sealed class SetupWizard
                     break;
                 case "docker":
                     await ConfigureDockerAsync();
-                    break;
-                case "distributed":
-                    await ConfigureDistributedAsync();
                     break;
                 case "agent":
                     await ConfigureAgentOnlyAsync();
@@ -269,14 +264,12 @@ internal sealed class SetupWizard
                 {
                     "standalone",
                     "docker",
-                    "distributed",
                     "agent"
                 })
                 .UseConverter(mode => mode switch
                 {
                     "standalone" => "Standalone Server  — Single binary, SQLite/PostgreSQL, best for getting started",
                     "docker"     => "Docker Compose     — API + PostgreSQL + Redis, production-ready containers",
-                    "distributed"=> "Distributed Cluster — Multi-node with load balancing, OpenSearch/PostgreSQL + Redis",
                     "agent"      => "Agent Only         — Install log forwarding agent to send logs to existing Cabinet server",
                     _ => mode
                 }));
@@ -562,47 +555,6 @@ internal sealed class SetupWizard
 
     #endregion
 
-    #region Distributed Configuration
-
-    private async Task ConfigureDistributedAsync()
-    {
-        AnsiConsole.Write(new Rule("[bold]Step 2: Distributed Cluster Configuration[/]").RuleStyle("dim").LeftJustified());
-        AnsiConsole.WriteLine();
-
-        _enableDistributed = true;
-
-        await SelectStorageBackendAsync();
-
-        AnsiConsole.Write(new Rule("[bold]Step 3: Redis Configuration[/]").RuleStyle("dim").LeftJustified());
-        AnsiConsole.WriteLine();
-
-        if (_nonInteractive)
-        {
-            _redisConnectionString = Environment.GetEnvironmentVariable("CABINET_REDIS_URL") ?? "localhost:6379";
-        }
-        else
-        {
-            _redisConnectionString = AnsiConsole.Prompt(
-                new TextPrompt<string>("Redis connection string:")
-                    .DefaultValue("localhost:6379"));
-        }
-
-        AnsiConsole.MarkupLine($"[green]Redis:[/] {_redisConnectionString}");
-
-        AnsiConsole.Write(new Rule("[bold]Step 4: Security[/]").RuleStyle("dim").LeftJustified());
-        AnsiConsole.WriteLine();
-
-        ConfigureApiKey();
-        ConfigureApiPort();
-
-        AnsiConsole.Write(new Rule("[bold]Step 5: Optional Features[/]").RuleStyle("dim").LeftJustified());
-        AnsiConsole.WriteLine();
-
-        ConfigureOptionalFeatures();
-    }
-
-    #endregion
-
     #region Agent-Only Configuration
 
     private Task ConfigureAgentOnlyAsync()
@@ -770,9 +722,6 @@ internal sealed class SetupWizard
                 switch (_deploymentMode)
                 {
                     case "standalone":
-                    case "distributed":
-                        paths = GenerateStandaloneConfig();
-                        break;
                     case "docker":
                         paths = GenerateDockerConfig();
                         break;
@@ -833,10 +782,6 @@ internal sealed class SetupWizard
         if (_storageBackend == "postgresql")
         {
             envContent.AppendLine($"Storage__ConnectionString={_connectionString}");
-        }
-        if (_enableDistributed)
-        {
-            envContent.AppendLine($"Distributed__RedisConnectionString={_redisConnectionString}");
         }
 
         File.WriteAllText(envPath, envContent.ToString());
@@ -1127,24 +1072,6 @@ internal sealed class SetupWizard
             };
         }
 
-        if (_enableDistributed)
-        {
-            settings["Distributed"] = new Dictionary<string, object>
-            {
-                ["Enabled"] = true,
-                ["RedisConnectionString"] = "SET_VIA_ENV_VAR",
-                ["InstanceId"] = Environment.MachineName,
-                ["LeaderElection"] = new Dictionary<string, object>
-                {
-                    ["Enabled"] = true,
-                    ["LeaseTimeSeconds"] = 30
-                },
-                ["Cache"] = new Dictionary<string, int>
-                {
-                    ["ApiKeyTtlSeconds"] = 60
-                }
-            };
-        }
 
         return settings;
     }
@@ -1540,7 +1467,6 @@ internal sealed class SetupWizard
             modeNode.AddNode($"Storage: [green]{_storageBackend}[/]");
             modeNode.AddNode($"API Port: [green]{_apiPort}[/]");
             if (_enableSyslog) modeNode.AddNode($"Syslog: [green]Port {_syslogPort}[/]");
-            if (_enableDistributed) modeNode.AddNode($"Distributed: [green]Redis at {_redisConnectionString}[/]");
             if (_enableEmail) modeNode.AddNode($"Email Alerts: [green]{_smtpHost}[/]");
         }
         else
@@ -1587,15 +1513,6 @@ internal sealed class SetupWizard
                 steps.Add("  [dim]docker compose logs -f cabinet-api[/]");
                 break;
 
-            case "distributed":
-                steps.Add("Start each instance with the generated config:");
-                steps.Add($"  [dim]source config/.env && dotnet run --project src/Cabinet.API[/]");
-                steps.Add("");
-                steps.Add("Ensure Redis is running:");
-                steps.Add($"  [dim]redis-cli -h {_redisConnectionString.Split(':')[0]} ping[/]");
-                steps.Add("");
-                steps.Add("Deploy behind a load balancer (nginx, HAProxy, etc.)");
-                break;
 
             case "agent":
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))

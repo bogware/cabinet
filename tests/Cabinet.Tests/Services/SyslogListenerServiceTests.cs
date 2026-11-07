@@ -38,6 +38,12 @@ public sealed class SyslogListenerServiceTests : IDisposable
         return port;
     }
 
+    private static int FreeUdpPort()
+    {
+        using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+    }
+
     private static SyslogListenerService CreateService(CapturingStorage storage, SyslogConfiguration config)
     {
         var scopes = new ServiceCollection()
@@ -53,7 +59,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         Enabled = true,
         BindAddress = "127.0.0.1",
         TcpPort = FreeTcpPort(),
-        UdpPort = FreeTcpPort(),
+        UdpPort = FreeUdpPort(),
     };
 
     private static async Task<List<LogEvent>> WaitForEventsAsync(CapturingStorage storage, int count)

@@ -1,3 +1,4 @@
+using Cabinet.API.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Cabinet.Core.Models;
@@ -23,6 +24,7 @@ public class LogsController : ControllerBase
 {
     private readonly ILogStorage _storage;
     private readonly LogLineParser _lineParser;
+    private readonly IndexAccessScope? _indexScope;
     private readonly IAuditLogger _auditLogger;
     private readonly MultiLineLogMerger _multiLineMerger;
     private readonly QueryCacheService? _queryCache;
@@ -34,9 +36,11 @@ public class LogsController : ControllerBase
         IAuditLogger auditLogger,
         MultiLineLogMerger multiLineMerger,
         ILogger<LogsController> logger,
-        QueryCacheService? queryCache = null)
+        QueryCacheService? queryCache = null,
+        IndexAccessScope? indexScope = null)
     {
-        _storage = storage;
+        _indexScope = indexScope;
+        _storage = indexScope?.Restrict(storage) ?? storage;
         _lineParser = lineParser;
         _auditLogger = auditLogger;
         _multiLineMerger = multiLineMerger;
@@ -67,6 +71,11 @@ public class LogsController : ControllerBase
         var errors = new List<string>();
 
         const string targetIndex = "main";
+
+        if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, targetIndex))
+        {
+            return Problem(detail: $"Not allowed to ingest into index '{targetIndex}'", statusCode: 403);
+        }
 
         // Each item in the Logs array is already a distinct event — no multi-line merging.
         // Multi-line merging is for raw text streams (HEC raw, syslog, file tailing) where
@@ -119,6 +128,7 @@ public class LogsController : ControllerBase
     /// </summary>
     [HttpGet("stream")]
     [RequireCapability(Capability.Search)]
+    [LimitConcurrency]
     [ProducesResponseType(typeof(LogEvent), StatusCodes.Status200OK)]
     public async IAsyncEnumerable<LogEvent> StreamLogs(
         [FromQuery] DateTime? since = null,
@@ -158,9 +168,10 @@ public class LogsController : ControllerBase
     /// </summary>
     /// <param name="index">Logical index to stream from (default "main")</param>
     /// <param name="filter">Optional search text to filter events</param>
-    /// <param name="pollIntervalMs">Polling interval in milliseconds (default 1000, min 100, max 5000)</param>
+    /// <param name="pollIntervalMs">Polling interval in milliseconds (default 1000, min 500, max 5000)</param>
     [HttpGet("stream/live")]
     [RequireCapability(Capability.Search)]
+    [LimitConcurrency(ConcurrencyPool.Stream)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task StreamLive(
@@ -183,7 +194,7 @@ public class LogsController : ControllerBase
             return;
         }
 
-        pollIntervalMs = Math.Clamp(pollIntervalMs, 100, 5000);
+        pollIntervalMs = Math.Clamp(pollIntervalMs, 500, 5000);
 
         // Set SSE response headers
         Response.ContentType = "text/event-stream";
@@ -201,7 +212,7 @@ public class LogsController : ControllerBase
             Converters = { new JsonStringEnumConverter() }
         };
 
-        var lastSeen = DateTime.UtcNow;
+        var tail = new LiveEventTail(_storage, index, filter, DateTime.UtcNow);
         var lastHeartbeat = DateTime.UtcNow;
         var writer = Response.Body;
 
@@ -213,33 +224,13 @@ public class LogsController : ControllerBase
         {
             while (!token.IsCancellationRequested)
             {
-                // Query for events newer than last checkpoint
-                var context = new QueryContext
+                var events = await tail.PollAsync(DateTime.UtcNow, token);
+                foreach (var evt in events)
                 {
-                    Index = index,
-                    StartTime = lastSeen,
-                    SearchText = filter,
-                    SortField = "Timestamp",
-                    SortDescending = false,
-                    Limit = 1000
-                };
-
-                var emittedCount = 0;
-                await foreach (var evt in _storage.QueryAsync(context, token))
-                {
-                    // Skip events at or before the last-seen timestamp to avoid duplicates.
-                    // StartTime is typically a >= filter, so we exclude exact matches here.
-                    if (evt.Timestamp <= lastSeen)
-                        continue;
-
-                    var json = JsonSerializer.Serialize(evt, jsonOptions);
-                    await WriteSseDataAsync(writer, json, token);
-                    emittedCount++;
-
-                    if (evt.Timestamp > lastSeen)
-                        lastSeen = evt.Timestamp;
+                    await WriteSseDataAsync(writer, JsonSerializer.Serialize(evt, jsonOptions), token);
                 }
 
+                var emittedCount = events.Count;
                 if (emittedCount > 0)
                 {
                     await writer.FlushAsync(token);
@@ -319,7 +310,7 @@ public class LogsController : ControllerBase
             sortBy: sortBy,
             descending: descending);
 
-        var total = await _storage.GetEventCountAsync(filter);
+        var total = await _storage.GetEventCountAsync(filter, search: search);
         Response.Headers["X-Total-Count"] = total.ToString();
 
         return Ok(events);
@@ -350,21 +341,19 @@ public class LogsController : ControllerBase
     [RequireCapability(Capability.IndexManagement)]
     [ProducesResponseType(typeof(DeleteResponse), StatusCodes.Status200OK)]
     [Authorize(Policy = "RequireWritePermission")]
-    public async Task<IActionResult> DeleteLogs(
-        [FromQuery] DateTime? olderThan = null,
-        [FromQuery] string? source = null)
+    public async Task<IActionResult> DeleteLogs([FromQuery] DateTime? olderThan = null)
     {
-        if (olderThan == null && source == null)
+        if (olderThan == null)
         {
-            return Problem(detail: "Must specify either olderThan or source", statusCode: 400);
+            return Problem(detail: "olderThan is required", statusCode: 400);
         }
 
-        var filter = BuildFilter(null, source, null);
-        if (olderThan.HasValue)
+        if (_indexScope?.Principal?.IndexesWith(Capability.IndexManagement) != null)
         {
-            filter["before"] = olderThan.Value;
+            return Problem(detail: "This deletes from every index, which needs IndexManagement on all of them", statusCode: 403);
         }
-        var deleted = await _storage.DeleteEventsAsync(filter);
+
+        var deleted = await _storage.PurgeOldEventsAsync(olderThan.Value);
 
         // Audit log the deletion (fire-and-forget)
         await _auditLogger.LogAsync(new AuditEvent
@@ -372,7 +361,7 @@ public class LogsController : ControllerBase
             PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
             Action = AuditAction.Delete,
             ResourceType = "LogEvent",
-            Description = $"Deleted {deleted} events (olderThan={olderThan}, source={source})",
+            Description = $"Deleted {deleted} events (olderThan={olderThan})",
             SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString()
         });
 

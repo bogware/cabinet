@@ -43,6 +43,23 @@ public static class StorageRegistration
         };
 
     /// <summary>
+    /// Where shared state lives. OpenSearch has no store for it, so it stays on a local SQLite
+    /// database unless <c>Storage:MetadataPostgresConnectionString</c> names a shared one.
+    /// </summary>
+    public static StorageBackend ResolveMetadataBackend(IConfiguration configuration)
+    {
+        var backend = ResolveBackend(configuration);
+        return backend == StorageBackend.OpenSearch && !string.IsNullOrEmpty(configuration["Storage:MetadataPostgresConnectionString"])
+            ? StorageBackend.Postgres
+            : backend;
+    }
+
+    private static string? ResolveMetadataPostgres(IConfiguration configuration) =>
+        ResolveBackend(configuration) == StorageBackend.OpenSearch
+            ? configuration["Storage:MetadataPostgresConnectionString"]
+            : configuration["Storage:ConnectionString"];
+
+    /// <summary>
     /// Registers each metadata store on the configured backend, using the local SQLite
     /// metadata database where the backend has no implementation of that store.
     /// </summary>
@@ -50,8 +67,20 @@ public static class StorageRegistration
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var backend = ResolveBackend(configuration);
-        var connectionString = configuration["Storage:ConnectionString"] ?? string.Empty;
+        var backend = ResolveMetadataBackend(configuration);
+        var connectionString = ResolveMetadataPostgres(configuration) ?? string.Empty;
+
+        services.AddSingleton<IDocumentStore>(sp => backend switch
+        {
+            StorageBackend.Memory => new InMemoryDocumentStore(),
+            StorageBackend.Postgres => new PostgresDocumentStore(connectionString, Logger<PostgresDocumentStore>(sp)),
+            _ => new SqliteDocumentStore(SqliteOptions(sp, configuration, backend)),
+        });
+
+        // Only a shared database can have more than one instance to choose from
+        services.AddSingleton<ILeaderLease>(sp => backend == StorageBackend.Postgres
+            ? new PostgresLeaderLease(connectionString, Logger<PostgresLeaderLease>(sp))
+            : new SingleInstanceLease());
 
         services.AddSingleton<IDashboardStorage>(sp => backend switch
         {
@@ -81,17 +110,10 @@ public static class StorageRegistration
             _ => new SqliteSavedQueryStorage(SqliteOptions(sp, configuration, backend), Logger<SqliteSavedQueryStorage>(sp)),
         });
 
-        services.AddSingleton<ISearchJobStorage>(sp => backend switch
-        {
-            StorageBackend.Memory => new InMemorySearchJobStorage(),
-            _ => new SqliteSearchJobStorage(SqliteOptions(sp, configuration, backend), Logger<SqliteSearchJobStorage>(sp)),
-        });
-
-        services.AddSingleton<IDataModelStorage>(sp => backend switch
-        {
-            StorageBackend.Memory => new InMemoryDataModelStorage(),
-            _ => new SqliteDataModelStorage(SqliteOptions(sp, configuration, backend), Logger<SqliteDataModelStorage>(sp)),
-        });
+        services.AddSingleton<ISearchJobStorage>(sp => new DocumentSearchJobStorage(sp.GetRequiredService<IDocumentStore>()));
+        services.AddSingleton<IDataModelStorage>(sp => new DocumentDataModelStorage(sp.GetRequiredService<IDocumentStore>()));
+        services.AddSingleton<IAlertHistoryStorage>(sp => new DocumentAlertHistoryStorage(sp.GetRequiredService<IDocumentStore>()));
+        services.AddSingleton<IFieldExtractionStorage>(sp => new DocumentFieldExtractionStorage(sp.GetRequiredService<IDocumentStore>()));
 
         return services;
     }
