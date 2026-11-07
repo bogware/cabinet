@@ -1,3 +1,4 @@
+using Cabinet.API.Infrastructure;
 using Cabinet.Alerts;
 using Cabinet.API.Authentication;
 using Cabinet.API.Middleware;
@@ -291,7 +292,7 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var storage = scope.ServiceProvider.GetRequiredService<ILogStorage>();
-        await InitializeStorageWithRetryAsync(storage, app.Configuration, app.Services);
+        await InitializeStorageWithRetryAsync(storage, app.Configuration);
 
         var savedQueryStorage = scope.ServiceProvider.GetRequiredService<ISavedQueryStorage>();
         await savedQueryStorage.InitializeAsync();
@@ -369,8 +370,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.Configure<Cabinet.Core.Configuration.CabinetConfiguration>(configuration);
 
     // Storage — supports SQLite, Memory, PostgreSQL, and OpenSearch.
-    // Remote backends (PG/OS) use graceful degradation: if unreachable at startup,
-    // falls back to SQLite with a warning (configurable via Storage:FallbackType).
     services.AddSingleton<ILogStorage>(sp =>
     {
         var storageType = configuration["Storage:Type"] ?? "SQLite";
@@ -394,6 +393,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
                 sp.GetRequiredService<ILogger<SqliteLogStorage>>())
         };
     });
+
+    // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
+    services.AddCabinetMetadataStorage(configuration);
 
     // RBAC and audit logging — database-backed with config fallback
     services.AddSingleton<Cabinet.API.Services.ConfigurationRbacService>();
@@ -445,41 +447,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         });
     }
 
-    // Dashboard, knowledge, and scheduled search storage
-    services.AddSingleton<IDashboardStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        return storageType.ToUpperInvariant() switch
-        {
-            "MEMORY" => new InMemoryDashboardStorage(),
-            _ => new SqliteDashboardStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteDashboardStorage>>())
-        };
-    });
-    services.AddSingleton<IKnowledgeStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        return storageType.ToUpperInvariant() switch
-        {
-            "MEMORY" => new InMemoryKnowledgeStorage(),
-            _ => new SqliteKnowledgeStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteKnowledgeStorage>>())
-        };
-    });
-    services.AddSingleton<IScheduledSearchStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        return storageType.ToUpperInvariant() switch
-        {
-            "MEMORY" => new InMemoryScheduledSearchStorage(),
-            _ => new SqliteScheduledSearchStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteScheduledSearchStorage>>())
-        };
-    });
-
     // Scheduled search service
     services.AddSingleton<ScheduledSearchService>();
     services.AddHostedService(sp => sp.GetRequiredService<ScheduledSearchService>());
@@ -492,19 +459,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         services.AddSingleton(syslogCfg);
         services.AddHostedService<SyslogListenerService>();
     }
-
-    // Saved query storage — follows the same storage type selection as log storage
-    services.AddSingleton<ISavedQueryStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        return storageType.ToUpperInvariant() switch
-        {
-            "MEMORY" => new InMemorySavedQueryStorage(),
-            _ => new SqliteSavedQueryStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteSavedQueryStorage>>())
-        };
-    });
 
     // Parsers (order: specific first, generic last)
     services.AddSingleton<ILogParserProvider, Cabinet.Parsers.LogParserProvider>();
@@ -553,29 +507,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Distributed query cache (registered later if Redis is available — see distributed section below)
 
     // Async search jobs — background execution for long-running queries
-    services.AddSingleton<Cabinet.Core.Interfaces.ISearchJobStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        if (storageType.Equals("Memory", StringComparison.OrdinalIgnoreCase))
-            return new Cabinet.Storage.InMemorySearchJobStorage();
-        return new Cabinet.Storage.SqliteSearchJobStorage(
-            sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-            sp.GetRequiredService<ILogger<Cabinet.Storage.SqliteSearchJobStorage>>());
-    });
     services.AddHostedService<Cabinet.API.Services.SearchJobService>();
-
-    // Data model storage — SQLite-backed persistence for acceleration state
-    services.AddSingleton<IDataModelStorage>(sp =>
-    {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        return storageType.ToUpperInvariant() switch
-        {
-            "MEMORY" => new InMemoryDataModelStorage(),
-            _ => new SqliteDataModelStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteDataModelStorage>>())
-        };
-    });
 
     // Data model acceleration — pre-aggregated summaries for tstats queries
     services.AddSingleton<Cabinet.API.Services.DataModelAccelerationService>();
@@ -761,7 +693,7 @@ void ValidateConfiguration(IConfiguration configuration)
 /// Initialize storage with retry and graceful fallback for remote backends.
 /// If PostgreSQL/OpenSearch is unreachable after retries, falls back to SQLite.
 /// </summary>
-async Task InitializeStorageWithRetryAsync(ILogStorage storage, IConfiguration configuration, IServiceProvider services)
+async Task InitializeStorageWithRetryAsync(ILogStorage storage, IConfiguration configuration)
 {
     var storageType = configuration["Storage:Type"] ?? "SQLite";
     var isRemoteBackend = storageType.ToUpperInvariant() is "POSTGRESQL" or "POSTGRES" or "OPENSEARCH" or "ELASTICSEARCH";
@@ -796,29 +728,10 @@ async Task InitializeStorageWithRetryAsync(ILogStorage storage, IConfiguration c
         }
     }
 
-    // All retries failed — check for fallback
-    var fallbackType = configuration["Storage:FallbackType"];
-    if (!string.IsNullOrEmpty(fallbackType) && fallbackType.Equals("SQLite", StringComparison.OrdinalIgnoreCase))
-    {
-        var fallbackConn = configuration["Storage:FallbackConnectionString"] ?? "Data Source=cabinet-fallback.db";
-        Log.Error(lastException, "Storage backend ({Type}) unreachable after retries. Falling back to SQLite ({Connection}). DATA WILL NOT BE IN PRIMARY STORAGE.",
-            storageType, fallbackConn);
-
-        var fallbackStorage = new SqliteLogStorage(
-            services.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-            services.GetRequiredService<ILogger<SqliteLogStorage>>());
-        await fallbackStorage.InitializeAsync();
-
-        // Note: The DI container still holds the original storage reference.
-        // The fallback is only used to verify the app can start. The original storage
-        // will retry on each request via its own initialization guard.
-        return;
-    }
-
-    // No fallback configured — fail loudly
+    // Fail loudly: the exit code lets the service manager restart us, and logs are never
+    // silently written somewhere other than the backend the operator configured.
     throw new InvalidOperationException(
-        $"Storage backend ({storageType}) is unreachable and no fallback is configured. " +
-        $"Set Storage:FallbackType=SQLite to enable graceful degradation. Error: {lastException?.Message}",
+        $"Storage backend ({storageType}) is unreachable: {lastException?.Message}",
         lastException);
 }
 

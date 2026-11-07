@@ -14,8 +14,7 @@ services:
       - ASPNETCORE_URLS=http://+:8080
       - Storage__Type=PostgreSQL
       - Storage__ConnectionString=Host=postgres;Port=5432;Database=cabinet;Username=cabinet;Password=${CABINET_DB_PASSWORD:-cabinet123}
-      - Storage__FallbackType=SQLite
-      - Storage__FallbackConnectionString=Data Source=/app/data/cabinet.db
+      - Storage__MetadataConnectionString=Data Source=/app/data/cabinet-metadata.db
       - ApiKeys__Keys__0__Key=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
       - ApiKeys__Keys__0__Tier=Enterprise
       - ApiKeys__Keys__0__Name=Docker Enterprise Client
@@ -191,7 +190,6 @@ volumes:
   cabinet-cli-config:
     driver: local
   postgres-data:
-    driver: local
     driver: local
   redis-data:
     driver: local

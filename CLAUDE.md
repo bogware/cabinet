@@ -66,7 +66,7 @@ Rules to preserve when adding code:
 
 ### Storage is pluggable behind `ILogStorage` (`Cabinet.Core/Interfaces/ILogStorage.cs`)
 
-Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQL (prod), OpenSearch (enterprise). Selection is by `Storage:Type` config (`SQLite`, `Memory`, `PostgreSQL`/`Postgres`, `OpenSearch`/`Elasticsearch`; validated at startup in `Program.cs`). If a remote backend is unreachable at startup, the API falls back to SQLite with a warning (`Storage:FallbackType`), so a "working" server may not be on the backend you configured. When adding a backend, implement all `ILogStorage` methods, follow the volatile + `SemaphoreSlim` init pattern (see ARCHITECTURE.md "Thread-Safety Patterns"), parameterize **all** queries, and register in `Program.cs`'s storage switch.
+Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQL (prod), OpenSearch (enterprise). Selection is by `Storage:Type` config (`SQLite`, `Memory`, `PostgreSQL`/`Postgres`, `OpenSearch`/`Elasticsearch`; validated at startup in `Program.cs`). If a remote backend is unreachable at startup, the API retries, then exits with a failure code; there is no fallback backend. Stores with no implementation on the selected backend use a local SQLite database (`Storage:MetadataConnectionString`, see `Infrastructure/StorageRegistration.cs`), so that metadata is per-instance. When adding a backend, implement all `ILogStorage` methods, follow the volatile + `SemaphoreSlim` init pattern (see ARCHITECTURE.md "Thread-Safety Patterns"), parameterize **all** queries, and register in `Program.cs`'s storage switch.
 
 ### BQL query engine (`Cabinet.Query`)
 
@@ -117,7 +117,7 @@ See ARCHITECTURE.md "Thread-Safety Patterns" for canonical examples.
 
 Tests live in `tests/Cabinet.Tests/` (`Agent/`, `CLI/`, `Controllers/`, `Core/`, `Detection/`, `Middleware/`, `Parsers/`, `Query/`, `Services/`, `Storage/`). `CONTRIBUTING.md` lists `API/`, `Alerts/`, and `Integration/`, but those directories don't exist. xUnit + FluentAssertions + Moq, AAA structure. Bug fixes need a regression test that fails without the fix. New storage backends need integration tests against the real backend (or in-memory substitute).
 
-Postgres and OpenSearch integration tests skip themselves unless `CABINET_TEST_POSTGRES_CONNSTR` or `CABINET_TEST_OPENSEARCH_URL` (plus optional `_USER`/`_PASS`) is set, so skipped tests in a normal run are expected.
+Postgres and OpenSearch integration tests skip themselves unless `CABINET_TEST_POSTGRES_CONNSTR` or `CABINET_TEST_OPENSEARCH_URL` (plus optional `_USER`/`_PASS`) is set, so skipped tests in a normal run are expected. CI sets the Postgres variable against a real database.
 
 The test project has no coverlet package, so coverage flags (`/p:CollectCoverage=true`, `--collect:"XPlat Code Coverage"`) produce no coverage data.
 

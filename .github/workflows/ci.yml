@@ -18,6 +18,20 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cabinet
+          POSTGRES_PASSWORD: cabinet-ci
+          POSTGRES_DB: cabinet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cabinet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -25,6 +39,11 @@ jobs:
       uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Validate compose file
+      run: docker compose config --quiet
+      env:
+        CABINET_API_KEY: ci-validation-only
 
     - name: Restore dependencies
       run: dotnet restore
@@ -35,6 +54,7 @@ jobs:
     - name: Test
       env:
         TZ: America/Chicago
+        CABINET_TEST_POSTGRES_CONNSTR: Host=localhost;Port=5432;Database=cabinet;Username=cabinet;Password=cabinet-ci
       run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
 
     - name: Upload test results

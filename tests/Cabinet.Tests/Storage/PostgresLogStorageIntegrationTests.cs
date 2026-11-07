@@ -109,15 +109,16 @@ public class PostgresLogStorageIntegrationTests : IAsyncLifetime, IDisposable
     {
         SkipIfNotAvailable();
 
-        var now = DateTime.UtcNow;
-        var oldEvt = CreateEvent("Old event", timestamp: now.AddHours(-48));
-        var recentEvt = CreateEvent("Recent event", timestamp: now.AddMinutes(-5));
+        // The database is shared between tests, so use a window no other test writes to.
+        var anchor = DateTime.UtcNow.AddDays(-Random.Shared.Next(1_000, 100_000));
+        var oldEvt = CreateEvent("Old event", timestamp: anchor.AddHours(-48));
+        var recentEvt = CreateEvent("Recent event", timestamp: anchor);
         await _storage!.StoreBatchAsync(new[] { oldEvt, recentEvt });
 
         var context = new QueryContext
         {
-            StartTime = now.AddHours(-1),
-            EndTime = now.AddMinutes(1),
+            StartTime = anchor.AddMinutes(-1),
+            EndTime = anchor.AddMinutes(1),
             Limit = 100
         };
 
