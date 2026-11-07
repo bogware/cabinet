@@ -22,7 +22,4 @@ RUN mkdir -p /app/spool /app/data && chown -R cabinet:cabinet /app
 
 USER cabinet
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD test -f /app/registry.json || true
-
-ENTRYPOINT ["dotnet", "cabinet-agent.dll"]
+ENTRYPOINT ["/app/cabinet-agent"]

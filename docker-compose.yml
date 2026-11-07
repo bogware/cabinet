@@ -48,7 +48,6 @@ services:
       - CABINET_API_KEY=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
     volumes:
       - ./logs:/app/logs:ro  # Mount host logs directory for analysis
-      - cabinet-cli-config:/root/.cabinet
     depends_on:
       - cabinet-api
     networks:
@@ -56,7 +55,7 @@ services:
     restart: "no"
     stdin_open: true
     tty: true
-    command: ["configure", "--test"]  # Test configuration on startup
+    command: ["version"]
 
   # Cabinet Agent (log forwarding)
   cabinet-agent:
@@ -65,6 +64,8 @@ services:
       dockerfile: Dockerfile.agent
     container_name: cabinet-agent
     environment:
+      - Agent__Inputs__0__Paths__0=/var/log/host/*.log
+      - Agent__Inputs__0__Paths__1=/var/log/host/*.txt
       - Agent__Output__ServerUrl=http://cabinet-api:8080
       - Agent__Output__ApiKey=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
       - Agent__Output__VerifySsl=false
@@ -182,8 +183,6 @@ volumes:
   cabinet-logs:
     driver: local
   cabinet-agent-data:
-    driver: local
-  cabinet-cli-config:
     driver: local
   postgres-data:
     driver: local
