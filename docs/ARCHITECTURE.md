@@ -6,12 +6,12 @@ This document describes Cabinet's architecture, key design decisions, and patter
 
 ```
                     ┌─────────────┐     ┌──────────────┐
-                    │   CLI Tool  │     │  Web UI (*)  │
+                    │   CLI Tool  │     │ Web Dashboard│
                     └──────┬──────┘     └──────┬───────┘
                            │                    │
                     ┌──────▼────────────────────▼───────┐
                     │         REST API (ASP.NET)         │
-                    │  Authentication · RBAC · Tenancy   │
+                    │  Authentication · Capabilities     │
                     │  Rate Limiting · Audit Logging     │
                     └──┬────────┬────────┬──────────┬───┘
                        │        │        │          │
@@ -31,11 +31,15 @@ This document describes Cabinet's architecture, key design decisions, and patter
               │          │         │          │                  │
          ┌────▼───┐ ┌───▼────┐ ┌─▼──────┐ ┌▼──────────┐ ┌────▼────┐
          │ SQLite │ │InMemory│ │Postgres│ │ OpenSearch │ │  Redis  │
-         │ (dev)  │ │ (test) │ │ (prod) │ │(enterprise)│ │ (coord) │
+         │        │ │ (test) │ │        │ │            │ │(optional)
          └────────┘ └────────┘ └────────┘ └───────────┘ └─────────┘
 ```
 
-(*) Web UI is not included — Cabinet is API/CLI-first.
+The web dashboard is a single static page (`Cabinet.API/wwwroot/index.html`) served by the API outside the Development environment. In Development, Swagger UI takes the root URL.
+
+`Cabinet.Agent` is a standalone forwarder with no project references. It sends logs to the API over HTTP.
+
+Each deployment serves one organization. Run a single API instance; see [Deployment](DEPLOYMENT.md#scaling).
 
 ## Layer Architecture
 
@@ -45,16 +49,17 @@ This document describes Cabinet's architecture, key design decisions, and patter
 
 ### Layer 2: Services (Query, Detection, Parsers, Alerts)
 - `Cabinet.Query` — BQL parser, optimizer, execution engine, natural language translator
-- `Cabinet.Detection` — Security detection suites (game-server focused)
+- `Cabinet.Detection` — Game-moderation detection suites, run on demand
 - `Cabinet.Parsers` — Log format parsers with auto-detection
 - `Cabinet.Alerts` — Alert channels (webhook, email, file, console)
 
-### Layer 3: Data (Storage, Database)
+### Layer 3: Data (Storage, Database, AWS)
 - `Cabinet.Storage` — Lightweight/embedded backends (SQLite, In-Memory)
 - `Cabinet.Database` — External service backends (PostgreSQL, OpenSearch)
+- `Cabinet.AWS` — CloudWatch and CloudTrail access used by the CLI, and S3 client code
 
 ### Layer 4: Foundation (Core)
-- `Cabinet.Core` — Models, interfaces, configuration, utilities. No external dependencies.
+- `Cabinet.Core` — Models, interfaces, configuration, utilities. No project references.
 
 ### Dependency Rules
 
@@ -68,7 +73,10 @@ API/CLI → Services → Data → Core
 - All other projects depend on `Core`
 - Services never depend on each other directly
 - Data layer projects don't depend on each other
-- Presentation references all service and data projects via DI
+- `Cabinet.Query` and `Cabinet.Detection` reference `Cabinet.Storage`
+- `Cabinet.AWS` references `Cabinet.Parsers`, an exception to the layer order
+- `Cabinet.API` and `Cabinet.CLI` reference service and data projects and wire them with DI. `Cabinet.CLI` doesn't reference `Cabinet.Database`.
+- `Cabinet.Agent` references nothing
 
 ## Architecture Decision Records
 
@@ -81,7 +89,7 @@ API/CLI → Services → Data → Core
 **Rationale:**
 - ULIDs are time-ordered — events created later have lexicographically greater IDs
 - 26-character Crockford Base32 encoding is URL-safe and compact
-- No coordination needed (unlike auto-increment) — works in distributed deployments
+- No coordination needed (unlike auto-increment)
 - Timestamp extractable from ID (first 10 chars = 48-bit millisecond timestamp)
 - Compatible with string storage in all backends
 
@@ -91,21 +99,20 @@ API/CLI → Services → Data → Core
 
 ### ADR-002: SQLite as Default Storage (vs PostgreSQL)
 
-**Decision:** SQLite is the default storage backend; PostgreSQL is for production.
+**Decision:** SQLite is the default storage backend; PostgreSQL and OpenSearch are the external options.
 
-**Context:** Need zero-configuration development experience with production-grade option.
+**Context:** Need a zero-configuration start, with an external database available when a deployment outgrows one file.
 
 **Rationale:**
 - SQLite requires no separate server — just a file
 - WAL mode supports concurrent reads with single-writer
-- FTS5 provides full-text search comparable to simple Splunk queries
+- FTS5 provides full-text search
 - Developers can start immediately without Docker/database setup
-- Same `ILogStorage` interface means code works identically across backends
+- All log backends implement the same `ILogStorage` interface
 
 **Trade-offs:**
-- Single-writer bottleneck limits throughput (~5K events/sec vs 50K+ on PostgreSQL)
+- A single writer at a time
 - No multi-node support
-- Limited to ~10GB practical database size
 
 ### ADR-003: Recursive-Descent Parser (vs Parser Generator)
 
@@ -118,16 +125,16 @@ API/CLI → Services → Data → Core
 - No build-time code generation step
 - Easier to add new stages incrementally
 - Custom precedence rules for BQL's mixed SPL/natural-language syntax
-- Thread-safe via simple lock (no shared parser state)
+- Concurrent `ParseBql` calls are serialized with a lock, because the parser keeps per-parse state on the instance
 
 **Trade-offs:**
-- More code to maintain (~3000 lines in BqlParser.cs)
+- More code to maintain (about 3,000 lines in BqlParser.cs)
 - No automatic grammar visualization
 - Manual left-recursion elimination needed
 
-### ADR-004: ExpandoObject for Query Results (vs Typed Models)
+### ADR-004: Dynamic Rows for Query Results (vs Typed Models)
 
-**Decision:** Use `ExpandoObject` (dynamic) for query pipeline results.
+**Decision:** Use dynamic rows for query pipeline results. In the BQL pipeline a row is a `BqlRow`, a dictionary whose field names match case-insensitively and through a fixed set of aliases. The older `QueryEngine`, which the CLI's local mode uses, works with `ExpandoObject`.
 
 **Context:** BQL stages can add, remove, and rename fields dynamically.
 
@@ -139,10 +146,10 @@ API/CLI → Services → Data → Core
 - Static typing would require runtime code generation
 
 **Trade-offs:**
-- ~300 bytes overhead per ExpandoObject instance
+- Per-instance memory overhead compared with typed models
 - No compile-time type safety in pipeline stages
-- Serialization requires dynamic property enumeration
-- **Known issue:** This is a performance bottleneck for large result sets (see PERF-01 in audit)
+- Serialization requires dynamic field enumeration
+- **Known issue:** This is expected to be costly for large result sets. It has not been benchmarked.
 
 ### ADR-005: Interface-Driven Storage (vs ORM)
 
@@ -177,31 +184,35 @@ API/CLI → Services → Data → Core
 - Keys don't expire automatically (must be rotated manually)
 - No delegation or scoping (key = full tier access)
 - No user identity — only client identity
-- **Future:** OAuth2/OIDC configuration models exist but aren't implemented yet
+- Tier rate limits and role mappings are hardcoded
+
+OIDC bearer tokens are covered in ADR-008.
 
 ### ADR-007: SHA-256 for API Key Hashing (vs bcrypt/Argon2)
 
-**Decision:** SHA-256 hash for stored API keys instead of bcrypt/Argon2.
+**Decision:** SHA-256 hash for API keys held in memory instead of bcrypt/Argon2.
 
 **Context:** API keys are high-entropy random strings, not user-chosen passwords.
 
 **Rationale:**
 - API keys are 32+ character random strings — not vulnerable to dictionary attacks
-- SHA-256 is fast enough for high-throughput key validation (every request)
-- bcrypt/Argon2 add 100-500ms latency per validation — unacceptable for API traffic
-- Constant-time comparison prevents timing attacks on the hash
+- SHA-256 is fast, and a key is validated on every request
+- bcrypt/Argon2 are deliberately slow, which would add latency to every request
+- `ApiKeyService` looks keys up by SHA-256 hash in a dictionary. It does not do a constant-time comparison.
+
+Configuration holds the raw key. It is hashed when loaded, and only the hash is kept in memory. Validation is local on every instance and doesn't use Redis.
 
 **Trade-offs:**
-- If key database is leaked, SHA-256 hashes are faster to brute-force than bcrypt
+- If the hashes leak, SHA-256 is faster to brute-force than bcrypt
 - Acceptable because: (a) keys are high-entropy, (b) keys can be rotated, (c) defense-in-depth via access controls
 
 ### ADR-008: OIDC-First SSO Strategy (SAML 2.0 and LDAP Not Yet Implemented)
 
 **Decision:** Implement OpenID Connect (OIDC) as the first and currently only SSO provider. SAML 2.0 and LDAP configuration models exist as foundation but have no runtime implementation.
 
-**Context:** Cabinet needs enterprise SSO to move beyond API key-only authentication. The three main enterprise SSO protocols are OIDC, SAML 2.0, and LDAP/AD.
+**Context:** Cabinet needs SSO to move beyond API key-only authentication. The three main SSO protocols are OIDC, SAML 2.0, and LDAP/AD.
 
-**Status:** OIDC is fully implemented. SAML 2.0 and LDAP are **not implemented** — only their configuration models (`SamlSettings`, `LdapSettings` in `Cabinet.Core/Models/SsoConfiguration.cs`) exist. Selecting SAML or LDAP as the SSO provider logs a warning and does not configure any authentication handler.
+**Status:** OIDC is partial. JWT Bearer validation and claim mapping run, but `[RequireCapability]` resolves capabilities through `IRbacService`, which has no principal for an OIDC subject, so routes that require a capability return 403 for those tokens. SAML 2.0 and LDAP are **not implemented** — only their configuration models (`SamlSettings`, `LdapSettings` in `Cabinet.Core/Models/SsoConfiguration.cs`) exist. Selecting SAML or LDAP as the SSO provider logs a warning and does not configure any authentication handler.
 
 **Rationale:**
 - OIDC is the modern standard — supported by all major identity providers (Entra ID, Okta, Keycloak, Auth0, Google Workspace)
@@ -212,11 +223,12 @@ API/CLI → Services → Data → Core
 
 **Implementation details:**
 - `SsoConfiguration` (`Core/Models/SsoConfiguration.cs`) — top-level config with `Provider` enum (`Oidc`, `Saml`, `Ldap`)
-- `OidcAuthenticationExtensions.AddCabinetSso()` (`API/Authentication/OidcAuthenticationService.cs`) — wires OIDC JWT Bearer auth alongside API key auth
-- `ClaimRoleMapper` — maps OIDC claims to Cabinet `SystemRole` and `Capability` assignments
+- `Program.cs` wires OIDC JWT Bearer auth alongside API key auth. `OidcAuthenticationExtensions.AddCabinetSso()` (`API/Authentication/OidcAuthenticationService.cs`) is a separate implementation that `Program.cs` doesn't call.
+- `ClaimRoleMapper` — maps OIDC claims to Cabinet role and capability claims. Capability checks don't read those claims.
 - `NoOpAuthHandler` — fallback Bearer handler when SSO is disabled
 
 **What is NOT implemented:**
+- Capability checks for OIDC principals
 - SAML 2.0 authentication handler (would require `Sustainsys.Saml2.AspNetCore2` package)
 - LDAP bind authentication (would require `Novell.Directory.Ldap.NETStandard` package)
 - SAML/LDAP claim extraction and role mapping at runtime
@@ -312,27 +324,41 @@ finally
 
 | Scenario | Backend | Config Value |
 |----------|---------|-------------|
-| Development / single developer | SQLite | `SQLite` |
+| Development, small single-server deployment | SQLite | `SQLite` |
 | Unit tests / CI | In-Memory | `Memory` |
-| Production / team | PostgreSQL | `PostgreSQL` |
-| Enterprise / large scale | OpenSearch | `OpenSearch` |
+| External relational database | PostgreSQL | `PostgreSQL` |
+| Existing OpenSearch cluster | OpenSearch | `OpenSearch` |
 
-### Performance Characteristics
+No benchmarks are published yet, so this guide gives no throughput or size figures for any backend.
 
-| Backend | Write (events/sec) | Read Latency | Max Practical Size | Concurrency |
-|---------|--------------------|--------------|--------------------|-------------|
-| SQLite | ~5K | <10ms (warm) | ~10GB | Single writer |
-| In-Memory | ~100K | <1ms | ~1GB (RAM) | Concurrent reads |
-| PostgreSQL | ~10K | <50ms | ~100GB | Connection pool |
-| OpenSearch | ~50K | <100ms | TB+ | Distributed |
+### Metadata Storage
+
+`ILogStorage` holds log events. Other data is registered separately in `StorageRegistration.cs` and `Program.cs`:
+
+| Data | Store |
+|------|-------|
+| Dashboards, knowledge objects, saved queries, schedules | PostgreSQL on that backend; otherwise SQLite or in-memory, matching the backend |
+| Search jobs, data models | SQLite on the local instance, or in-memory on the `Memory` backend |
+| RBAC principals | Local `cabinet-rbac.db` |
+| Field extractions, alert history, retention definitions | Process memory |
+
+For PostgreSQL and OpenSearch, the local SQLite store is `Storage:MetadataConnectionString` (default `Data Source=cabinet-metadata.db`). With OpenSearch it holds all of the SQLite-backed metadata above.
+
+### Startup
+
+Remote backends get three retries. A backend still unreachable after that makes startup fail with a non-zero exit code. There is no fallback backend.
+
+### Retention
+
+`RetentionBackgroundService` runs at startup and hourly. It purges events older than `Storage:RetentionDays`, and does nothing when the value is 0, the default.
 
 ### Implementing a New Backend
 
 1. Create a class implementing `ILogStorage` from `Cabinet.Core/Interfaces/ILogStorage.cs`
-2. Implement all 8 methods (Initialize, Store, StoreBatch, Query, GetById, GetCount, Purge, GetStats)
+2. Implement all methods (Initialize, Store, StoreBatch, Query, GetById, GetCount, PurgeOldEvents, GetStats, and DeleteByIndex, which has a default that deletes nothing)
 3. Use the volatile + SemaphoreSlim initialization pattern
 4. Parameterize all queries (no string interpolation of user input)
-5. Register in `Program.cs` `ConfigureCabinetServices()` storage switch
+5. Register in the `ConfigureCabinetServices()` storage switch in `Program.cs` and in `StorageRegistration.cs`
 6. Add integration tests
 
 ## BQL Query Engine Internals
@@ -353,33 +379,40 @@ Source Text → BqlLexer → Token Stream → BqlParser → AST (Pipeline)
 
 ### Predicate Pushdown
 
-The optimizer extracts predicates that storage backends can handle natively:
+The optimizer moves filtering into storage where that can't change a query's answer:
 
 | Predicate Type | Example | Pushed to |
 |---------------|---------|-----------|
 | Full-text search | `find errors` | `QueryContext.SearchText` |
-| Severity filter | `where severity >= 4` | `QueryContext.MinSeverity` |
-| Field equality | `where host = "web-01"` | `QueryContext.FieldFilters` |
+| Numeric severity filter | `where severity >= 4` | `QueryContext.MinSeverity` |
+| Host equality | `where host = "web-01"` | `QueryContext.Host` |
+| Source type equality | `where sourcetype = "app"` | `QueryContext.SourceType` |
 | Time range | `from last 24h` | `QueryContext.StartTime/EndTime` |
-| Simple sort | `sort by timestamp desc` | `QueryContext.SortField/SortDescending` |
+| Timestamp sort | `sort by timestamp desc` | `QueryContext.SortField/SortDescending` |
 
-Predicates that can't be pushed down remain in the pipeline for post-fetch filtering.
+Only the leading run of filters is pushed, because a filter after `head`, `eval` or `stats` applies to that stage's output rather than to stored events. Everything else stays in the pipeline for post-fetch filtering.
 
 ## Security Architecture
 
 ```
-Request → Rate Limiter → API Key Auth → RBAC Check → Controller
-                              │              │              │
-                         SHA-256 hash   Capability    Index prefix
-                         Constant-time  enforcement   isolation
-                         comparison     per endpoint
+Request → Per-address limiter → Authentication → Authorization → Rate limiter → Capability filter → Controller
+                                      │                               │                │
+                                SHA-256 hash                    Per key, or per   Per endpoint,
+                                dictionary lookup               address if anon   index `main`
 ```
 
 ### Defense Layers
 
-1. **Rate Limiting** — Per-tier request limits prevent abuse
-2. **Authentication** — API key validated via SHA-256 hash comparison
-3. **Authorization** — RBAC capabilities checked per endpoint
-5. **Audit Logging** — All security events recorded with tamper-evident hash chain
-6. **Field Masking** — PII redacted/hashed/removed at query time
-7. **Encryption** — AES-256-GCM for data at rest
+1. **Rate Limiting** — A per-address limit before authentication, then hardcoded per-tier limits and a per-address limit for anonymous requests. All are held in process memory. `X-Forwarded-For` is honored only from `Network:TrustedProxies`.
+2. **Authentication** — API key looked up by SHA-256 hash in a dictionary
+3. **Authorization** — Roles and capabilities checked per endpoint through `[RequireCapability]`. Checks always evaluate index `main`, so per-index RBAC is not implemented. No tier has `IndexManagement` or `UserManagement`.
+4. **Audit Logging** — Hash-chained audit log, in the log output only. There is no verifier, it is not tamper-proof, and the chain head is local to each instance.
+
+### Not Implemented
+
+- **Field masking** — `FieldMaskingService` is registered and never applied.
+- **Encryption at rest** — `EncryptionService` is initialized at startup, and nothing calls it.
+
+## Distributed Components
+
+Horizontal scaling isn't safe yet. When `Distributed:Enabled` is set, the API registers `RedisLeaderElection` and `DistributedQueryCacheService`, but nothing consults the first and request paths use the in-process `QueryCacheService` rather than the second. `DistributedRateLimiter` exists but isn't wired in.

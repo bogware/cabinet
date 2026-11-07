@@ -1,399 +1,478 @@
 # Cabinet Deployment Guide
 
-This guide covers deploying Cabinet in production environments.
+This guide covers installing and operating Cabinet. Run a single API instance; see [Scaling](#scaling).
 
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Deployment Options](#deployment-options)
-- [Docker Deployment](#docker-deployment)
-- [Kubernetes Deployment](#kubernetes-deployment)
+- [Docker Compose](#docker-compose)
+- [Packages and Installers](#packages-and-installers)
+- [From Source](#from-source)
+- [Forwarding Agent](#forwarding-agent)
+- [Kubernetes](#kubernetes)
 - [Configuration Reference](#configuration-reference)
-- [Storage Backend Setup](#storage-backend-setup)
 - [Security Hardening](#security-hardening)
 - [Monitoring & Observability](#monitoring--observability)
 - [Backup & Recovery](#backup--recovery)
-- [Scaling Guide](#scaling-guide)
+- [Scaling](#scaling)
 - [Troubleshooting](#troubleshooting)
 - [Runbooks](#runbooks)
 
 ## Prerequisites
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| CPU | 2 cores | 4+ cores |
-| RAM | 2 GB | 8+ GB |
-| Disk | 20 GB SSD | 100+ GB SSD |
-| .NET Runtime | 10.0 | 10.0 (latest patch) |
-| Docker | 20.10+ | 24.0+ |
-| Kubernetes | 1.25+ | 1.28+ |
+| Component | Version |
+|-----------|---------|
+| .NET | 10 SDK to build from source. Release binaries are self-contained. |
+| Docker | With the Compose plugin, for the Compose stack |
 
-### Storage Backend Requirements
+No benchmarks are published yet, so there are no tested sizing recommendations. Size CPU, memory and disk against your own ingest rate and retention.
 
-| Backend | Additional Requirements |
-|---------|----------------------|
-| SQLite | None (embedded) |
-| PostgreSQL | PostgreSQL 14+ with 2+ GB RAM |
-| OpenSearch | OpenSearch 2.x cluster with 4+ GB RAM per node |
-| Redis (distributed) | Redis 7.0+ with 512+ MB RAM |
+### Storage Backends
 
-## Deployment Options
+| Backend | `Storage:Type` | Notes |
+|---------|----------------|-------|
+| SQLite | `SQLite` | Default. Embedded, single file. |
+| In-Memory | `Memory` | Lost on restart. For tests. |
+| PostgreSQL | `PostgreSQL` | CI tests against PostgreSQL 16, and Compose runs it. |
+| OpenSearch | `OpenSearch` | Connection string is the cluster URL. |
 
-### Option 1: Docker Compose (Simplest)
-
-Best for: Small teams, single-server deployments, evaluation.
+## Docker Compose
 
 ```bash
-# Production with PostgreSQL
-docker-compose up -d
-
-# With monitoring (Grafana + Prometheus)
-docker-compose --profile monitoring up -d
-```
-
-### Option 2: Kubernetes (Production)
-
-Best for: Teams, high availability, auto-scaling.
-
-### Option 3: Bare Metal / VM
-
-Best for: Air-gapped environments, maximum control.
-
-```bash
-dotnet publish src/Cabinet.API -c Release -o /opt/cabinet
-cd /opt/cabinet && dotnet Cabinet.API.dll
-```
-
-## Docker Deployment
-
-### Quick Start
-
-```bash
-# Clone and start
 git clone https://github.com/bogware/cabinet.git
 cd cabinet
-docker-compose up -d
+cp .env.example .env
+# Set every value in .env. Each must be non-empty; Compose refuses to start otherwise.
+#   openssl rand -hex 32   # run once per value
+docker compose up -d
 
 # Verify
-curl http://localhost:8080/health
-# Expected: {"status":"Healthy"}
+curl http://localhost:5000/health
+# Expected: Healthy
 ```
 
-### Production docker-compose.yml
+The API and dashboard are published on host port 5000 (8080 in the container). Postgres and Redis are reachable only inside the Compose network.
+
+Services:
+
+| Service | Notes |
+|---------|-------|
+| `cabinet-api` | Uses PostgreSQL, with `CABINET_API_KEY` as an Enterprise-tier key. |
+| `postgres`, `redis` | Not published to the host. |
+| `cabinet-agent` | Built from `Dockerfile.agent`. Forwards `*.log` and `*.txt` files from `./logs`, mounted at `/var/log/host`. |
+| `cabinet-cli` | Prints its version and exits. Run commands with `docker compose run --rm cabinet-cli <command>`. |
+
+Optional profiles:
+
+```bash
+# Grafana (127.0.0.1:3000) and Prometheus (127.0.0.1:9090)
+docker compose --profile monitoring up -d
+
+# LocalStack (127.0.0.1:4566)
+docker compose --profile development up -d
+```
+
+To change resource limits or add settings, use a `docker-compose.override.yml`:
 
 ```yaml
-# Use the included docker-compose.yml with these overrides:
-# docker-compose.override.yml
 services:
   cabinet-api:
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - Storage__Type=PostgreSQL
-      - Storage__ConnectionString=Host=postgres;Port=5432;Database=cabinet;Username=cabinet;Password=${DB_PASSWORD}
-      - ApiKeys__Keys__0__Key=${API_KEY_HASH}
-      - ApiKeys__Keys__0__ClientName=production-client
-      - ApiKeys__Keys__0__Tier=Professional
-    restart: unless-stopped
+      - Storage__RetentionDays=90
+      - Network__TrustedProxies__0=172.20.0.10
     deploy:
       resources:
         limits:
           cpus: '4'
           memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 1G
 ```
 
-### Environment Variables
+### Images
+
+Containers run as non-root users. The API and CLI images use the base image's `app` user (uid 1654). The agent image creates its own `cabinet` system user. The API image has a `curl`-based `HEALTHCHECK` against `/health/live`.
+
+CI publishes only the API image, to `ghcr.io/bogware/cabinet`. Build the agent and CLI images yourself from `Dockerfile.agent` and `Dockerfile.cli`.
+
+## Packages and Installers
+
+CI builds these artifacts on `v*` tags and attaches them to a GitHub release. The latest published release, v1.0.0, predates the current `main` and this guide. To install the current code, run `./scripts/build-release.sh <version>`, which writes to `dist/`. It builds API, CLI and agent archives for Linux, Windows and macOS, plus `.deb` packages when `dpkg-deb` is available.
+
+Binaries are self-contained and single-file, so no .NET runtime is needed.
+
+### Linux: .deb
 
 ```bash
-# Required for production
-ASPNETCORE_ENVIRONMENT=Production
-Storage__Type=PostgreSQL              # or OpenSearch
-Storage__ConnectionString=<connection-string>
-
-# API Keys (at least one required)
-ApiKeys__Keys__0__Key=<sha256-hash-of-key>
-ApiKeys__Keys__0__ClientName=<client-name>
-ApiKeys__Keys__0__Tier=Professional   # Basic, Professional, or Enterprise
-
-# Optional: Distributed mode
-Distributed__Enabled=true
-Distributed__RedisConnectionString=redis:6379
-Distributed__InstanceId=${HOSTNAME}
-
-# Optional: Encryption at rest
-Encryption__Enabled=true
-CABINET_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
-
-# Optional: Syslog listener
-Syslog__Enabled=true
-Syslog__TcpPort=1514
-Syslog__UdpPort=1514
+sudo dpkg -i cabinet-api_<version>_amd64.deb     # or _arm64
 ```
 
-### Generating API Key Hashes
+Installs to `/opt/cabinet/`, with data in `/var/lib/cabinet/` and a `cabinet-api` systemd service listening on port 8080. Add a key to `/etc/cabinet/cabinet.env` (see [API Keys](#api-keys)) before starting:
 
 ```bash
-# Generate a random API key
-API_KEY=$(openssl rand -hex 32)
-echo "API Key (give to client): $API_KEY"
-
-# Generate SHA-256 hash (store this in config)
-echo -n "$API_KEY" | sha256sum | cut -d' ' -f1
+sudo systemctl start cabinet-api
+journalctl -u cabinet-api -f
 ```
 
-## Kubernetes Deployment
-
-### Prerequisites
+### Linux: installer script
 
 ```bash
-# Verify cluster access
-kubectl cluster-info
-kubectl get nodes
+# From a directory containing the Cabinet.API binary
+sudo ./install-server.sh --port 8080 --storage postgresql \
+  --conn-string "Host=db;Database=cabinet;Username=cabinet;Password=secret"
 
-# Create namespace
-kubectl create namespace cabinet
+# Or run the setup wizard after installing
+sudo ./install-server.sh --run-wizard
 ```
 
-### Step-by-Step Deployment
+The installer creates a non-root `cabinet` service user, installs to `/opt/cabinet/` with data in `/var/lib/cabinet/`, writes configuration to `/etc/cabinet/`, and installs a systemd unit (`Type=notify`) with `ProtectSystem=strict`, `PrivateTmp` and `NoNewPrivileges`. Secrets go in `/etc/cabinet/cabinet.env`. The name field for a key is `ApiKeys__Keys__N__Name`.
 
-#### 1. Create Secrets
+### Windows
+
+```powershell
+# Run PowerShell as Administrator
+.\install-server.ps1 -Port 8080 -Storage sqlite -RunWizard
+
+# Include the agent
+.\install-server.ps1 -IncludeAgent
+```
+
+The installer uses `C:\Program Files\Cabinet\` with data in `C:\ProgramData\Cabinet\`, registers the `CabinetAPI` Windows service, adds a firewall rule for the API port, and adds the CLI to the system PATH.
+
+### macOS
+
+Release archives are provided for `osx-arm64` and `osx-x64`. There is no installer or service integration.
 
 ```bash
-# Database password
-kubectl create secret generic cabinet-secrets \
-  --namespace cabinet \
-  --from-literal=db-password='<your-db-password>' \
-  --from-literal=api-key-hash='<sha256-hash>' \
-  --from-literal=encryption-key='<base64-key>'
-
-# Docker registry credentials (if private registry)
-kubectl create secret docker-registry regcred \
-  --namespace cabinet \
-  --docker-server=<registry> \
-  --docker-username=<user> \
-  --docker-password=<password>
+tar xzf cabinet-osx-arm64.tar.gz
+./api/Cabinet.API --urls http://localhost:8080
 ```
 
-#### 2. Apply Manifests
+### Setup wizard
+
+The setup wizard is part of the CLI. There is no web-based wizard.
 
 ```bash
-# Apply all manifests
-kubectl apply -f k8s/
-
-# Verify deployment
-kubectl -n cabinet get pods
-kubectl -n cabinet get svc
-kubectl -n cabinet get ingress
+cabinet setup
 ```
 
-#### 3. Verify Health
+It supports `--non-interactive`, `--mode`, `--storage`, `--api-key`, `--server-url` and `--skip-sample-data`. It offers a `distributed` mode, but multi-instance deployment isn't safe yet; see [Scaling](#scaling).
+
+## From Source
 
 ```bash
-# Port-forward for testing
-kubectl -n cabinet port-forward svc/cabinet-api 8080:80
-
-# Test health endpoint
-curl http://localhost:8080/health
-
-# Test with API key
-curl -H "X-API-Key: <your-key>" http://localhost:8080/api/v1/logs/stats
+dotnet publish src/Cabinet.API -c Release -o /opt/cabinet
+cd /opt/cabinet && ASPNETCORE_URLS=http://0.0.0.0:8080 ApiKeys__Keys__0__Key=<key> ApiKeys__Keys__0__Tier=Enterprise dotnet Cabinet.API.dll
 ```
 
-### Kubernetes Manifests
+A default Production configuration starts on SQLite. The API runs as a systemd (`Type=notify`) or Windows service when started by a service manager.
 
-The `k8s/` directory contains:
+## Forwarding Agent
+
+The agent tails files and forwards them to `/services/collector/event`.
+
+```bash
+# Linux
+sudo dpkg -i cabinet-agent_<version>_amd64.deb
+# Edit the agent's appsettings.json with your server URL and API key
+sudo systemctl start cabinet-agent
+
+# Or the installer script
+sudo ./install-agent.sh --server https://cabinet.example.com \
+  --api-key "your-api-key" --paths "/var/log/*.log,/var/log/syslog"
+```
+
+```powershell
+# Windows, as Administrator
+.\install-agent.ps1 -ServerUrl https://cabinet.example.com -ApiKey "your-api-key" `
+  -Paths "C:\inetpub\logs\*.log,C:\app\logs\*.log"
+```
+
+The agent image isn't published, so build it to run in Docker:
+
+```bash
+docker build -t cabinet-agent -f Dockerfile.agent .
+docker run -d \
+  -v /var/log:/var/log:ro \
+  -e Agent__Output__ServerUrl=https://cabinet.example.com \
+  -e Agent__Output__ApiKey=your-key \
+  -e Agent__Inputs__0__Paths__0=/var/log/syslog \
+  cabinet-agent
+```
+
+The key needs the `Ingest` capability (Professional or Enterprise tier).
+
+### Agent behaviour
+
+- Rescans input paths every `ScanIntervalSeconds` (default 10).
+- Tracks offsets in a registry file and detects rotation and truncation with a SHA-256 hash of the file header.
+- Merges multi-line events per input through `MultiLine:Pattern`, `Negate`, `MaxLines` and `TimeoutSeconds`.
+- Sends batches of `BatchSize` (default 100) every `FlushIntervalSeconds` (default 5), retrying with exponential backoff up to `MaxRetries`. A batch that exhausts its retries is written to `SpillDirectory`.
+
+### Agent limits
+
+- Spilled batches replay only when the agent starts.
+- Offsets advance when an event is queued, not when the server accepts it. A crash can lose queued events, and restarts can duplicate some.
+- Wildcards work only in the last path segment. `/var/log/**/*.log` matches nothing. Use `/var/log/*.log` with `"Recursive": true`.
+
+## Kubernetes
+
+The manifests in `k8s/` are a starting point, not a working deployment. Expect to complete them before use:
+
+- `deployment.yaml` has no volume mounts, so the PVCs in `pvc.yaml` aren't attached, and local SQLite metadata is lost when a pod restarts.
+- `ingress.yaml` routes `/api`, `/services` and `/health`, but not the dashboard.
+- There are no Postgres or Redis manifests. Provide them yourself.
+- `deployment.yaml` sets 2 replicas and `hpa.yaml` scales from 2 to 10. Multiple replicas aren't safe, so set `replicas: 1` and leave out `hpa.yaml` and `pdb.yaml`.
+- `secret-template.yaml` holds empty values. Copy it, fill it in, and don't apply the template itself.
 
 | File | Purpose |
 |------|---------|
-| `deployment.yaml` | API deployment (2 replicas, rolling update, probes) |
-| `service.yaml` | ClusterIP service + ConfigMap + Namespace |
-| `hpa.yaml` | Horizontal Pod Autoscaler (CPU/memory based) |
-| `pdb.yaml` | Pod Disruption Budget (min 1 available) |
-| `network-policy.yaml` | Network isolation (ingress + egress rules) |
+| `deployment.yaml` | API deployment with probes, running as uid 1654 |
+| `service.yaml` | ClusterIP service, ConfigMap and the `cabinet` Namespace |
+| `hpa.yaml` | Horizontal Pod Autoscaler |
+| `pdb.yaml` | Pod Disruption Budget |
+| `network-policy.yaml` | Ingress and egress rules |
 | `ingress.yaml` | External access with TLS termination |
-| `pvc.yaml` | Persistent storage for data and logs |
+| `pvc.yaml` | Persistent volume claims |
+| `secret-template.yaml` | Template for `cabinet-secrets` |
+
+The namespace is defined in `service.yaml`, so apply that first:
+
+```bash
+kubectl apply -f k8s/service.yaml
+
+# Fill in secret-template.yaml as described in its header, then:
+kubectl apply -f secrets.yaml
+
+kubectl apply -f k8s/deployment.yaml -f k8s/network-policy.yaml -f k8s/ingress.yaml -f k8s/pvc.yaml
+
+kubectl -n cabinet port-forward svc/cabinet-api 8080:80
+curl http://localhost:8080/health
+```
 
 ## Configuration Reference
 
-### Storage Configuration
+Settings come from `appsettings*.json` or environment variables, with `__` as the section separator (`Storage__Type`).
+
+### Listening address
+
+| Scenario | Address |
+|----------|---------|
+| Compose | Host port 5000 |
+| `.deb` and installer scripts | `0.0.0.0:8080` (`--port` to change) |
+| `dotnet run` | `localhost:5068` (Development) |
+| Published binary with no settings | `localhost:5000` |
+
+Set `ASPNETCORE_URLS` or `--urls` to override.
+
+### Storage
 
 ```json
 {
   "Storage": {
     "Type": "PostgreSQL",
     "ConnectionString": "Host=localhost;Port=5432;Database=cabinet;Username=cabinet;Password=secret",
-    "RetentionDays": 90,
-    "MaxEvents": 10000000,
-    "IndexPrefix": "cabinet-logs"
+    "MetadataConnectionString": "Data Source=cabinet-metadata.db",
+    "RetentionDays": 0
   }
 }
 ```
+
+OpenSearch also reads `Storage:IndexPrefix` (default `cabinet-logs`), `Storage:Username`, `Storage:Password` and `Storage:AllowInsecureSsl`.
+
+There is no fallback backend. A remote backend still unreachable after retries (2, 5 and 10 seconds apart) makes startup fail with a non-zero exit code.
+
+Where non-log data lives:
+
+| Data | SQLite | PostgreSQL | OpenSearch |
+|------|--------|------------|------------|
+| Dashboards, knowledge objects, saved queries, schedules | Log database | PostgreSQL | Local metadata database |
+| Search jobs, data models | Log database | Local metadata database | Local metadata database |
+| RBAC principals | Local `cabinet-rbac.db` | Local `cabinet-rbac.db` | Local `cabinet-rbac.db` |
+| Field extractions, alert history, retention definitions | Memory | Memory | Memory |
+
+The local metadata database is set by `Storage:MetadataConnectionString` (default `Data Source=cabinet-metadata.db`). It is per instance, so keep it on persistent storage. Compose puts it on the `cabinet-data` volume.
+
+### Retention
+
+`Storage:RetentionDays` is the only retention that deletes events. 0, the default, keeps everything. A positive value purges older events at startup and hourly. `/api/v1/retention` stores per-index definitions in memory only and doesn't enforce them.
+
+### API Keys
+
+```bash
+ApiKeys__Keys__0__Key=<raw key>        # openssl rand -hex 32
+ApiKeys__Keys__0__Tier=Professional    # Basic, Professional or Enterprise
+ApiKeys__Keys__0__Name=production-client
+```
+
+The value is the raw key, which the API hashes with SHA-256 in memory. Don't store a hash here. Validation is local on every instance and doesn't use Redis. Keys are read at startup, so restart after changing them. With no keys configured, the API starts and rejects authenticated routes.
 
 ### Rate Limiting
 
 ```json
 {
   "RateLimiting": {
-    "Basic": { "PermitLimit": 100, "Window": "00:01:00" },
-    "Professional": { "PermitLimit": 1000, "Window": "00:01:00", "AutoReplenishment": true },
-    "Enterprise": { "PermitLimit": 10000, "Window": "00:01:00", "QueueLimit": 100 }
+    "PreAuth": { "MaxRequestsPerMinute": 300, "WindowSeconds": 60 }
   }
 }
 ```
 
-### Distributed Mode
+These two keys set the per-address limit, which counts all requests from an address except `/health*` and `/metrics`. The tier limits (Basic 100/min, Professional 1,000/min, Enterprise 10,000/min) and the anonymous limit (100/min per address, rejected rather than queued) are hardcoded. The `RateLimiting:Basic`, `:Professional` and `:Enterprise` values in the shipped `appsettings` files and `IpRateLimiting` are not read. Limits are held in process memory. A Redis limiter exists in the code but isn't wired in.
+
+### Reverse Proxies
+
+```bash
+Network__TrustedProxies__0=10.0.0.5
+```
+
+`X-Forwarded-For` is ignored unless the proxy's IP address is listed. Each entry must be a single IP address, not a range, and an invalid entry fails startup.
+
+### CORS
+
+`Cors:AllowedOrigins` lists allowed origins. If the key is unset, only `http://localhost:3000` is allowed.
+
+### Redis
 
 ```json
 {
   "Distributed": {
     "Enabled": true,
-    "RedisConnectionString": "redis:6379,abortConnect=false",
-    "InstanceId": "cabinet-pod-1",
-    "LeaderElection": {
-      "Enabled": true,
-      "LeaseTimeSeconds": 30
-    },
-    "Cache": {
-      "ApiKeyTtlSeconds": 60
-    }
+    "RedisConnectionString": "redis:6379,password=secret,abortConnect=false",
+    "InstanceId": "cabinet-1",
+    "Cache": { "QueryResultTtlSeconds": 30 }
   }
 }
 ```
 
-### Encryption at Rest
+Redis's only role is a query result cache layer, and request paths currently use the in-process cache rather than that layer, so Redis isn't needed to run Cabinet. API key validation doesn't use Redis. Leader election is registered when this is enabled, but nothing consults it. `Distributed:Cache:QueryResultTtlSeconds` also sets the in-process cache TTL.
+
+### Syslog
+
+Off by default. Supports RFC 3164 over TCP and UDP with no TLS. Compose doesn't publish the port, so add a port mapping if you enable it there.
 
 ```json
 {
-  "Encryption": {
-    "Enabled": true,
-    "KeySource": "environment",
-    "KeyRotationDays": 90
-  }
+  "Syslog": { "Enabled": true, "BindAddress": "0.0.0.0", "TcpPort": 1514, "UdpPort": 1514 }
 }
 ```
 
-Key source options:
-- `environment` — Read from `CABINET_ENCRYPTION_KEY` env var
-- `file` — Read from file path specified in `KeyFilePath`
+### Alert Channels
 
-### RBAC Configuration
+Console and file channels are always registered. Scheduled searches send alerts through all channels.
 
 ```json
 {
-  "Rbac": {
+  "Webhook": { "Url": "https://hooks.example.com/...", "Format": "slack" },
+  "Email": {
     "Enabled": true,
-    "DefaultRole": "Viewer",
-    "Users": [
-      {
-        "ApiKeyHash": "<hash>",
-        "Role": "Admin",
-        "IndexPermissions": [
-          { "Pattern": "*", "Capabilities": ["Search", "Ingest", "Export"] }
-        ]
-      }
-    ]
+    "SmtpHost": "smtp.example.com",
+    "SmtpPort": 587,
+    "FromAddress": "cabinet@example.com",
+    "ToAddresses": ["ops@example.com"]
   }
 }
 ```
+
+Webhook `Format` is `generic`, `slack`, `discord`, `teams` or `pagerduty`.
+
+### SSO
+
+OIDC JWT validation is configured under `SSO` (`Enabled`, `Provider`, `Oidc:Authority`, `Oidc:ClientId`). Capability checks have no principal for an OIDC subject, so routes that require a capability return 403 for those tokens. Use API keys. SAML and LDAP are not implemented.
+
+### Not implemented
+
+These have configuration or classes in the code but no effect, so don't rely on them:
+
+- `Encryption:*`: the service is initialized at startup, but nothing calls it. Enabling it doesn't encrypt stored data.
+- `Masking:Rules`: the masking service is registered, but never applied to results.
+- Per-index RBAC: capability checks always evaluate index `main`. There is no configuration section for RBAC users. No tier has `IndexManagement` or `UserManagement`, and `PUT /api/v1/roles/{apiKeyHash}` returns 501.
+- Hot/warm/cold tiering and S3 archival.
+- Server-side multi-line merging. Use the agent.
 
 ## Security Hardening
 
+See also [SECURITY.md](../SECURITY.md).
+
 ### Production Checklist
 
-- [ ] Set `ASPNETCORE_ENVIRONMENT=Production`
-- [ ] Configure real API keys (not dev keys)
-- [ ] Enable HTTPS (TLS 1.2+)
-- [ ] Set restrictive CORS origins
-- [ ] Enable RBAC with least-privilege roles
-- [ ] Configure audit logging retention
-- [ ] Enable encryption at rest
-- [ ] Set PII masking rules for sensitive fields
-- [ ] Remove default/dev API keys from config
-- [ ] Configure rate limiting per tier
-- [ ] Set request size limits (default 50MB)
-- [ ] Enable response compression (disable over HTTPS if BREACH is a concern)
-- [ ] Run as non-root user (UID 1000 in Docker)
-- [ ] Use read-only root filesystem where possible
-- [ ] Mount secrets from K8s Secrets, not ConfigMaps
+- [ ] Set `ASPNETCORE_ENVIRONMENT=Production`; dev keys exist only in Development configuration
+- [ ] Generate real API keys and give each client the lowest tier it needs
+- [ ] Terminate TLS at a reverse proxy and list it in `Network:TrustedProxies`
+- [ ] Restrict `/metrics` at the network, since it is unauthenticated
+- [ ] Set `Cors:AllowedOrigins`
+- [ ] Set `Storage:RetentionDays` if you want events to expire
+- [ ] Use disk or database encryption if logs are sensitive
+- [ ] Ship the audit log to separate storage if you need to retain it
+- [ ] Mount secrets from a secret store rather than config files
 
-### TLS Configuration
+The API limits request bodies to 50 MB (5 MB on HEC routes) and sends CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` and `Strict-Transport-Security` headers.
 
-```bash
-# Generate self-signed cert (dev only)
-dotnet dev-certs https --export-path ./cert.pfx --password <password>
+### Audit Log
 
-# Production: Use cert-manager in K8s or load balancer TLS termination
-```
+Security events are written to the application log as a hash-chained audit log: each event's description carries a hash derived from the previous one. The chain exists in the log output only. There is no verifier, it is not tamper-proof, and the chain head is local to each instance.
+
+### TLS
+
+The API container serves plain HTTP. Terminate TLS at a reverse proxy, a load balancer, or cert-manager on Kubernetes.
 
 ## Monitoring & Observability
 
 ### Health Endpoints
 
-| Endpoint | Purpose | Auth Required |
-|----------|---------|---------------|
-| `GET /health` | Basic health status | No |
-| `GET /health/ready` | Readiness (storage connected) | No |
-| `GET /health/live` | Liveness (always 200) | No |
-| `GET /health/version` | API version info | No |
-| `GET /health/metrics` | Memory, GC, request stats | Yes |
-| `GET /health/status` | Detailed service health | Yes |
+| Endpoint | Purpose | Auth Required | Rate Limited |
+|----------|---------|---------------|--------------|
+| `GET /health` | Overall health, plain text | No | No |
+| `GET /health/ready` | Readiness (storage reachable) | No | No |
+| `GET /health/live` | Liveness | No | No |
+| `GET /metrics` | Prometheus metrics | No | No |
+| `GET /api/health`, `/api/health/ready`, `/api/health/live` | JSON equivalents | No | Yes |
+| `GET /api/health/version` | Version info | No | Yes |
+| `GET /api/health/metrics` | Memory, GC, request stats | Yes | Yes |
+| `GET /api/health/status` | Detailed service health | Yes | Yes |
 
-### Structured Logging
+### Logging
 
-Cabinet uses Serilog with structured JSON output. Configure sinks in `appsettings.json`:
+Cabinet logs through Serilog, configured in code: text to the console and to `logs/cabinet-api-.log`, rolling daily, with 30 files kept and 100 MB per file. These settings aren't read from `appsettings.json`.
 
-```json
-{
-  "Serilog": {
-    "MinimumLevel": {
-      "Default": "Information",
-      "Override": {
-        "Microsoft.AspNetCore": "Warning",
-        "System": "Warning"
-      }
-    },
-    "WriteTo": [
-      { "Name": "Console", "Args": { "outputTemplate": "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}" } },
-      { "Name": "File", "Args": { "path": "logs/cabinet-.log", "rollingInterval": "Day", "retainedFileCountLimit": 30, "fileSizeLimitBytes": 104857600 } }
-    ]
-  }
-}
-```
+### Metrics
 
-### Key Metrics to Monitor
+`/metrics` exposes:
 
-| Metric | Warning | Critical |
-|--------|---------|----------|
-| API response time (p95) | >500ms | >2000ms |
-| Error rate (5xx) | >1% | >5% |
-| Storage latency | >100ms | >500ms |
-| Memory usage | >70% limit | >90% limit |
-| CPU usage | >70% | >90% |
-| Active connections | >80% pool | >95% pool |
-| Queue depth (rate limiter) | >50% | >80% |
+- `cabinet_http_requests_total`, `cabinet_http_request_duration_seconds`
+- `cabinet_events_total`, `cabinet_storage_size_bytes`, `cabinet_storage_errors_total`
+- `cabinet_query_cache_entries`, `cabinet_query_cache_hits_total`, `cabinet_query_cache_misses_total`
+
+The `monitoring` Compose profile provides a Prometheus scrape config and a Grafana dashboard. No Prometheus alert rules are included, so define your own.
 
 ## Backup & Recovery
 
-### SQLite Backup
+### SQLite
 
 ```bash
-# Online backup (safe while the server is writing)
+# Online backup, safe while the server is writing
 sqlite3 cabinet.db ".backup /backups/cabinet-backup.db"
 ```
 
-### PostgreSQL Backup
+Do the same for `cabinet-metadata.db` and `cabinet-rbac.db` where they hold data you want to keep.
+
+The built-in `LocalBackupService` (`Backup:AutoBackupEnabled`) copies the file without WAL consistency and there is no restore, so use `sqlite3` instead.
+
+### PostgreSQL
 
 ```bash
-# pg_dump (recommended)
 pg_dump -h localhost -U cabinet -d cabinet -F c -f /backups/cabinet-$(date +%Y%m%d).dump
 
 # Restore
-pg_restore -h localhost -U cabinet -d cabinet /backups/cabinet-20240115.dump
+pg_restore -h localhost -U cabinet -d cabinet /backups/cabinet-20260115.dump
 ```
 
-### OpenSearch Backup
+In the Compose stack, Postgres isn't published to the host, so run this through the container:
+
+```bash
+docker compose exec -T postgres pg_dump -U cabinet -d cabinet -F c > cabinet.dump
+```
+
+Back up the local metadata database as well, since search jobs and data models live there.
+
+### OpenSearch
 
 ```bash
 # Register snapshot repository
@@ -406,162 +485,121 @@ curl -X PUT "http://opensearch:9200/_snapshot/cabinet-backups" -H 'Content-Type:
 curl -X PUT "http://opensearch:9200/_snapshot/cabinet-backups/snapshot-$(date +%Y%m%d)"
 ```
 
-### Recovery Procedures
+All metadata is in the local SQLite database with this backend, so back that up too.
 
-See [Runbooks](#runbook-disaster-recovery) below.
+### Recovery
 
-## Scaling Guide
+See [Runbook: Disaster Recovery](#runbook-disaster-recovery).
 
-### Vertical Scaling
+## Scaling
 
-| Load | CPU | RAM | Storage |
-|------|-----|-----|---------|
-| <1K events/sec | 2 cores | 2 GB | 50 GB SSD |
-| 1-10K events/sec | 4 cores | 8 GB | 200 GB SSD |
-| 10-50K events/sec | 8 cores | 16 GB | 1 TB SSD |
-| 50K+ events/sec | 16 cores | 32 GB | Distributed storage |
+Run a single API instance. Horizontal scaling isn't safe yet:
 
-### Horizontal Scaling (Kubernetes)
+- Scheduled searches fire once per replica.
+- Search jobs, data models and RBAC are local to each instance, and with OpenSearch so is all other metadata.
+- Field extractions, alert history and retention definitions are in memory on each instance.
+- Rate limits are per instance, and the audit chain head is local.
+- Leader election is registered but not consulted.
 
-```yaml
-# HPA scales based on CPU/memory
-# Minimum: 2 replicas (HA)
-# Maximum: 10 replicas (adjust based on load)
-
-# Distributed mode required for >1 replica
-Distributed:
-  Enabled: true
-  RedisConnectionString: redis:6379
-```
-
-### Storage Scaling Path
-
-```
-Development:    SQLite (single file, zero config)
-     ↓
-Small Team:     PostgreSQL (single node, connection pooling)
-     ↓
-Growth:         PostgreSQL + table partitioning by month
-     ↓
-Enterprise:     OpenSearch cluster (2+ nodes, sharded indices)
-     ↓
-Large Scale:    OpenSearch + hot/warm/cold tiering + S3 archival
-```
+Scale vertically and choose the storage backend to fit your data. No benchmarks are published yet, so there are no tested throughput figures for any configuration.
 
 ## Troubleshooting
 
-### Common Issues
-
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Connection refused` on port 8080 | API not started or wrong port | Check `docker-compose ps` or `kubectl get pods` |
-| `401 Unauthorized` | Invalid API key | Verify key hash matches config |
-| `429 Too Many Requests` | Rate limit exceeded | Upgrade tier or wait for window reset |
-| `503 Service Unavailable` | Storage backend down | Check PostgreSQL/OpenSearch health |
-| Slow queries (>5s) | Large result set or missing index | Add `\| limit 1000` or check storage indexes |
-| High memory usage | Large query results in memory | Reduce query limit, check for unbounded queries |
-| Leader election flapping | Redis connectivity issues | Check Redis connectivity and lease time |
+| Compose refuses to start with `Set CABINET_...` | An `.env` value is empty | Set every value in `.env` |
+| `Connection refused` | API not started or wrong port | Check `docker compose ps`. Compose publishes port 5000. |
+| API exits at startup with `Storage backend ... is unreachable` | Remote backend down after retries | Fix the backend or connection string. There is no fallback. |
+| `401 Unauthorized` | Invalid or missing API key | Check `ApiKeys__Keys__N__Key` and restart |
+| `403` on `DELETE /api/v1/logs`, roles or index routes | No tier has these capabilities | Not available today |
+| `403` on export or scheduled searches | Requires Enterprise tier | Use an Enterprise key |
+| `429 Too Many Requests` | Rate limit exceeded | Back off. Raise `RateLimiting:PreAuth:MaxRequestsPerMinute` if the per-address limit is the cause. |
+| All clients share one rate-limit bucket behind a proxy | Proxy not trusted | Add it to `Network:TrustedProxies` |
+| Slow queries | Large result set | Narrow the time range or add `\| limit 1000` |
+| High memory usage | Large query results in memory | Narrow queries |
+| Agent forwards nothing with a `**` path | `**` isn't supported in directories | Use `*.log` with `Recursive: true` |
 
 ### Debug Mode
 
 ```bash
-# Enable debug logging
+# Development environment: enables Swagger UI and the dev keys. Not for production.
 ASPNETCORE_ENVIRONMENT=Development
-Serilog__MinimumLevel__Default=Debug
 
-# Check API health details
-curl -H "X-API-Key: <key>" http://localhost:8080/health/status
+# Check service health
+curl -H "X-API-Key: <key>" http://localhost:5000/api/health/status
 ```
 
 ## Runbooks
 
-### Runbook: Deployment
+### Runbook: Upgrade (Compose)
 
 ```
-1. Build Docker image:
-   docker build -t cabinet-api:v1.1.0 -f Dockerfile.api .
+1. Back up (see Backup & Recovery).
 
-2. Push to registry:
-   docker tag cabinet-api:v1.1.0 <registry>/cabinet-api:v1.1.0
-   docker push <registry>/cabinet-api:v1.1.0
+2. Rebuild and restart:
+   git pull
+   docker compose up -d --build
 
-3. Update K8s deployment:
-   kubectl -n cabinet set image deployment/cabinet-api cabinet-api=<registry>/cabinet-api:v1.1.0
+3. Verify health:
+   curl http://localhost:5000/health
 
-4. Monitor rollout:
-   kubectl -n cabinet rollout status deployment/cabinet-api
-
-5. Verify health:
-   curl http://<ingress-host>/health
-
-6. If issues, rollback:
-   kubectl -n cabinet rollout undo deployment/cabinet-api
+4. If there are issues, check out the previous revision and repeat step 2.
+   Restore from backup if the data changed.
 ```
 
 ### Runbook: Disaster Recovery
 
 ```
 1. Assess damage:
-   - Check pod status: kubectl -n cabinet get pods
-   - Check storage: kubectl -n cabinet exec <pod> -- curl localhost:8080/health/status
+   docker compose ps
+   docker compose logs cabinet-api
+   curl -H "X-API-Key: <key>" http://localhost:5000/api/health/status
 
-2. If storage corrupted:
-   a. Stop API pods: kubectl -n cabinet scale deployment/cabinet-api --replicas=0
-   b. Restore from backup (see Backup & Recovery section)
-   c. Restart: kubectl -n cabinet scale deployment/cabinet-api --replicas=2
+2. If storage is corrupted:
+   a. Stop the API: docker compose stop cabinet-api
+   b. Restore from backup (see Backup & Recovery)
+   c. Restart: docker compose start cabinet-api
 
-3. If data loss:
-   a. Identify last good backup
-   b. Restore to new database
-   c. Update connection string in ConfigMap
-   d. Restart pods
+3. If the database must move:
+   a. Identify the last good backup
+   b. Restore to a new database
+   c. Update Storage__ConnectionString
+   d. Restart the API
 
 4. Post-incident:
-   - Review audit logs for root cause
-   - Document incident and resolution
+   - Review logs for root cause
    - Update backup frequency if needed
 ```
 
-### Runbook: Scaling Up
+### Runbook: High Load
 
 ```
-1. Monitor current load:
-   curl -H "X-API-Key: <key>" http://localhost:8080/health/metrics
+1. Check current load:
+   curl -H "X-API-Key: <key>" http://localhost:5000/api/health/metrics
 
-2. If CPU > 80% sustained:
-   kubectl -n cabinet scale deployment/cabinet-api --replicas=<current+2>
-   # Or let HPA handle it (if configured)
+2. If CPU is sustained high, give the instance more CPU. Don't add replicas.
 
-3. If storage latency > 500ms:
-   a. Check backend health (PostgreSQL connections, OpenSearch cluster)
-   b. Consider upgrading storage tier
-   c. Add read replicas if supported
+3. If storage is slow, check backend health (PostgreSQL connections, OpenSearch cluster).
 
-4. If memory > 90%:
-   a. Check for unbounded queries (add limits)
-   b. Increase pod memory limits
-   c. Review query patterns for optimization
+4. If memory is high:
+   a. Check for unbounded queries and add limits
+   b. Increase the memory limit
 ```
 
 ### Runbook: API Key Rotation
 
 ```
-1. Generate new key:
-   NEW_KEY=$(openssl rand -hex 32)
-   NEW_HASH=$(echo -n "$NEW_KEY" | sha256sum | cut -d' ' -f1)
+1. Generate a new key:
+   openssl rand -hex 32
 
-2. Add new key to config (keep old key active):
-   kubectl -n cabinet edit secret cabinet-secrets
-   # Add new key hash alongside old one
+2. Add it alongside the old one under the next index:
+   ApiKeys__Keys__1__Key=<new key>
+   ApiKeys__Keys__1__Tier=<tier>
+   ApiKeys__Keys__1__Name=<client>
 
-3. Distribute new key to clients
+3. Restart the API to pick up the change.
 
-4. Monitor for old key usage in audit logs
+4. Distribute the new key to clients.
 
-5. After all clients migrated, remove old key:
-   kubectl -n cabinet edit secret cabinet-secrets
-   # Remove old key hash
-
-6. Restart pods to pick up config change:
-   kubectl -n cabinet rollout restart deployment/cabinet-api
+5. After all clients have moved, remove the old key and restart again.
 ```

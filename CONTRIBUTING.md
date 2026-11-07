@@ -20,10 +20,10 @@ Be respectful and constructive. We're building software together — treat other
 
 ### Prerequisites
 
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Docker](https://docs.docker.com/get-docker/) (for integration testing and container builds)
-- Git 2.30+
-- A C# IDE (Visual Studio 2022, VS Code with C# Dev Kit, JetBrains Rider)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), which is required. `global.json` pins it (10.0.100 or a later feature band).
+- [Docker](https://docs.docker.com/get-docker/) (for container builds, and an easy way to run backends for integration tests)
+- Git
+- A C# IDE with .NET 10 support (Visual Studio, VS Code with C# Dev Kit, JetBrains Rider)
 
 ### First-Time Setup
 
@@ -49,10 +49,10 @@ dotnet run --project src/Cabinet.API
 
 ```bash
 # Health check (API must be running)
-curl http://localhost:5000/health
+curl http://localhost:5068/health
 
 # Test with dev API key
-curl -H "X-API-Key: dev-basic-key" http://localhost:5000/api/v1/logs/stats
+curl -H "X-API-Key: dev-basic-key" http://localhost:5068/api/v1/logs/stats
 ```
 
 ## Development Workflow
@@ -61,7 +61,7 @@ curl -H "X-API-Key: dev-basic-key" http://localhost:5000/api/v1/logs/stats
 
 ```
 feature/<description>     # New features (e.g., feature/json-parser)
-fix/<description>         # Bug fixes (e.g., fix/tenant-scoping-bypass)
+fix/<description>         # Bug fixes (e.g., fix/hec-auth-header)
 docs/<description>        # Documentation (e.g., docs/api-guide)
 refactor/<description>    # Refactoring (e.g., refactor/query-engine-streaming)
 test/<description>        # Test additions (e.g., test/api-controller-tests)
@@ -72,8 +72,8 @@ test/<description>        # Test additions (e.g., test/api-controller-tests)
 Write concise commit messages that explain **why**, not just **what**:
 
 ```
-Good:  Fix tenant index scoping bypass that allowed cross-tenant data access
-Bad:   Update TenantMiddleware.cs
+Good:  Deny capability checks when a principal has no ClientId
+Bad:   Update CapabilityAuthorizationFilter.cs
 Good:  Add JSON parser for structured log ingestion
 Bad:   New parser
 ```
@@ -102,6 +102,7 @@ Fixes #123
 ### Enforced by Build
 
 - **Target framework:** `net10.0`
+- **Package versions:** declared centrally in `Directory.Packages.props`
 - **Nullable reference types:** Enabled (`<Nullable>enable</Nullable>`)
 - **Warnings as errors:** `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`
 - All warnings must be resolved — the build will fail otherwise
@@ -178,6 +179,17 @@ dotnet test
 
 # Build must succeed (includes warning-as-error check)
 dotnet build -c Release
+
+# Skip tests that need external backends
+dotnet test --filter "Category!=Integration"
+```
+
+`Integration` is the only test category. Postgres and OpenSearch integration tests skip themselves unless `CABINET_TEST_POSTGRES_CONNSTR` or `CABINET_TEST_OPENSEARCH_URL` (plus optional `_USER` and `_PASS`) is set.
+
+`api-spec.json` is generated from the API and checked by a test. If you change the API surface, regenerate it:
+
+```bash
+CABINET_UPDATE_API_SPEC=1 dotnet test --filter ApiSpec_MatchesTheRunningApi
 ```
 
 ### Test Coverage Expectations
@@ -202,17 +214,17 @@ public class BqlParserTests
     private readonly BqlParser _parser = new();
 
     [Fact]
-    public void ParseBql_SimpleSearch_ReturnsSearchStage()
+    public void ParseBql_SimpleSearch_ProducesSearchStage()
     {
         // Arrange
-        var query = "find errors";
+        var text = "find errors";
 
         // Act
-        var pipeline = _parser.ParseBql(query);
+        var query = _parser.ParseBql(text);
 
         // Assert
-        pipeline.Stages.Should().HaveCount(1);
-        pipeline.Stages[0].Should().BeOfType<SearchStage>();
+        query.Stages.Should().HaveCount(1);
+        query.Stages[0].Should().BeOfType<SearchStage>();
     }
 
     [Theory]
@@ -231,14 +243,18 @@ public class BqlParserTests
 
 ```
 tests/Cabinet.Tests/
+  Agent/          # Forwarding agent tests
+  CLI/            # CLI tests
+  Controllers/    # API controller tests
   Core/           # Core model and utility tests
+  Detection/      # Detection suite tests
+  Middleware/     # API middleware tests
   Parsers/        # Log parser tests
   Query/          # BQL lexer, parser, engine, optimizer tests
+  Services/       # API service and startup tests
   Storage/        # Storage backend tests
-  Detection/      # Detection suite tests
-  API/            # Controller and middleware tests (NEW)
-  Alerts/         # Alert channel and service tests (NEW)
-  Integration/    # Cross-layer integration tests (NEW)
+tests/EndToEnd/
+  run-tests.sh    # CLI-driven end-to-end script
 ```
 
 ## Pull Request Process
@@ -293,7 +309,7 @@ Before requesting review, verify:
 ### Review Process
 
 1. At least one maintainer approval required
-2. CI pipeline must pass (build + test + security scan)
+2. CI pipeline must pass (build + test)
 3. No unresolved review comments
 4. Squash-merge to `main` (preserves clean history)
 
@@ -310,6 +326,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture docum
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/bogware/cabinet/discussions) for general questions
-- Open an [Issue](https://github.com/bogware/cabinet/issues) for bugs or feature requests
+- Open an [Issue](https://github.com/bogware/cabinet/issues) for questions, bugs or feature requests
+- Report security vulnerabilities as described in [SECURITY.md](SECURITY.md), not in an issue
 - See [README.md](README.md) for project overview and quick start
