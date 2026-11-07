@@ -131,29 +131,22 @@ public class IpRateLimitingMiddlewareTests : IDisposable
     }
 
     [Fact]
-    public async Task InvokeAsync_XForwardedFor_UsesClientIp()
+    public async Task InvokeAsync_RotatingXForwardedFor_CannotEvadeLimit()
     {
         var middleware = CreateMiddleware(maxRequests: 2);
 
-        // Make requests with X-Forwarded-For header
         for (var i = 0; i < 2; i++)
         {
-            var ctx = CreateHttpContext("/api/v1/logs");
-            ctx.Request.Headers["X-Forwarded-For"] = "192.168.1.100, 10.0.0.1";
+            var ctx = CreateHttpContext("/api/v1/logs", remoteIp: "203.0.113.7");
+            ctx.Request.Headers["X-Forwarded-For"] = $"192.168.1.{i}";
             await middleware.InvokeAsync(ctx);
         }
 
-        // Should be rate limited based on the first IP in X-Forwarded-For
-        var limitedCtx = CreateHttpContext("/api/v1/logs");
-        limitedCtx.Request.Headers["X-Forwarded-For"] = "192.168.1.100, 10.0.0.1";
-        await middleware.InvokeAsync(limitedCtx);
-        limitedCtx.Response.StatusCode.Should().Be(429);
+        var limited = CreateHttpContext("/api/v1/logs", remoteIp: "203.0.113.7");
+        limited.Request.Headers["X-Forwarded-For"] = "192.168.1.200";
+        await middleware.InvokeAsync(limited);
 
-        // Different forwarded IP should still work
-        var otherCtx = CreateHttpContext("/api/v1/logs");
-        otherCtx.Request.Headers["X-Forwarded-For"] = "192.168.1.200";
-        await middleware.InvokeAsync(otherCtx);
-        otherCtx.Response.StatusCode.Should().NotBe(429);
+        limited.Response.StatusCode.Should().Be(429);
     }
 
     private IpRateLimitingMiddleware CreateMiddleware(int maxRequests = 300)

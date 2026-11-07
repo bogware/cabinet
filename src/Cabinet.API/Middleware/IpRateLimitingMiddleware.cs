@@ -89,16 +89,9 @@ public sealed class IpRateLimitingMiddleware
 
     private static string GetClientIp(HttpContext context)
     {
-        // Check X-Forwarded-For for reverse proxy scenarios (take first IP only)
-        var forwarded = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-        if (!string.IsNullOrEmpty(forwarded))
-        {
-            var firstIp = forwarded.Split(',', StringSplitOptions.TrimEntries)[0];
-            if (IPAddress.TryParse(firstIp, out _))
-                return firstIp;
-        }
-
-        // If no IP is available, use a sentinel that still gets rate-limited
+        // Never read X-Forwarded-For here: any client can set it. Behind a configured proxy
+        // (Network:TrustedProxies), forwarded-header middleware has already resolved this.
+        // If no IP is available, use a sentinel that still gets rate-limited.
         return context.Connection.RemoteIpAddress?.ToString() ?? "0.0.0.0";
     }
 

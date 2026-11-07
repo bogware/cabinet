@@ -15,10 +15,13 @@ public static class RateLimitingExtensions
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
             {
                 // Use the hashed API key from claims (set by auth handler) — never the raw key
-                var partitionKey = context.User?.FindFirst("ClientId")?.Value ?? "anonymous";
-                var tier = context.User?.FindFirst("Tier")?.Value ?? "Basic";
+                var clientId = context.User?.FindFirst("ClientId")?.Value;
+                if (clientId == null)
+                {
+                    return GetAnonymousLimiter($"ip:{context.Connection.RemoteIpAddress}");
+                }
 
-                return GetRateLimiter(tier, partitionKey);
+                return GetRateLimiter(context.User?.FindFirst("Tier")?.Value ?? "Basic", clientId);
             });
 
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -39,6 +42,21 @@ public static class RateLimitingExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Per-address limit for unauthenticated requests. Over-limit requests are rejected
+    /// rather than queued, so anonymous callers can't hold connections open while they wait.
+    /// </summary>
+    private static RateLimitPartition<string> GetAnonymousLimiter(string partitionKey) =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey,
+            _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 6,
+                QueueLimit = 0
+            });
 
     private static RateLimitPartition<string> GetRateLimiter(string tier, string apiKey)
     {

@@ -39,7 +39,17 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
         var apiKeyHash = context.HttpContext.User?.FindFirst("ClientId")?.Value;
         if (string.IsNullOrEmpty(apiKeyHash))
         {
-            // No API key claim — let normal auth handle it
+            // No identity to check capabilities against, so deny. Letting this through
+            // would grant every capability to any principal without the claim.
+            var authenticated = context.HttpContext.User?.Identity?.IsAuthenticated == true;
+            context.Result = new JsonResult(new
+            {
+                error = authenticated ? "Forbidden" : "Unauthorized",
+                message = authenticated
+                    ? "This identity has no capabilities assigned"
+                    : "Authentication is required"
+            })
+            { StatusCode = authenticated ? StatusCodes.Status403Forbidden : StatusCodes.Status401Unauthorized };
             return;
         }
 

@@ -486,11 +486,6 @@ public class CacheConfiguration
     public int DefaultTtlSeconds { get; set; } = 300;
 
     /// <summary>
-    /// TTL for cached API key validations
-    /// </summary>
-    public int ApiKeyTtlSeconds { get; set; } = 60;
-
-    /// <summary>
     /// TTL for cached query results
     /// </summary>
     public int QueryResultTtlSeconds { get; set; } = 30;

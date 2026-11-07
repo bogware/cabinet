@@ -41,8 +41,8 @@ public sealed class MetricsMiddleware
         finally
         {
             sw.Stop();
-            var method = context.Request.Method;
-            var path = NormalizePath(context.Request.Path);
+            var method = LabelForMethod(context.Request.Method);
+            var path = LabelForPath(context);
             var status = context.Response.StatusCode.ToString();
 
             MetricsCollector.RecordRequest(method, path, status, sw.Elapsed.TotalSeconds);
@@ -161,46 +161,18 @@ public sealed class MetricsMiddleware
     }
 
     /// <summary>
-    /// Normalize paths to prevent high-cardinality metric labels.
-    /// Replaces dynamic segments (ULIDs, GUIDs, numbers) with placeholders.
+    /// Uses the matched route template. Requests are attacker-controlled and these labels are
+    /// kept forever, so raw paths would be both a memory leak and a label injection.
     /// </summary>
-    private static string NormalizePath(string path)
-    {
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0) return "/";
+    private static string LabelForPath(HttpContext context) =>
+        context.GetEndpoint() is RouteEndpoint endpoint && endpoint.RoutePattern.RawText is { } pattern
+            ? "/" + pattern.TrimStart('/')
+            : "unmatched";
 
-        for (var i = 0; i < segments.Length; i++)
-        {
-            // Replace ULID-like (26 chars), GUID-like, or purely numeric segments
-            if (segments[i].Length >= 20 || Guid.TryParse(segments[i], out _) ||
-                segments[i].All(char.IsDigit))
-            {
-                // Only replace if it looks like an ID (not a known route segment)
-                if (!IsKnownSegment(segments[i]))
-                {
-                    segments[i] = ":id";
-                }
-            }
-        }
-
-        return "/" + string.Join("/", segments);
-    }
-
-    private static bool IsKnownSegment(string segment) => segment.ToLowerInvariant() switch
-    {
-        "api" or "v1" or "logs" or "query" or "dashboards" or "knowledge"
-        or "detection" or "health" or "services" or "collector"
-        or "event" or "raw" or "stream" or "stats" or "ingest"
-        or "saved" or "explain" or "export" or "translate" or "validate"
-        or "fieldsummary" or "suggestions" or "scheduled-searches"
-        or "enable" or "disable" or "ready" or "live"
-        or "metrics" or "swagger"
-        or "lookups" or "macros" or "aliases" or "version" or "status"
-        or "scumscan" or "hackwatch" or "adminabuse" or "analyze"
-        or "jobs" or "roles" or "indexes" or "datamodels"
-        or "cancel" or "results" or "tstats" => true,
-        _ => false
-    };
+    private static string LabelForMethod(string method) =>
+        method is "GET" or "POST" or "PUT" or "PATCH" or "DELETE" or "HEAD" or "OPTIONS"
+            ? method
+            : "OTHER";
 }
 
 /// <summary>

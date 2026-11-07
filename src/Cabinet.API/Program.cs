@@ -229,6 +229,13 @@ try
         });
     }
 
+    // Must run first so everything below sees the real client address
+    var trustedProxies = TrustedProxies.Read(app.Configuration);
+    if (trustedProxies.Count > 0)
+    {
+        app.UseForwardedHeaders(TrustedProxies.CreateOptions(trustedProxies));
+    }
+
     // Prometheus metrics (before other middleware to capture all requests)
     app.UseMiddleware<MetricsMiddleware>();
 
@@ -251,7 +258,7 @@ try
         context.Response.Headers.Append("X-Frame-Options", "DENY");
         context.Response.Headers.Append("X-XSS-Protection", "0"); // Disabled in favor of CSP (modern best practice)
         context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'");
+        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
         context.Response.Headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
         await next();
@@ -278,15 +285,15 @@ try
     app.MapControllers();
 
     // Map health check endpoints
-    app.MapHealthChecks("/health");
+    app.MapHealthChecks("/health").DisableRateLimiting();
     app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {
         Predicate = check => check.Tags.Contains("ready")
-    });
+    }).DisableRateLimiting();
     app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {
         Predicate = _ => false // Liveness probe - always healthy if app is running
-    });
+    }).DisableRateLimiting();
 
     // Initialize services with graceful degradation for remote backends
     using (var scope = app.Services.CreateScope())
@@ -326,13 +333,6 @@ try
         // Initialize encryption service (if configured)
         var encryptionService = scope.ServiceProvider.GetRequiredService<EncryptionService>();
         await encryptionService.InitializeAsync();
-
-        // Subscribe to API key invalidation events in distributed mode
-        var distributedApiKeyService = scope.ServiceProvider.GetService<Cabinet.API.Services.DistributedApiKeyService>();
-        if (distributedApiKeyService != null)
-        {
-            await distributedApiKeyService.SubscribeToInvalidationsAsync();
-        }
 
         Log.Information("Cabinet API initialized successfully");
     }
@@ -570,6 +570,10 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
 
     // Distributed infrastructure (Redis coordination, caching, rate limiting)
     var distributedConfig = configuration.GetSection("Distributed");
+    // Keys are validated in-process on every instance. Authorization results are never
+    // cached in Redis, where anyone with access could forge a valid one.
+    services.AddSingleton<Cabinet.API.Authentication.IApiKeyService, Cabinet.API.Services.ApiKeyService>();
+
     var distributedEnabled = configuration.GetValue<bool>("Distributed:Enabled");
     var redisConnectionString = configuration["Distributed:RedisConnectionString"];
 
@@ -588,17 +592,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             leaseDuration: TimeSpan.FromSeconds(configuration.GetValue("Distributed:LeaderElection:LeaseTimeSeconds", 30)),
             renewalInterval: TimeSpan.FromSeconds(configuration.GetValue("Distributed:LeaderElection:RenewalIntervalSeconds", 10))));
 
-        // API Key service — distributed (wraps inner service with Redis caching)
-        services.AddSingleton<Cabinet.API.Services.ApiKeyService>();
-        services.AddSingleton<Cabinet.API.Services.DistributedApiKeyService>(sp =>
-            new Cabinet.API.Services.DistributedApiKeyService(
-                sp.GetRequiredService<Cabinet.API.Services.ApiKeyService>(),
-                sp.GetRequiredService<Cabinet.API.Infrastructure.RedisConnectionManager>(),
-                sp.GetRequiredService<ILogger<Cabinet.API.Services.DistributedApiKeyService>>(),
-                TimeSpan.FromSeconds(configuration.GetValue("Distributed:Cache:ApiKeyTtlSeconds", 60))));
-        services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp =>
-            sp.GetRequiredService<Cabinet.API.Services.DistributedApiKeyService>());
-
         // Distributed query cache — L2 Redis cache with pub/sub invalidation across instances
         services.AddSingleton<Cabinet.API.Services.DistributedQueryCacheService>(sp =>
             new Cabinet.API.Services.DistributedQueryCacheService(
@@ -616,9 +609,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     }
     else
     {
-        // Single-instance mode — in-memory API key service
-        services.AddSingleton<Cabinet.API.Authentication.IApiKeyService, Cabinet.API.Services.ApiKeyService>();
-
         Log.Information("Single-instance mode (set Distributed:Enabled=true for multi-instance)");
     }
 }

@@ -50,6 +50,85 @@ public sealed class ApiStartupTests : IDisposable
         (await stdout).Should().Contain("NotARealBackend");
     }
 
+    [Fact]
+    public async Task Api_UnderAnonymousFlood_KeepsHealthProbesAndMetricsBounded()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(client, process);
+
+            // More than the anonymous allowance, each to a unique path with a junk method.
+            var marker = $"flood{Guid.NewGuid():N}"[..16];
+            var statuses = new List<HttpStatusCode>();
+            for (var i = 0; i < 150; i++)
+            {
+                using var request = new HttpRequestMessage(new HttpMethod("FLOOD"), $"/{marker}{i}");
+                using var response = await client.SendAsync(request);
+                statuses.Add(response.StatusCode);
+            }
+
+            statuses.Should().Contain(HttpStatusCode.TooManyRequests, "the flood should exceed the anonymous limit");
+
+            (await client.GetAsync("/health/live")).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await client.GetAsync("/health/ready")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var metrics = await client.GetStringAsync("/metrics");
+            metrics.Should().NotContain(marker, "request paths must not become metric labels");
+            metrics.Should().NotContain("FLOOD", "request methods must not become metric labels");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
+    [Fact]
+    public async Task Api_SpoofedForwardedFor_DoesNotEvadePreAuthLimit()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        startInfo.Environment["Storage__Type"] = "Memory";
+        startInfo.Environment["RateLimiting__PreAuth__MaxRequestsPerMinute"] = "20";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var client = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(client, process);
+
+            var limited = false;
+            for (var i = 0; i < 40 && !limited; i++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/logs/stats");
+                request.Headers.TryAddWithoutValidation("X-Forwarded-For", $"198.51.100.{i}");
+                using var response = await client.SendAsync(request);
+                limited = response.StatusCode == HttpStatusCode.TooManyRequests;
+            }
+
+            limited.Should().BeTrue("rotating X-Forwarded-For must not create fresh rate-limit buckets");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
     [SkippableFact]
     [Trait("Category", "Integration")]
     public async Task Api_WithPostgres_StartsAndServesIngestAndQuery()
