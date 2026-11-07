@@ -1767,7 +1767,7 @@
                 const tr = document.createElement('tr');
                 tr.innerHTML = `<td style="font-weight:500">${esc(m.name)}</td>
                     <td style="font-family:monospace;font-size:11px;max-width:300px" title="${esc(m.definition)}">${esc(m.definition)}</td>
-                    <td style="color:var(--text-secondary);font-size:11px">${(m.parameters || []).join(', ') || '-'}</td>
+                    <td style="color:var(--text-secondary);font-size:11px">${esc((m.parameters || []).join(', ')) || '-'}</td>
                     <td><button class="btn btn-danger btn-sm del-btn">Del</button></td>`;
                 tr.querySelector('.del-btn').onclick = () => deleteKnowledgeItem('macros', m.id);
                 tbody.appendChild(tr);
@@ -2246,7 +2246,10 @@
 
     /* ===== Utils ===== */
     function fmt(n) { return Number(n).toLocaleString(); }
-    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function esc(s) {
+        const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return String(s ?? '').replace(/[&<>"']/g, c => entities[c]);
+    }
     function sevClass(val) {
         const n = typeof val === 'number' ? val : parseInt(val) || 0;
         return ['sev-trace','sev-debug','sev-info','sev-warning','sev-error','sev-critical','sev-fatal'][Math.min(n, 6)];
