@@ -73,7 +73,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         var storage = new CapturingStorage();
         var config = Config();
         var service = CreateService(storage, config);
-        await service.StartAsync(CancellationToken.None);
+        await StartAsync(service);
 
         const string counted = "<34>1 2026-03-04T05:06:07Z web-1 app 1 - - counted\nwith newline";
         using (var client = new TcpClient())
@@ -99,7 +99,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         var storage = new CapturingStorage();
         var config = Config();
         var service = CreateService(storage, config);
-        await service.StartAsync(CancellationToken.None);
+        await StartAsync(service);
 
         using (var client = new UdpClient())
         {
@@ -132,7 +132,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         config.TlsCertificatePath = path;
         config.TlsCertificatePassword = "secret";
         var service = CreateService(storage, config);
-        await service.StartAsync(CancellationToken.None);
+        await StartAsync(service);
 
         using (var client = new TcpClient())
         {
@@ -187,7 +187,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         var storage = new CapturingStorage { FailuresLeft = 1 };
         var config = Config();
         var service = CreateService(storage, config);
-        await service.StartAsync(CancellationToken.None);
+        await StartAsync(service);
 
         using (var client = new TcpClient())
         {
@@ -207,7 +207,7 @@ public sealed class SyslogListenerServiceTests : IDisposable
         var storage = new CapturingStorage();
         var config = Config();
         var service = CreateService(storage, config);
-        await service.StartAsync(CancellationToken.None);
+        await StartAsync(service);
 
         using (var client = new TcpClient())
         {
@@ -254,6 +254,12 @@ public sealed class SyslogListenerServiceTests : IDisposable
         var reader = new SyslogFrameReader(new MemoryStream(Encoding.UTF8.GetBytes(input)), 1024);
 
         (await reader.ReadAsync()).Should().Be(expected);
+    }
+
+    private static async Task StartAsync(SyslogListenerService service)
+    {
+        await service.StartAsync(CancellationToken.None);
+        await service.Listening.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     private static async Task RunUntilFaultedAsync(SyslogListenerService service)

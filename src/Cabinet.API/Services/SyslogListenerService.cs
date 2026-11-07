@@ -65,6 +65,7 @@ public sealed class SyslogListenerService : BackgroundService
             FullMode = BoundedChannelFullMode.Wait,
         });
 
+    private readonly TaskCompletionSource _listening = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _droppedDatagrams;
     private long _lastDropWarningTicks;
     private int _openConnections;
@@ -78,6 +79,9 @@ public sealed class SyslogListenerService : BackgroundService
         _config = config;
         _logger = logger;
     }
+
+    /// <summary>Completes once the sockets are bound. Starting the service doesn't wait for that.</summary>
+    internal Task Listening => _listening.Task;
 
     /// <summary>UDP datagrams dropped because storage was behind.</summary>
     public long DroppedDatagrams => Interlocked.Read(ref _droppedDatagrams);
@@ -109,6 +113,7 @@ public sealed class SyslogListenerService : BackgroundService
             _logger.LogInformation(
                 "Syslog listening on {Address} (UDP:{UdpPort}, TCP:{TcpPort}, TLS:{TlsPort})",
                 _config.BindAddress, _config.UdpPort, _config.TcpPort, _config.TlsPort);
+            _listening.TrySetResult();
 
             var processing = ProcessMessagesAsync(stoppingToken);
             try
