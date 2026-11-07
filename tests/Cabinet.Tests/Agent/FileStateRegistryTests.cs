@@ -1,172 +1,271 @@
 using Cabinet.Agent.Monitoring;
 using FluentAssertions;
-using Microsoft.Extensions.Logging;
-using Moq;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Cabinet.Tests.Agent;
 
-public class FileStateRegistryTests : IDisposable
+public sealed class FileStateRegistryTests : IDisposable
 {
-    private readonly string _tempDir;
-    private readonly string _registryPath;
-    private readonly Mock<ILogger<FileStateRegistry>> _loggerMock = new();
+    private const string Fingerprint = "FINGERPRINT";
 
-    public FileStateRegistryTests()
+    private readonly string _tempDir = Directory.CreateTempSubdirectory("cabinet-registry-").FullName;
+
+    private string RegistryPath => Path.Combine(_tempDir, "registry.json");
+
+    private FileStateRegistry Create()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"cabinet-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _registryPath = Path.Combine(_tempDir, "registry.json");
+        var registry = new FileStateRegistry(RegistryPath, 60, NullLogger<FileStateRegistry>.Instance);
+        registry.Initialize();
+        return registry;
+    }
+
+    private string WriteFile(string name, string content)
+    {
+        var path = Path.Combine(_tempDir, name);
+        File.WriteAllText(path, content);
+        return path;
     }
 
     [Fact]
     public void GetState_UnknownPath_ReturnsNull()
     {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
 
-        var state = registry.GetState("/nonexistent/file.log");
-
-        state.Should().BeNull();
+        registry.GetState("/nonexistent/file.log").Should().BeNull();
     }
 
     [Fact]
-    public void UpdateState_TracksOffsetAndLines()
+    public void Resolve_NewFile_StartsFromZeroWithItsOwnKey()
     {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
 
-        registry.UpdateState("/var/log/test.log", 1024, 2048, 50);
+        var first = registry.Resolve("/logs/a.log", Fingerprint, 100);
+        var second = registry.Resolve("/logs/b.log", "OTHER", 100);
 
-        var state = registry.GetState("/var/log/test.log");
-        state.Should().NotBeNull();
-        state!.Offset.Should().Be(1024);
-        state.LastKnownSize.Should().Be(2048);
-        state.LinesRead.Should().Be(50);
+        first.Offset.Should().Be(0);
+        first.FileKey.Should().NotBeEmpty();
+        second.FileKey.Should().NotBe(first.FileKey);
     }
 
     [Fact]
-    public void RegisterFile_SetsHeaderHash()
+    public void Resolve_SameFileGrown_Continues()
     {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
+        var state = registry.Resolve("/logs/a.log", Fingerprint, 100);
+        registry.Commit(state.FileKey, 100, 5);
 
-        registry.RegisterFile("/var/log/test.log", 4096, "ABC123");
+        var resumed = registry.Resolve("/logs/a.log", Fingerprint, 200);
 
-        var state = registry.GetState("/var/log/test.log");
-        state.Should().NotBeNull();
-        state!.HeaderHash.Should().Be("ABC123");
-        state.LastKnownSize.Should().Be(4096);
+        resumed.FileKey.Should().Be(state.FileKey);
+        resumed.Offset.Should().Be(100);
     }
 
     [Fact]
-    public void ResetOffset_SetsOffsetToZero()
+    public void Resolve_DifferentFirstLine_StartsOver()
     {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
+        var state = registry.Resolve("/logs/a.log", Fingerprint, 100);
+        registry.Commit(state.FileKey, 100, 5);
 
-        registry.UpdateState("/var/log/test.log", 5000, 5000, 100);
-        registry.ResetOffset("/var/log/test.log");
+        var rotated = registry.Resolve("/logs/a.log", "OTHER", 500);
 
-        var state = registry.GetState("/var/log/test.log");
-        state.Should().NotBeNull();
-        state!.Offset.Should().Be(0);
-        state.LinesRead.Should().Be(0);
+        rotated.FileKey.Should().NotBe(state.FileKey);
+        rotated.Offset.Should().Be(0);
+    }
+
+    [Fact]
+    public void Resolve_SameFirstLineButSmaller_StartsOver()
+    {
+        using var registry = Create();
+        var state = registry.Resolve("/logs/a.log", Fingerprint, 100);
+        registry.Commit(state.FileKey, 100, 5);
+
+        var replaced = registry.Resolve("/logs/a.log", Fingerprint, 10);
+
+        replaced.FileKey.Should().NotBe(state.FileKey);
+        replaced.Offset.Should().Be(0);
+    }
+
+    [Fact]
+    public void Resolve_RenamedFile_KeepsItsPosition()
+    {
+        using var registry = Create();
+        var original = WriteFile("app.log", "first line\nsecond\n");
+        var fingerprint = FileStateRegistry.ComputeFingerprint(original)!;
+        var state = registry.Resolve(original, fingerprint, 18);
+        registry.Commit(state.FileKey, 18, 2);
+
+        var renamed = Path.Combine(_tempDir, "app.log.1");
+        File.Move(original, renamed);
+        var resolved = registry.Resolve(renamed, fingerprint, 18);
+
+        resolved.FileKey.Should().Be(state.FileKey);
+        resolved.Offset.Should().Be(18);
+        registry.GetState(original).Should().BeNull();
+    }
+
+    [Fact]
+    public void Resolve_RotatedFileFoundAfterNewFileStarted_KeepsTheNewFilesState()
+    {
+        // Found by chaos testing: picking up the rotated file removed whatever state was at its
+        // old path, which by then was the new file's. The new file then lost its checkpoints.
+        using var registry = Create();
+        var logPath = Path.Combine(_tempDir, "app.log");
+        var rotated = WriteFile("app.log.1", "old first\nold second\n");
+        var oldFingerprint = FileStateRegistry.ComputeFingerprint(rotated)!;
+        var old = registry.Resolve(logPath, oldFingerprint, 21);
+        registry.Commit(old.FileKey, 10, 1);
+
+        var current = registry.Resolve(logPath, "NEW FILE", 5);
+        var adopted = registry.Resolve(rotated, oldFingerprint, 21);
+
+        adopted.FileKey.Should().Be(old.FileKey);
+        registry.GetState(logPath).Should().BeSameAs(current);
+
+        registry.Commit(current.FileKey, 5, 1);
+        current.Offset.Should().Be(5);
+    }
+
+    [Fact]
+    public void Resolve_OtherFileStillHoldingTheSameFirstLine_IsNotARename()
+    {
+        using var registry = Create();
+        var original = WriteFile("a.log", "# header\none\n");
+        var copy = WriteFile("b.log", "# header\ntwo\n");
+        var fingerprint = FileStateRegistry.ComputeFingerprint(original)!;
+        var state = registry.Resolve(original, fingerprint, 13);
+        registry.Commit(state.FileKey, 13, 2);
+
+        var resolved = registry.Resolve(copy, fingerprint, 13);
+
+        resolved.FileKey.Should().NotBe(state.FileKey);
+        resolved.Offset.Should().Be(0);
+    }
+
+    [Fact]
+    public void Commit_AfterRotation_IsIgnored()
+    {
+        using var registry = Create();
+        var old = registry.Resolve("/logs/a.log", Fingerprint, 100);
+        var current = registry.Resolve("/logs/a.log", "OTHER", 100);
+
+        registry.Commit(old.FileKey, 100, 5);
+
+        current.Offset.Should().Be(0, "that offset belongs to the old contents");
+    }
+
+    [Fact]
+    public void Commit_AfterRotation_StillAppliesToTheOldContents()
+    {
+        // Events read before a rotation can be delivered after it. If the old file turns up under
+        // a new name, reading must continue after them.
+        using var registry = Create();
+        var renamed = WriteFile("app.log.1", "first\nsecond\n");
+        var fingerprint = FileStateRegistry.ComputeFingerprint(renamed)!;
+        var old = registry.Resolve("/logs/app.log", fingerprint, 13);
+        registry.Resolve("/logs/app.log", "OTHER", 5);
+
+        registry.Commit(old.FileKey, 6, 1);
+        var resolved = registry.Resolve(renamed, fingerprint, 13);
+
+        resolved.FileKey.Should().Be(old.FileKey);
+        resolved.Offset.Should().Be(6);
+    }
+
+    [Fact]
+    public void Commit_NeverMovesBackwards()
+    {
+        using var registry = Create();
+        var state = registry.Resolve("/logs/a.log", Fingerprint, 100);
+
+        registry.Commit(state.FileKey, 100, 5);
+        registry.Commit(state.FileKey, 50, 2);
+
+        state.Offset.Should().Be(100);
     }
 
     [Fact]
     public void Remove_DeletesState()
     {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
+        registry.Resolve("/logs/a.log", Fingerprint, 100);
 
-        registry.UpdateState("/var/log/test.log", 100, 200, 10);
-        registry.Remove("/var/log/test.log");
+        registry.Remove("/logs/a.log");
 
-        registry.GetState("/var/log/test.log").Should().BeNull();
-    }
-
-    [Fact]
-    public void GetTrackedPaths_ReturnsAllPaths()
-    {
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
-
-        registry.UpdateState("/var/log/a.log", 100, 200, 5);
-        registry.UpdateState("/var/log/b.log", 300, 400, 15);
-
-        var paths = registry.GetTrackedPaths();
-        paths.Should().HaveCount(2);
-        paths.Should().Contain("/var/log/a.log");
-        paths.Should().Contain("/var/log/b.log");
+        registry.GetState("/logs/a.log").Should().BeNull();
     }
 
     [Fact]
     public void SaveAndLoad_PersistsState()
     {
-        // Save
-        using (var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object))
+        string key;
+        using (var registry = Create())
         {
-            registry.Initialize();
-            registry.UpdateState("/var/log/test.log", 2048, 4096, 75);
-            registry.RegisterFile("/var/log/test.log", 4096, "HASH123");
+            var state = registry.Resolve("/logs/a.log", Fingerprint, 4096);
+            key = state.FileKey;
+            registry.Commit(key, 2048, 75);
             registry.Save();
         }
 
-        // Load in new instance
-        using (var registry2 = new FileStateRegistry(_registryPath, 60, _loggerMock.Object))
-        {
-            registry2.Initialize();
+        using var loaded = Create();
+        var restored = loaded.GetState("/logs/a.log")!;
 
-            var state = registry2.GetState("/var/log/test.log");
-            state.Should().NotBeNull();
-            state!.Offset.Should().Be(2048);
-            state.LinesRead.Should().Be(75);
-            state.HeaderHash.Should().Be("HASH123");
-        }
+        restored.FileKey.Should().Be(key);
+        restored.Offset.Should().Be(2048);
+        restored.LinesRead.Should().Be(75);
+        restored.Fingerprint.Should().Be(Fingerprint);
     }
 
     [Fact]
-    public void ComputeHeaderHash_ReturnsConsistentHash()
+    public void ComputeFingerprint_DoesNotChangeAsTheFileGrows()
     {
-        var testFile = Path.Combine(_tempDir, "test.log");
-        File.WriteAllText(testFile, "Hello, this is a test log file.\nLine 2\nLine 3\n");
+        var path = WriteFile("grow.log", "first line\n");
+        var before = FileStateRegistry.ComputeFingerprint(path);
 
-        var hash1 = FileStateRegistry.ComputeHeaderHash(testFile);
-        var hash2 = FileStateRegistry.ComputeHeaderHash(testFile);
+        File.AppendAllText(path, "second\n");
+        File.AppendAllText(path, new string('x', 5000) + "\n");
 
-        hash1.Should().NotBeNull();
-        hash2.Should().NotBeNull();
-        hash1.Should().Be(hash2);
+        before.Should().NotBeNull();
+        FileStateRegistry.ComputeFingerprint(path).Should().Be(before);
     }
 
     [Fact]
-    public void ComputeHeaderHash_DifferentContent_DifferentHash()
+    public void ComputeFingerprint_DiffersByFirstLine()
     {
-        var file1 = Path.Combine(_tempDir, "test1.log");
-        var file2 = Path.Combine(_tempDir, "test2.log");
-        File.WriteAllText(file1, "Content A\n");
-        File.WriteAllText(file2, "Content B\n");
-
-        var hash1 = FileStateRegistry.ComputeHeaderHash(file1);
-        var hash2 = FileStateRegistry.ComputeHeaderHash(file2);
-
-        hash1.Should().NotBe(hash2);
+        FileStateRegistry.ComputeFingerprint(WriteFile("a.log", "Content A\n"))
+            .Should().NotBe(FileStateRegistry.ComputeFingerprint(WriteFile("b.log", "Content B\n")));
     }
 
     [Fact]
-    public void ComputeHeaderHash_NonexistentFile_ReturnsNull()
+    public void ComputeFingerprint_WithoutCompleteFirstLine_IsNull()
     {
-        var hash = FileStateRegistry.ComputeHeaderHash("/nonexistent/file.log");
-        hash.Should().BeNull();
+        FileStateRegistry.ComputeFingerprint(WriteFile("partial.log", "no newline yet")).Should().BeNull();
+        FileStateRegistry.ComputeFingerprint(WriteFile("empty.log", string.Empty)).Should().BeNull();
+    }
+
+    [Fact]
+    public void ComputeFingerprint_VeryLongFirstLine_UsesItsStart()
+    {
+        var path = WriteFile("long.log", new string('x', 2000));
+        var before = FileStateRegistry.ComputeFingerprint(path);
+
+        File.AppendAllText(path, new string('y', 2000) + "\n");
+
+        before.Should().NotBeNull();
+        FileStateRegistry.ComputeFingerprint(path).Should().Be(before);
+    }
+
+    [Fact]
+    public void ComputeFingerprint_NonexistentFile_ReturnsNull()
+    {
+        FileStateRegistry.ComputeFingerprint(Path.Combine(_tempDir, "missing.log")).Should().BeNull();
     }
 
     [Fact]
     public void Initialize_MissingRegistryFile_StartsEmpty()
     {
-        var nonExistentPath = Path.Combine(_tempDir, "nonexistent", "registry.json");
-        using var registry = new FileStateRegistry(nonExistentPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
 
         registry.GetTrackedPaths().Should().BeEmpty();
     }
@@ -174,23 +273,15 @@ public class FileStateRegistryTests : IDisposable
     [Fact]
     public void Initialize_CorruptRegistryFile_StartsEmpty()
     {
-        File.WriteAllText(_registryPath, "not valid json{{{{");
+        File.WriteAllText(RegistryPath, "not valid json{{{{");
 
-        using var registry = new FileStateRegistry(_registryPath, 60, _loggerMock.Object);
-        registry.Initialize();
+        using var registry = Create();
 
         registry.GetTrackedPaths().Should().BeEmpty();
     }
 
     public void Dispose()
     {
-        try
-        {
-            Directory.Delete(_tempDir, recursive: true);
-        }
-        catch
-        {
-            // Best effort cleanup
-        }
+        Directory.Delete(_tempDir, recursive: true);
     }
 }

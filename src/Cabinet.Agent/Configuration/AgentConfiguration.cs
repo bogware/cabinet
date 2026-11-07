@@ -29,6 +29,16 @@ public sealed class AgentConfiguration
     /// Override hostname reported with events. Empty = auto-detect.
     /// </summary>
     public string Hostname { get; set; } = string.Empty;
+
+    /// <summary>
+    /// How often each file is checked for new lines (milliseconds).
+    /// </summary>
+    public int PollIntervalMilliseconds { get; set; } = 1000;
+
+    /// <summary>
+    /// Longest line kept, in bytes. Longer lines are truncated, and the rest isn't buffered.
+    /// </summary>
+    public int MaxLineBytes { get; set; } = 1024 * 1024;
 }
 
 /// <summary>
@@ -91,7 +101,7 @@ public sealed class MultiLineConfiguration
     public int MaxLines { get; set; } = 500;
 
     /// <summary>
-    /// Maximum time to wait for continuation lines (seconds).
+    /// How long an event stays open with no new lines before it's sent (seconds).
     /// </summary>
     public int TimeoutSeconds { get; set; } = 5;
 }
@@ -122,9 +132,19 @@ public sealed class OutputConfiguration
     public int FlushIntervalSeconds { get; set; } = 5;
 
     /// <summary>
-    /// Maximum number of retries for failed sends.
+    /// Retries before a batch goes to the spool.
     /// </summary>
     public int MaxRetries { get; set; } = 5;
+
+    /// <summary>
+    /// Delay before the first retry, doubling after each one (milliseconds).
+    /// </summary>
+    public int RetryDelayMilliseconds { get; set; } = 1000;
+
+    /// <summary>
+    /// Largest batch to send, in bytes. Must stay under the server's 5 MB request limit.
+    /// </summary>
+    public long MaxBatchBytes { get; set; } = 4 * 1024 * 1024;
 
     /// <summary>
     /// HTTP request timeout (seconds).
@@ -137,14 +157,31 @@ public sealed class OutputConfiguration
     public bool VerifySsl { get; set; } = true;
 
     /// <summary>
-    /// Maximum number of events to buffer in memory when the server is unreachable.
+    /// Events to queue in memory. When full, file reading pauses until there's room.
     /// </summary>
     public int MaxBufferSize { get; set; } = 10000;
 
     /// <summary>
-    /// Path for spilling buffered events to disk when memory buffer is full.
+    /// Directory for batches the server wouldn't accept in time. Rejected events go to its
+    /// <c>dead-letter</c> subdirectory. Use a persistent location.
     /// </summary>
     public string SpillDirectory { get; set; } = "spool";
+
+    /// <summary>
+    /// Largest size of the spool, in bytes. When full, delivery keeps retrying and file reading
+    /// pauses, so data waits in the source files.
+    /// </summary>
+    public long MaxSpoolBytes { get; set; } = 1024L * 1024 * 1024;
+
+    /// <summary>
+    /// How often to try delivering spooled batches (seconds).
+    /// </summary>
+    public int SpoolRetryIntervalSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// How long to keep sending at shutdown before spooling the rest (seconds).
+    /// </summary>
+    public int ShutdownFlushSeconds { get; set; } = 20;
 }
 
 /// <summary>

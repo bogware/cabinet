@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Storage ignores an event whose ID already exists, on every backend. HEC events can supply a stable `id`.
+- Agent registry files from earlier versions aren't compatible, so tracked files are read again once after upgrading.
+- Compose keeps the agent's spool on its data volume.
 - `now()` returns Unix seconds, as documented. `strptime`, `relative_time` and `mktime` also return Unix seconds.
 - Unknown functions, unknown aggregates and invalid regular expressions are query errors rather than silent nulls.
 - `Tags` in query results is an array rather than a comma-separated string. CSV exports join multi-value fields with semicolons.
@@ -49,6 +52,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The agent no longer loses events in an outage or crash. Checkpoints move only when events are accepted or spooled, the spool replays periodically instead of only at startup, and a rejected batch no longer blocks the rest. A 401 or 403 no longer drops events.
+- The agent no longer creates duplicates. Growing small files no longer look rotated, and events carry a stable ID that the server stores once.
+- The agent reads lines written just before a rotation, doesn't re-read rotated files that a pattern also matches, doesn't split partial lines or multi-line events across polls, bounds line length and spool size, restarts failed harvesters, and supports `**` and wildcards in any path segment.
+- A partial OpenSearch bulk failure now returns an error, so the sender retries instead of losing the failed events.
 - Brought BQL in line with its guide. Every documented query now runs as a test, with results checked for each function and stage. Notable fixes: `.` concatenation, `replace` with a regex, `printf`, `strftime`, `strptime`, `relative_time`, `mktime`, `ctime`, `dur2sec`, `mvfilter`, `regex field="pattern"`, `top N x by y`, `transaction startswith/endswith`, `chart` cross-tabs, `timechart` functions other than sum, avg, min and max, in-place `convert`, and `fieldsummary` type and stdev.
 - Fields named like severity levels, such as `error`, are no longer read as numbers outside severity comparisons.
 - Group keys no longer collide when values contain `|`.

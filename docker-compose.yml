@@ -70,7 +70,7 @@ services:
       - Agent__Output__ApiKey=${CABINET_API_KEY:?Set CABINET_API_KEY environment variable}
       - Agent__Output__VerifySsl=false
       - Agent__Registry__Path=/app/data/registry.json
-      - Agent__Output__SpillDirectory=/app/spool
+      - Agent__Output__SpillDirectory=/app/data/spool
     volumes:
       - cabinet-agent-data:/app/data
       - ./logs:/var/log/host:ro  # Mount host logs for forwarding

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Cabinet.Agent.Configuration;
 
@@ -9,33 +10,70 @@ namespace Cabinet.Agent.Forwarding;
 
 /// <summary>
 /// Batches log events and forwards them to the Cabinet API server.
-/// Provides reliable delivery with retry, exponential backoff, and disk-based spill buffer.
+/// <para>
+/// A batch is durable once the server accepts it or it's written to the spool, and only then does
+/// <see cref="BatchDurable"/> fire to move the file checkpoints. Spooled batches are replayed
+/// periodically. When the spool is full the forwarder keeps retrying, which fills the queue and
+/// pauses file reading, so data waits in the source files instead of being dropped.
+/// </para>
 /// </summary>
 public sealed class LogForwarder : IAsyncDisposable
 {
+    private const string CollectorPath = "/services/collector/event";
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromMinutes(5);
+
+    private enum SendResult
+    {
+        Accepted,
+        Rejected,
+        Unavailable,
+    }
+
+    private sealed record QueuedEvent(LogEventDto Event, string Json);
+
     private readonly OutputConfiguration _config;
     private readonly HttpClient _httpClient;
     private readonly ILogger<LogForwarder> _logger;
     private readonly Channel<LogEventDto> _channel;
-    private readonly CancellationTokenSource _cts = new();
+    private readonly CancellationTokenSource _stopSending = new();
+    private readonly CancellationTokenSource _stopReplay = new();
     private readonly Task _processingTask;
-    private readonly string _spillDirectory;
+    private readonly Task _replayTask;
+    private readonly string _spoolDirectory;
+    private readonly string _deadLetterDirectory;
+    private readonly TimeSpan _retryDelay;
+    private readonly object _flushLock = new();
+    private Task? _flushTask;
+    private QueuedEvent? _carriedOver;
+    private bool _serverDown;
     private long _eventsSent;
     private long _eventsDropped;
+    private long _eventsSpooled;
+    private long _eventsDeadLettered;
     private long _batchesSent;
     private long _batchesFailed;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    /// <summary>
+    /// Raised when events are safe: accepted by the server, or written to the spool or dead-letter
+    /// directory. Their file checkpoints can move past them.
+    /// </summary>
+    public event Action<IReadOnlyList<LogEventDto>>? BatchDurable;
 
     public LogForwarder(OutputConfiguration config, HttpClient httpClient, ILogger<LogForwarder> logger)
     {
         _config = config;
         _httpClient = httpClient;
         _logger = logger;
-        _spillDirectory = config.SpillDirectory;
+        _spoolDirectory = config.SpillDirectory;
+        _deadLetterDirectory = Path.Combine(config.SpillDirectory, "dead-letter");
+        _retryDelay = TimeSpan.FromMilliseconds(config.RetryDelayMilliseconds);
 
         _channel = Channel.CreateBounded<LogEventDto>(new BoundedChannelOptions(config.MaxBufferSize)
         {
@@ -63,24 +101,24 @@ public sealed class LogForwarder : IAsyncDisposable
         _httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
 
-        _processingTask = Task.Run(() => ProcessBatchesAsync(_cts.Token));
+        _processingTask = Task.Run(ProcessBatchesAsync);
+        _replayTask = Task.Run(ReplaySpoolAsync);
     }
 
     /// <summary>
-    /// Enqueue a log event for batched forwarding.
+    /// Enqueue a log event for batched forwarding, waiting if the queue is full. That wait is what
+    /// slows file reading when the server can't keep up.
     /// </summary>
-    public async ValueTask EnqueueAsync(LogEventDto evt)
+    public async ValueTask EnqueueAsync(LogEventDto evt, CancellationToken cancellationToken = default)
     {
-        if (!_channel.Writer.TryWrite(evt))
+        try
         {
-            // Channel is full, wait briefly then drop if still full
-            if (!await _channel.Writer.WaitToWriteAsync(_cts.Token))
-            {
-                Interlocked.Increment(ref _eventsDropped);
-                return;
-            }
-
-            _channel.Writer.TryWrite(evt);
+            await _channel.Writer.WriteAsync(evt, cancellationToken);
+        }
+        catch (ChannelClosedException)
+        {
+            // Shutting down. The checkpoint hasn't moved, so this is re-read at the next start.
+            Interlocked.Increment(ref _eventsDropped);
         }
     }
 
@@ -91,244 +129,430 @@ public sealed class LogForwarder : IAsyncDisposable
     {
         EventsSent = Interlocked.Read(ref _eventsSent),
         EventsDropped = Interlocked.Read(ref _eventsDropped),
+        EventsSpooled = Interlocked.Read(ref _eventsSpooled),
+        EventsDeadLettered = Interlocked.Read(ref _eventsDeadLettered),
         BatchesSent = Interlocked.Read(ref _batchesSent),
         BatchesFailed = Interlocked.Read(ref _batchesFailed),
         QueueDepth = _channel.Reader.Count
     };
 
-    private async Task ProcessBatchesAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Stops accepting events and delivers what's queued. Whatever can't be sent before the
+    /// shutdown deadline goes to the spool.
+    /// </summary>
+    public Task FlushAsync()
+    {
+        lock (_flushLock)
+        {
+            return _flushTask ??= FlushCoreAsync();
+        }
+    }
+
+    private async Task FlushCoreAsync()
+    {
+        _channel.Writer.TryComplete();
+
+        try
+        {
+            await _processingTask.WaitAsync(TimeSpan.FromSeconds(_config.ShutdownFlushSeconds));
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Delivery didn't finish within {Seconds}s, spooling the rest", _config.ShutdownFlushSeconds);
+            await _stopSending.CancelAsync();
+            await _processingTask;
+        }
+
+        await _stopReplay.CancelAsync();
+        await _replayTask;
+
+        _logger.LogInformation("Log forwarder stopped. Sent: {Sent}, spooled: {Spooled}, dead-lettered: {DeadLettered}",
+            Interlocked.Read(ref _eventsSent), Interlocked.Read(ref _eventsSpooled), Interlocked.Read(ref _eventsDeadLettered));
+    }
+
+    private async Task ProcessBatchesAsync()
     {
         _logger.LogInformation("Log forwarder started. Server: {Server}, BatchSize: {BatchSize}, FlushInterval: {Interval}s",
             _config.ServerUrl, _config.BatchSize, _config.FlushIntervalSeconds);
 
-        // First, retry any spilled batches from previous runs
-        await RetrySpilledBatchesAsync(cancellationToken);
-
-        var batch = new List<LogEventDto>(_config.BatchSize);
-        var flushInterval = TimeSpan.FromSeconds(_config.FlushIntervalSeconds);
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                // Wait for first event or cancellation
-                using var flushCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                flushCts.CancelAfter(flushInterval);
-
-                try
-                {
-                    while (batch.Count < _config.BatchSize)
-                    {
-                        var evt = await _channel.Reader.ReadAsync(flushCts.Token);
-                        batch.Add(evt);
-                    }
-                }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                {
-                    // Flush interval elapsed — send what we have
-                }
-
-                if (batch.Count > 0)
-                {
-                    await SendBatchWithRetryAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (ChannelClosedException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unexpected error in batch processor");
-                batch.Clear();
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
-        }
-
-        // Drain remaining events on shutdown
-        while (_channel.Reader.TryRead(out var remaining))
-        {
-            batch.Add(remaining);
-            if (batch.Count >= _config.BatchSize)
-            {
-                await SendBatchWithRetryAsync(batch, CancellationToken.None);
-                batch.Clear();
-            }
-        }
-
-        if (batch.Count > 0)
-        {
-            await SendBatchWithRetryAsync(batch, CancellationToken.None);
-        }
-
-        _logger.LogInformation("Log forwarder stopped. Total sent: {Sent}, dropped: {Dropped}",
-            Interlocked.Read(ref _eventsSent), Interlocked.Read(ref _eventsDropped));
-    }
-
-    private async Task SendBatchWithRetryAsync(List<LogEventDto> batch, CancellationToken cancellationToken)
-    {
-        var payload = BuildHecPayload(batch);
-        var retryDelay = TimeSpan.FromSeconds(1);
-
-        for (var attempt = 0; attempt <= _config.MaxRetries; attempt++)
-        {
-            try
-            {
-                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-                using var response = await _httpClient.PostAsync("/services/collector/event", content, cancellationToken);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    Interlocked.Add(ref _eventsSent, batch.Count);
-                    Interlocked.Increment(ref _batchesSent);
-
-                    if (_logger.IsEnabled(LogLevel.Debug))
-                    {
-                        _logger.LogDebug("Sent batch of {Count} events (attempt {Attempt})",
-                            batch.Count, attempt + 1);
-                    }
-
-                    return;
-                }
-
-                // Non-retryable status codes
-                if (response.StatusCode is HttpStatusCode.BadRequest
-                    or HttpStatusCode.Unauthorized
-                    or HttpStatusCode.Forbidden)
-                {
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                    _logger.LogError("Server rejected batch ({Status}): {Body}. Dropping {Count} events",
-                        response.StatusCode, body, batch.Count);
-                    Interlocked.Add(ref _eventsDropped, batch.Count);
-                    Interlocked.Increment(ref _batchesFailed);
-                    return;
-                }
-
-                _logger.LogWarning("Server returned {Status} for batch of {Count} events (attempt {Attempt}/{Max})",
-                    response.StatusCode, batch.Count, attempt + 1, _config.MaxRetries + 1);
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogWarning(ex, "HTTP error sending batch (attempt {Attempt}/{Max})",
-                    attempt + 1, _config.MaxRetries + 1);
-            }
-            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogWarning("Timeout sending batch (attempt {Attempt}/{Max})",
-                    attempt + 1, _config.MaxRetries + 1);
-            }
-
-            if (attempt < _config.MaxRetries)
-            {
-                await Task.Delay(retryDelay, cancellationToken);
-                retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, 60));
-            }
-        }
-
-        // All retries exhausted — spill to disk
-        _logger.LogError("All retries exhausted for batch of {Count} events, spilling to disk", batch.Count);
-        Interlocked.Increment(ref _batchesFailed);
-        await SpillBatchToDiskAsync(payload);
-    }
-
-    private async Task SpillBatchToDiskAsync(string payload)
-    {
+        var token = _stopSending.Token;
+        List<QueuedEvent>? inFlight = null;
         try
         {
-            Directory.CreateDirectory(_spillDirectory);
-            var fileName = $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json";
-            var filePath = Path.Combine(_spillDirectory, fileName);
-            await File.WriteAllTextAsync(filePath, payload);
-            _logger.LogInformation("Spilled failed batch to {Path}", filePath);
+            while (_carriedOver != null || await _channel.Reader.WaitToReadAsync(token))
+            {
+                inFlight = await CollectBatchAsync(token);
+                if (inFlight.Count > 0)
+                {
+                    await DeliverAsync(inFlight, token);
+                }
+
+                inFlight = null;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _logger.LogDebug("Sending stopped at the shutdown deadline");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to spill batch to disk, events will be lost");
-            // Events are lost at this point
+            _logger.LogError(ex, "Unexpected error in batch processor");
+        }
+
+        await SpoolRemainingAsync(inFlight);
+    }
+
+    /// <summary>
+    /// Takes events until the batch reaches its event or byte limit, or the flush interval passes.
+    /// The byte limit keeps batches under the server's request size limit.
+    /// </summary>
+    private async Task<List<QueuedEvent>> CollectBatchAsync(CancellationToken token)
+    {
+        var batch = new List<QueuedEvent>(_config.BatchSize);
+        var bytes = 0L;
+
+        using var flush = CancellationTokenSource.CreateLinkedTokenSource(token);
+        flush.CancelAfter(TimeSpan.FromSeconds(_config.FlushIntervalSeconds));
+
+        try
+        {
+            while (batch.Count < _config.BatchSize)
+            {
+                var next = _carriedOver;
+                _carriedOver = null;
+
+                if (next == null)
+                {
+                    if (!_channel.Reader.TryRead(out var evt))
+                    {
+                        if (!await _channel.Reader.WaitToReadAsync(flush.Token))
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    next = new QueuedEvent(evt, JsonSerializer.Serialize(evt, JsonOptions));
+                }
+
+                if (batch.Count > 0 && bytes + next.Json.Length + 1 > _config.MaxBatchBytes)
+                {
+                    _carriedOver = next;
+                    break;
+                }
+
+                batch.Add(next);
+                bytes += next.Json.Length + 1;
+            }
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            _logger.LogTrace("Flush interval elapsed with {Count} events", batch.Count);
+        }
+
+        return batch;
+    }
+
+    private async Task DeliverAsync(List<QueuedEvent> batch, CancellationToken token)
+    {
+        var payload = BuildPayload(batch);
+        while (true)
+        {
+            var result = await SendWithRetriesAsync(payload, batch.Count, token);
+            if (result == SendResult.Accepted)
+            {
+                Interlocked.Add(ref _eventsSent, batch.Count);
+                Interlocked.Increment(ref _batchesSent);
+                MarkDurable(batch);
+                return;
+            }
+
+            if (result == SendResult.Rejected)
+            {
+                await HandleRejectedAsync(batch, payload, token);
+                return;
+            }
+
+            Interlocked.Increment(ref _batchesFailed);
+            if (await TryWriteToSpoolAsync(payload))
+            {
+                Interlocked.Add(ref _eventsSpooled, batch.Count);
+                MarkDurable(batch);
+                return;
+            }
+
+            // Spool full or unwritable. Keep the batch: nothing is lost, and the full queue
+            // pauses file reading until the server returns.
+            _logger.LogWarning("Can't deliver or spool {Count} events, will keep retrying", batch.Count);
+            await Task.Delay(MaxRetryDelay, token);
         }
     }
 
-    private async Task RetrySpilledBatchesAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The server refused this request, so retrying as-is won't help. Splitting finds out whether
+    /// the size or one bad event caused it, so good events in the batch still get through.
+    /// </summary>
+    private async Task HandleRejectedAsync(List<QueuedEvent> batch, string payload, CancellationToken token)
     {
-        if (!Directory.Exists(_spillDirectory)) return;
-
-        var spillFiles = Directory.GetFiles(_spillDirectory, "batch_*.json")
-            .OrderBy(f => f)
-            .ToList();
-
-        if (spillFiles.Count == 0) return;
-
-        _logger.LogInformation("Found {Count} spilled batch files to retry", spillFiles.Count);
-
-        foreach (var file in spillFiles)
+        if (batch.Count > 1)
         {
-            if (cancellationToken.IsCancellationRequested) break;
+            var middle = batch.Count / 2;
+            await DeliverAsync(batch[..middle], token);
+            await DeliverAsync(batch[middle..], token);
+            return;
+        }
 
+        Interlocked.Increment(ref _batchesFailed);
+        if (await TryWriteAsync(_deadLetterDirectory, payload))
+        {
+            Interlocked.Add(ref _eventsDeadLettered, batch.Count);
+            _logger.LogError("Server rejected an event, saved it to {Directory}", _deadLetterDirectory);
+            MarkDurable(batch);
+            return;
+        }
+
+        _logger.LogError("Server rejected an event and it couldn't be saved. It will be re-read at the next start");
+    }
+
+    private async Task<SendResult> SendWithRetriesAsync(string payload, int count, CancellationToken token)
+    {
+        // A batch has already used up its retries, so this one tries once and goes to the spool.
+        // The spool replay notices when the server returns.
+        var retries = _serverDown ? 0 : _config.MaxRetries;
+
+        var delay = _retryDelay;
+        for (var attempt = 0; attempt <= retries; attempt++)
+        {
+            var (result, retryAfter) = await PostAsync(payload, count, attempt, token);
+            if (result != SendResult.Unavailable)
+            {
+                _serverDown = false;
+                return result;
+            }
+
+            if (attempt < retries)
+            {
+                var wait = retryAfter ?? delay;
+                var jitter = TimeSpan.FromMilliseconds(Random.Shared.NextDouble() * wait.TotalMilliseconds * 0.25);
+                await Task.Delay(wait + jitter, token);
+                delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, MaxRetryDelay.TotalMilliseconds));
+            }
+        }
+
+        _serverDown = true;
+        return SendResult.Unavailable;
+    }
+
+    private async Task<(SendResult Result, TimeSpan? RetryAfter)> PostAsync(string payload, int count, int attempt, CancellationToken token)
+    {
+        try
+        {
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var response = await _httpClient.PostAsync(CollectorPath, content, token);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return (SendResult.Accepted, null);
+            }
+
+            if (response.StatusCode is HttpStatusCode.BadRequest
+                or HttpStatusCode.RequestEntityTooLarge
+                or HttpStatusCode.UnprocessableEntity)
+            {
+                _logger.LogWarning("Server rejected {Count} events with {Status}", count, response.StatusCode);
+                return (SendResult.Rejected, null);
+            }
+
+            // Includes 401 and 403: a bad API key is fixable, and shouldn't cost the data.
+            _logger.LogWarning("Server returned {Status} for {Count} events (attempt {Attempt}/{Max})",
+                response.StatusCode, count, attempt + 1, _config.MaxRetries + 1);
+            return (SendResult.Unavailable, ReadRetryAfter(response));
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "HTTP error sending {Count} events (attempt {Attempt}/{Max})", count, attempt + 1, _config.MaxRetries + 1);
+            return (SendResult.Unavailable, null);
+        }
+        catch (TaskCanceledException) when (!token.IsCancellationRequested)
+        {
+            // The server may have stored these already. The retry is safe: event IDs don't change.
+            _logger.LogWarning("Timeout sending {Count} events (attempt {Attempt}/{Max})", count, attempt + 1, _config.MaxRetries + 1);
+            return (SendResult.Unavailable, null);
+        }
+    }
+
+    private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
+    {
+        var header = response.Headers.RetryAfter;
+        var wait = header?.Delta ?? (header?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+        if (wait is not { } value || value <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        return value < MaxRetryAfter ? value : MaxRetryAfter;
+    }
+
+    private async Task SpoolRemainingAsync(List<QueuedEvent>? inFlight)
+    {
+        _channel.Writer.TryComplete();
+
+        // Part of an in-flight batch may have arrived already. Event IDs make that harmless.
+        var remaining = new List<QueuedEvent>(inFlight ?? []);
+        if (_carriedOver != null)
+        {
+            remaining.Add(_carriedOver);
+            _carriedOver = null;
+        }
+
+        while (_channel.Reader.TryRead(out var evt))
+        {
+            remaining.Add(new QueuedEvent(evt, JsonSerializer.Serialize(evt, JsonOptions)));
+        }
+
+        foreach (var batch in remaining.Chunk(_config.BatchSize))
+        {
+            var list = batch.ToList();
+            if (await TryWriteToSpoolAsync(BuildPayload(list)))
+            {
+                Interlocked.Add(ref _eventsSpooled, list.Count);
+                MarkDurable(list);
+            }
+        }
+    }
+
+    private async Task<bool> TryWriteToSpoolAsync(string payload)
+    {
+        if (SpoolSizeBytes() + Encoding.UTF8.GetByteCount(payload) > _config.MaxSpoolBytes)
+        {
+            _logger.LogWarning("Spool is at its {Limit} byte limit", _config.MaxSpoolBytes);
+            return false;
+        }
+
+        return await TryWriteAsync(_spoolDirectory, payload);
+    }
+
+    /// <summary>Writes a batch so it either exists completely or not at all.</summary>
+    private async Task<bool> TryWriteAsync(string directory, string payload)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var name = $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}";
+            var temp = Path.Combine(directory, name + ".tmp");
+
+            await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write))
+            {
+                await stream.WriteAsync(Encoding.UTF8.GetBytes(payload));
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temp, Path.Combine(directory, name + ".json"));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "Failed to write batch to {Directory}", directory);
+            return false;
+        }
+    }
+
+    private long SpoolSizeBytes()
+    {
+        if (!Directory.Exists(_spoolDirectory))
+        {
+            return 0;
+        }
+
+        return new DirectoryInfo(_spoolDirectory).EnumerateFiles("batch_*.json").Sum(file => file.Length);
+    }
+
+    private async Task ReplaySpoolAsync()
+    {
+        var token = _stopReplay.Token;
+        try
+        {
+            while (true)
+            {
+                await ReplaySpooledBatchesAsync(token);
+                await Task.Delay(TimeSpan.FromSeconds(_config.SpoolRetryIntervalSeconds), token);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _logger.LogDebug("Spool replay stopped");
+        }
+    }
+
+    private async Task ReplaySpooledBatchesAsync(CancellationToken token)
+    {
+        if (!Directory.Exists(_spoolDirectory))
+        {
+            return;
+        }
+
+        var files = Directory.GetFiles(_spoolDirectory, "batch_*.json").OrderBy(file => file, StringComparer.Ordinal).ToList();
+        foreach (var file in files)
+        {
+            token.ThrowIfCancellationRequested();
+
+            string payload;
             try
             {
-                var payload = await File.ReadAllTextAsync(file, cancellationToken);
-                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-                using var response = await _httpClient.PostAsync("/services/collector/event", content, cancellationToken);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    File.Delete(file);
-                    _logger.LogInformation("Successfully retried spilled batch: {File}", Path.GetFileName(file));
-                }
-                else
-                {
-                    _logger.LogWarning("Failed to retry spilled batch {File}: {Status}",
-                        Path.GetFileName(file), response.StatusCode);
-                    break; // Stop retrying if server is rejecting — try again next cycle
-                }
+                payload = await File.ReadAllTextAsync(file, token);
             }
-            catch (Exception ex)
+            catch (IOException ex)
             {
-                _logger.LogWarning(ex, "Error retrying spilled batch {File}", Path.GetFileName(file));
-                break;
+                _logger.LogWarning(ex, "Can't read spooled batch {File}", file);
+                continue;
             }
+
+            var (result, _) = await PostAsync(payload, payload.Count(c => c == '\n') + 1, 0, token);
+            if (result == SendResult.Unavailable)
+            {
+                // Still down. Stop here and try again next cycle.
+                return;
+            }
+
+            if (result == SendResult.Accepted)
+            {
+                File.Delete(file);
+                _logger.LogInformation("Delivered spooled batch {File}", Path.GetFileName(file));
+                continue;
+            }
+
+            // A rejected batch must not block the ones behind it.
+            Directory.CreateDirectory(_deadLetterDirectory);
+            File.Move(file, Path.Combine(_deadLetterDirectory, Path.GetFileName(file)));
+            _logger.LogError("Server rejected spooled batch, moved it to {Directory}", _deadLetterDirectory);
+        }
+    }
+
+    private void MarkDurable(List<QueuedEvent> batch)
+    {
+        try
+        {
+            BatchDurable?.Invoke(batch.Select(item => item.Event).ToList());
+        }
+        catch (Exception ex)
+        {
+            // At worst the checkpoint lags, and re-read events are ignored by ID.
+            _logger.LogError(ex, "Failed to record delivered events");
         }
     }
 
     /// <summary>
     /// Build a Splunk HEC-compatible payload (newline-delimited JSON).
     /// </summary>
-    private static string BuildHecPayload(List<LogEventDto> events)
-    {
-        var sb = new StringBuilder(events.Count * 256);
-        foreach (var evt in events)
-        {
-            if (sb.Length > 0) sb.Append('\n');
-            sb.Append(JsonSerializer.Serialize(evt, JsonOptions));
-        }
-
-        return sb.ToString();
-    }
+    private static string BuildPayload(List<QueuedEvent> events) =>
+        string.Join('\n', events.Select(item => item.Json));
 
     public async ValueTask DisposeAsync()
     {
-        _channel.Writer.TryComplete();
-        await _cts.CancelAsync();
-
-        try
-        {
-            await _processingTask.WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        catch (TimeoutException)
-        {
-            _logger.LogWarning("Forwarder shutdown timed out after 30 seconds");
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown
-        }
-
-        _cts.Dispose();
+        await FlushAsync();
+        _stopSending.Dispose();
+        _stopReplay.Dispose();
         _httpClient.Dispose();
     }
 }
@@ -340,6 +564,8 @@ public sealed class ForwarderStats
 {
     public long EventsSent { get; init; }
     public long EventsDropped { get; init; }
+    public long EventsSpooled { get; init; }
+    public long EventsDeadLettered { get; init; }
     public long BatchesSent { get; init; }
     public long BatchesFailed { get; init; }
     public int QueueDepth { get; init; }

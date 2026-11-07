@@ -1,22 +1,32 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Channels;
 using Cabinet.Agent.Configuration;
 using Cabinet.Agent.Forwarding;
 
 namespace Cabinet.Agent.Monitoring;
 
 /// <summary>
-/// Background service that monitors log files and forwards new lines to the output pipeline.
-/// Handles file discovery (glob patterns), tailing, rotation detection, and multi-line merging.
+/// Monitors log files and forwards new lines to the output pipeline, handling file discovery,
+/// tailing, rotation and multi-line merging.
+/// <para>
+/// Delivery is at-least-once: a file's checkpoint moves only when its events have been accepted by
+/// the server or written to the spool, so a crash re-reads rather than loses them. Re-read events
+/// get the same ID, and the server ignores IDs it already has.
+/// </para>
 /// </summary>
 public sealed class FileMonitorService : BackgroundService
 {
+    private sealed record Harvester(CancellationTokenSource Cancellation, Task Task);
+
     private readonly AgentConfiguration _config;
     private readonly FileStateRegistry _registry;
     private readonly LogForwarder _forwarder;
     private readonly ILogger<FileMonitorService> _logger;
     private readonly string _hostname;
-    private readonly Dictionary<string, CancellationTokenSource> _harvesters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Harvester> _harvesters = new(FileStateRegistry.PathComparer);
+    private readonly TimeSpan _pollInterval;
 
     public FileMonitorService(
         AgentConfiguration config,
@@ -31,6 +41,8 @@ public sealed class FileMonitorService : BackgroundService
         _hostname = string.IsNullOrEmpty(config.Hostname)
             ? Environment.MachineName
             : config.Hostname;
+        _pollInterval = TimeSpan.FromMilliseconds(config.PollIntervalMilliseconds);
+        _forwarder.BatchDurable += OnBatchDurable;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -56,21 +68,31 @@ public sealed class FileMonitorService : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            // Normal shutdown
+            _logger.LogDebug("File monitor stopping");
         }
         finally
         {
-            // Cancel all harvesters
-            foreach (var cts in _harvesters.Values)
-            {
-                cts.Cancel();
-                cts.Dispose();
-            }
-
-            _harvesters.Clear();
-            _registry.Save();
-            _logger.LogInformation("File monitor stopped");
+            await StopAsync();
         }
+    }
+
+    /// <summary>
+    /// Stops reading, then delivers what was read, then saves the checkpoints that delivery moved.
+    /// The order matters: saving first would lose those checkpoints and cause a re-read.
+    /// </summary>
+    private async Task StopAsync()
+    {
+        var harvesters = _harvesters.Values.ToList();
+        foreach (var harvester in harvesters)
+        {
+            await harvester.Cancellation.CancelAsync();
+        }
+
+        await Task.WhenAll(harvesters.Select(h => h.Task));
+        await _forwarder.FlushAsync();
+
+        _registry.Save();
+        _logger.LogInformation("File monitor stopped");
     }
 
     private void DiscoverFiles()
@@ -81,17 +103,12 @@ public sealed class FileMonitorService : BackgroundService
             {
                 try
                 {
-                    var files = ExpandGlob(pattern, input.Recursive);
-
-                    foreach (var file in files)
+                    foreach (var file in ExpandGlob(pattern, input.Recursive))
                     {
-                        if (IsExcluded(file, input.ExcludePatterns))
-                            continue;
-
-                        if (_harvesters.ContainsKey(file))
-                            continue;
-
-                        StartHarvester(file, input);
+                        if (!IsExcluded(file, input.ExcludePatterns) && !_harvesters.ContainsKey(file))
+                        {
+                            StartHarvester(file, input);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -104,15 +121,11 @@ public sealed class FileMonitorService : BackgroundService
 
     private void CleanupDeletedFiles()
     {
-        var trackedPaths = _registry.GetTrackedPaths();
-        foreach (var path in trackedPaths)
+        foreach (var path in _registry.GetTrackedPaths())
         {
-            if (!File.Exists(path) && _harvesters.TryGetValue(path, out var cts))
+            if (!File.Exists(path) && !_harvesters.ContainsKey(path))
             {
-                _logger.LogInformation("File deleted, stopping harvester: {Path}", path);
-                cts.Cancel();
-                cts.Dispose();
-                _harvesters.Remove(path);
+                _logger.LogInformation("File deleted, no longer tracking: {Path}", path);
                 _registry.Remove(path);
             }
         }
@@ -120,188 +133,247 @@ public sealed class FileMonitorService : BackgroundService
 
     private void StartHarvester(string filePath, InputConfiguration input)
     {
-        var cts = new CancellationTokenSource();
-        _harvesters[filePath] = cts;
-
         _logger.LogInformation("Starting harvester for {Path} (sourcetype={SourceType}, index={Index})",
             filePath, input.SourceType, input.Index);
 
-        // Register file with header hash for rotation detection
-        var headerHash = FileStateRegistry.ComputeHeaderHash(filePath);
-        var fileInfo = new FileInfo(filePath);
-        _registry.RegisterFile(filePath, fileInfo.Length, headerHash);
+        var cancellation = new CancellationTokenSource();
 
-        _ = Task.Run(() => HarvestFileAsync(filePath, input, cts.Token), cts.Token);
+        // Start only once registered, so the harvester's own cleanup can't run first.
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = Task.Run(async () =>
+        {
+            await start.Task;
+            await HarvestFileAsync(filePath, input, cancellation.Token);
+        });
+
+        _harvesters[filePath] = new Harvester(cancellation, task);
+        start.SetResult();
     }
 
     private async Task HarvestFileAsync(string filePath, InputConfiguration input, CancellationToken cancellationToken)
     {
-        Regex? multiLinePattern = null;
-        if (input.MultiLine != null && !string.IsNullOrEmpty(input.MultiLine.Pattern))
-        {
-            try
-            {
-                multiLinePattern = new Regex(
-                    input.MultiLine.Pattern,
-                    RegexOptions.Compiled,
-                    TimeSpan.FromSeconds(1));
-            }
-            catch (RegexParseException ex)
-            {
-                _logger.LogError(ex, "Invalid multi-line pattern for {Path}: {Pattern}",
-                    filePath, input.MultiLine.Pattern);
-            }
-        }
-
         try
         {
-            // Determine starting offset
-            var state = _registry.GetState(filePath);
-            var offset = state?.Offset ?? 0;
-            var linesRead = state?.LinesRead ?? 0;
+            var merger = new MultiLineMerger(input.MultiLine, _logger);
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (!File.Exists(filePath))
+                var drained = await TailContentsAsync(filePath, input, merger, cancellationToken);
+                if (!drained)
                 {
-                    _logger.LogDebug("File not found, waiting: {Path}", filePath);
-                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-                    continue;
+                    return;
                 }
-
-                var fileInfo = new FileInfo(filePath);
-
-                // Detect file truncation or rotation
-                if (fileInfo.Length < offset)
-                {
-                    _logger.LogInformation("File truncated/rotated, resetting offset: {Path}", filePath);
-                    offset = 0;
-                    linesRead = 0;
-                    _registry.ResetOffset(filePath);
-                }
-
-                // Detect rotation via header hash change
-                if (state?.HeaderHash != null && fileInfo.Length > 0)
-                {
-                    var currentHash = FileStateRegistry.ComputeHeaderHash(filePath);
-                    if (currentHash != null && currentHash != state.HeaderHash)
-                    {
-                        _logger.LogInformation("File rotated (header hash changed), resetting: {Path}", filePath);
-                        offset = 0;
-                        linesRead = 0;
-                        _registry.ResetOffset(filePath);
-                        _registry.RegisterFile(filePath, fileInfo.Length, currentHash);
-                    }
-                }
-
-                // Read new lines
-                if (fileInfo.Length > offset)
-                {
-                    try
-                    {
-                        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                        stream.Seek(offset, SeekOrigin.Begin);
-                        using var reader = new StreamReader(stream);
-
-                        var pendingMultiLine = new List<string>();
-
-                        while (!cancellationToken.IsCancellationRequested)
-                        {
-                            var line = await reader.ReadLineAsync(cancellationToken);
-                            if (line == null) break;
-
-                            linesRead++;
-
-                            if (multiLinePattern != null && input.MultiLine != null)
-                            {
-                                // Negate=true (default): pattern matches start of new event
-                                // Negate=false: pattern matches continuation lines
-                                var matchesPattern = multiLinePattern.IsMatch(line);
-                                var isNewEvent = input.MultiLine.Negate ? matchesPattern : !matchesPattern;
-
-                                if (!isNewEvent && pendingMultiLine.Count > 0 &&
-                                    pendingMultiLine.Count < input.MultiLine.MaxLines)
-                                {
-                                    // Continuation line
-                                    pendingMultiLine.Add(line);
-                                }
-                                else
-                                {
-                                    // Flush previous multi-line event
-                                    if (pendingMultiLine.Count > 0)
-                                    {
-                                        var merged = string.Join('\n', pendingMultiLine);
-                                        await EmitEvent(merged, filePath, input, linesRead - pendingMultiLine.Count);
-                                    }
-
-                                    pendingMultiLine.Clear();
-                                    pendingMultiLine.Add(line);
-                                }
-                            }
-                            else
-                            {
-                                await EmitEvent(line, filePath, input, linesRead);
-                            }
-                        }
-
-                        // Flush any remaining multi-line buffer
-                        if (pendingMultiLine.Count > 0)
-                        {
-                            var merged = string.Join('\n', pendingMultiLine);
-                            await EmitEvent(merged, filePath, input, linesRead - pendingMultiLine.Count + 1);
-                        }
-
-                        offset = stream.Position;
-                        _registry.UpdateState(filePath, offset, fileInfo.Length, linesRead);
-                    }
-                    catch (IOException ex) when (ex is not FileNotFoundException)
-                    {
-                        _logger.LogDebug(ex, "IO error reading {Path}, will retry", filePath);
-                    }
-                    catch (FileNotFoundException)
-                    {
-                        _logger.LogInformation("File disappeared: {Path}", filePath);
-                        break;
-                    }
-                }
-
-                // Wait before polling again
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Normal shutdown
+            _logger.LogDebug("Harvester cancelled for {Path}", filePath);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Harvester failed for {Path}", filePath);
+            // The next scan starts a new harvester, which resumes from the checkpoint.
+            _logger.LogError(ex, "Harvester failed for {Path}, restarting at the next scan", filePath);
         }
         finally
         {
+            if (_harvesters.TryRemove(filePath, out var harvester))
+            {
+                harvester.Cancellation.Dispose();
+            }
+
             _logger.LogDebug("Harvester stopped for {Path}", filePath);
         }
     }
 
-    private async Task EmitEvent(string rawLine, string filePath, InputConfiguration input, long lineNumber)
+    /// <summary>
+    /// Follows one file's contents through an open handle until the path no longer holds them.
+    /// The handle keeps working after a rename, so lines written just before a rotation are still
+    /// read. Returns true if the path now holds new contents, or false if it's gone.
+    /// </summary>
+    private async Task<bool> TailContentsAsync(
+        string filePath,
+        InputConfiguration input,
+        MultiLineMerger merger,
+        CancellationToken cancellationToken)
     {
+        await using var stream = await OpenWhenReadableAsync(filePath, cancellationToken);
+        if (stream == null)
+        {
+            return false;
+        }
+
+        var fingerprint = await WaitForFingerprintAsync(filePath, cancellationToken);
+        if (fingerprint == null)
+        {
+            return false;
+        }
+
+        var state = _registry.Resolve(filePath, fingerprint, stream.Length);
+        _registry.SaveNewKeys();
+        var reader = new LineReader(stream, state.Offset, _config.MaxLineBytes);
+        var lineNumber = state.LinesRead;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Copy-and-truncate rotation: the same handle now has less data than we've read.
+            if (stream.Length < reader.Position)
+            {
+                _logger.LogInformation("File truncated, reading from the start: {Path}", filePath);
+                await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
+
+                // Start over as for any new file, which waits for a complete first line. Recording
+                // an identity now could save it empty, and a restart wouldn't recognize the file.
+                _registry.Remove(filePath);
+                return true;
+            }
+
+            await foreach (var line in reader.ReadLinesAsync(cancellationToken))
+            {
+                lineNumber++;
+                foreach (var merged in merger.Add(line, lineNumber))
+                {
+                    await EmitAsync(merged, filePath, input, state, cancellationToken);
+                }
+            }
+
+            if (merger.TakeIfExpired() is { } expired)
+            {
+                await EmitAsync(expired, filePath, input, state, cancellationToken);
+            }
+
+            // Everything readable through this handle has been read. Has the path moved on?
+            var current = new FileInfo(filePath);
+            if (!current.Exists)
+            {
+                _logger.LogInformation("File removed or renamed, stopping: {Path}", filePath);
+                await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
+                return false;
+            }
+
+            var currentFingerprint = FileStateRegistry.ComputeFingerprint(filePath);
+            if (currentFingerprint != null && currentFingerprint != state.Fingerprint)
+            {
+                _logger.LogInformation("File rotated, switching to the new file: {Path}", filePath);
+                await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
+                return true;
+            }
+
+            if (current.Length < reader.Position && stream.Length >= reader.Position)
+            {
+                _logger.LogInformation("File replaced by a smaller one, switching to it: {Path}", filePath);
+                await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
+                return true;
+            }
+
+            await Task.Delay(_pollInterval, cancellationToken);
+        }
+    }
+
+    private async Task<FileStream?> OpenWhenReadableAsync(string filePath, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (IOException ex)
+            {
+                _logger.LogDebug(ex, "IO error opening {Path}, will retry", filePath);
+                await Task.Delay(_pollInterval, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>Waits for a complete first line. Returns null if the file disappears first.</summary>
+    private async Task<string?> WaitForFingerprintAsync(string filePath, CancellationToken cancellationToken)
+    {
+        while (File.Exists(filePath))
+        {
+            if (FileStateRegistry.ComputeFingerprint(filePath) is { } fingerprint)
+            {
+                return fingerprint;
+            }
+
+            await Task.Delay(_pollInterval, cancellationToken);
+        }
+
+        return null;
+    }
+
+    private async Task FlushMergedAsync(
+        MultiLineMerger merger,
+        string filePath,
+        InputConfiguration input,
+        FileState state,
+        CancellationToken cancellationToken)
+    {
+        if (merger.Take() is { } merged)
+        {
+            await EmitAsync(merged, filePath, input, state, cancellationToken);
+        }
+    }
+
+    private async Task EmitAsync(
+        MergedLine line,
+        string filePath,
+        InputConfiguration input,
+        FileState state,
+        CancellationToken cancellationToken)
+    {
+        // Blank lines carry nothing, but their bytes are still covered by later checkpoints.
+        if (string.IsNullOrWhiteSpace(line.Text))
+        {
+            return;
+        }
+
         var evt = new LogEventDto
         {
+            Id = CreateEventId(state.FileKey, line.StartOffset),
+            FileKey = state.FileKey,
+            StartOffset = line.StartOffset,
+            EndOffset = line.EndOffset,
             Timestamp = DateTime.UtcNow,
             Host = _hostname,
             Source = filePath,
             SourceType = input.SourceType,
             Index = input.Index,
-            Event = rawLine,
-            LineNumber = lineNumber
+            Event = line.Text,
+            LineNumber = line.LineNumber
         };
 
-        await _forwarder.EnqueueAsync(evt);
+        await _forwarder.EnqueueAsync(evt, cancellationToken);
     }
 
     /// <summary>
-    /// Expand a file path or glob pattern to matching files.
-    /// Supports *, **, and ? wildcards.
+    /// The same bytes of the same file always get the same ID, however many times they're sent.
+    /// </summary>
+    public static string CreateEventId(string fileKey, long startOffset)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{fileKey}:{startOffset}"));
+        return Convert.ToHexStringLower(hash.AsSpan(0, 16));
+    }
+
+    private void OnBatchDurable(IReadOnlyList<LogEventDto> batch)
+    {
+        foreach (var file in batch.Where(e => e.FileKey != null).GroupBy(e => e.FileKey!))
+        {
+            var last = file.MaxBy(e => e.EndOffset)!;
+            _registry.Commit(file.Key, last.EndOffset, last.LineNumber, last.StartOffset, FileStateRegistry.HashText(last.Event));
+        }
+    }
+
+    /// <summary>
+    /// Expand a file path or glob pattern to matching files. Supports <c>*</c>, <c>?</c> and
+    /// <c>**</c> in any path segment. With <paramref name="recursive"/>, the last segment also
+    /// matches in subdirectories.
     /// </summary>
     public static IReadOnlyList<string> ExpandGlob(string pattern, bool recursive)
     {
@@ -311,35 +383,80 @@ public sealed class FileMonitorService : BackgroundService
             return File.Exists(pattern) ? [Path.GetFullPath(pattern)] : [];
         }
 
-        // Split into directory and file pattern
-        var directory = Path.GetDirectoryName(pattern);
-        var filePattern = Path.GetFileName(pattern);
+        var normalized = pattern.Replace('\\', '/');
+        var segments = normalized.Split('/');
+        var firstWildcard = Array.FindIndex(segments, s => s.Contains('*') || s.Contains('?'));
 
-        if (string.IsNullOrEmpty(directory))
+        var root = string.Join('/', segments[..firstWildcard]);
+        if (root.Length == 0)
         {
-            directory = ".";
+            root = normalized.StartsWith('/') ? "/" : ".";
         }
 
-        if (!Directory.Exists(directory))
-        {
-            return [];
-        }
-
-        var searchOption = recursive || pattern.Contains("**")
-            ? SearchOption.AllDirectories
-            : SearchOption.TopDirectoryOnly;
-
-        try
-        {
-            return Directory.GetFiles(directory, filePattern, searchOption)
-                .Select(Path.GetFullPath)
-                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-        catch (UnauthorizedAccessException)
+        if (!Directory.Exists(root))
         {
             return [];
         }
+
+        var wildcardSegments = segments[firstWildcard..];
+        var searchesDeep = recursive || wildcardSegments.Length > 1;
+        var relativePattern = string.Join('/', wildcardSegments);
+        if (recursive && !relativePattern.StartsWith("**/", StringComparison.Ordinal))
+        {
+            relativePattern = "**/" + relativePattern;
+        }
+
+        var matcher = GlobToRegex(relativePattern);
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = searchesDeep,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.System,
+        };
+
+        return Directory.EnumerateFiles(root, "*", options)
+            .Where(file => matcher.IsMatch(Path.GetRelativePath(root, file).Replace('\\', '/')))
+            .Select(Path.GetFullPath)
+            .OrderBy(file => file, FileStateRegistry.PathComparer)
+            .ToList();
+    }
+
+    private static Regex GlobToRegex(string glob)
+    {
+        var regex = new StringBuilder("^");
+        for (var i = 0; i < glob.Length; i++)
+        {
+            var c = glob[i];
+            if (c == '*' && i + 1 < glob.Length && glob[i + 1] == '*')
+            {
+                i++;
+                if (i + 1 < glob.Length && glob[i + 1] == '/')
+                {
+                    i++;
+                    regex.Append("(?:.*/)?");
+                }
+                else
+                {
+                    regex.Append(".*");
+                }
+            }
+            else if (c == '*')
+            {
+                regex.Append("[^/]*");
+            }
+            else if (c == '?')
+            {
+                regex.Append("[^/]");
+            }
+            else
+            {
+                regex.Append(Regex.Escape(c.ToString()));
+            }
+        }
+
+        regex.Append('$');
+        var options = OperatingSystem.IsWindows() ? RegexOptions.IgnoreCase : RegexOptions.None;
+        return new Regex(regex.ToString(), options, TimeSpan.FromSeconds(1));
     }
 
     private static bool IsExcluded(string filePath, List<string> excludePatterns)

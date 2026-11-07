@@ -202,16 +202,25 @@ The key needs the `Ingest` capability (Professional or Enterprise tier).
 
 ### Agent behaviour
 
-- Rescans input paths every `ScanIntervalSeconds` (default 10).
-- Tracks offsets in a registry file and detects rotation and truncation with a SHA-256 hash of the file header.
-- Merges multi-line events per input through `MultiLine:Pattern`, `Negate`, `MaxLines` and `TimeoutSeconds`.
-- Sends batches of `BatchSize` (default 100) every `FlushIntervalSeconds` (default 5), retrying with exponential backoff up to `MaxRetries`. A batch that exhausts its retries is written to `SpillDirectory`.
+Delivery is at-least-once, and the server stores each event once.
+
+- **Checkpoints follow delivery.** A file's position in the registry moves only when its events are accepted by the server or written to disk. A crash re-reads anything else.
+- **Re-sent events are stored once.** Each event's ID comes from its file and byte offset, so a retry or re-read has the same ID, and the server ignores IDs it already has.
+- **Outages.** A batch is retried with exponential backoff up to `MaxRetries`, honoring `Retry-After`, then written to `SpillDirectory` and replayed every `SpoolRetryIntervalSeconds` until accepted. Keep `SpillDirectory` on persistent storage.
+- **Full spool.** At `MaxSpoolBytes` the agent keeps retrying and pauses reading, so lines wait in the source files. If those files are rotated away and deleted before the server returns, those lines are lost.
+- **Rejected events.** A batch the server refuses with 400, 413 or 422 is split to isolate the cause. An event refused on its own goes to `dead-letter` under `SpillDirectory`, for you to inspect. A 401 or 403 is retried and spooled like an outage, so a bad API key doesn't lose data.
+- **Rotation.** Files are identified by their first line, which doesn't change as they grow, plus a check that the last delivered event is still in place. Rename and copy-and-truncate rotation are both handled, and lines written just before a rename are still read. A rotated file that an input's pattern also matches isn't read twice.
+- **Partial lines.** A line without its line ending waits until the ending arrives, so a last line that never gets one isn't sent. Lines longer than `MaxLineBytes` (default 1 MiB) are truncated.
+- **Multi-line events.** `MultiLine:Pattern`, `Negate`, `MaxLines` and `TimeoutSeconds` configure merging per input. An event stays open across polls until the next one starts or `TimeoutSeconds` passes with no new lines.
+- **Paths.** `*`, `?` and `**` work in any path segment. `Recursive` also matches the last segment in subdirectories. New files are found every `ScanIntervalSeconds` (default 10).
+- **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
 
 ### Agent limits
 
-- Spilled batches replay only when the agent starts.
-- Offsets advance when an event is queued, not when the server accepts it. A crash can lose queued events, and restarts can duplicate some.
-- Wildcards work only in the last path segment. `/var/log/**/*.log` matches nothing. Use `/var/log/*.log` with `"Recursive": true`.
+- A file deleted before it's fully read loses its unread lines.
+- If the registry file is lost, files are read again from the start under new event IDs, which creates duplicates.
+- A replacement file with the same first line, and the same text at the checkpoint offset, can't be told from the original.
+- The server stores agent lines without parsing them: `Info` severity, no extracted fields, and the time they were read.
 
 ## Kubernetes
 

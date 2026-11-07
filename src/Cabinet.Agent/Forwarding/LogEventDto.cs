@@ -9,6 +9,30 @@ namespace Cabinet.Agent.Forwarding;
 public sealed class LogEventDto
 {
     /// <summary>
+    /// Stable ID for this event. The server ignores an ID it already has, so re-sending is safe.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    /// <summary>
+    /// The file contents this event was read from. Not sent to the server.
+    /// </summary>
+    [JsonIgnore]
+    public string? FileKey { get; set; }
+
+    /// <summary>
+    /// Offset where this event starts in its file.
+    /// </summary>
+    [JsonIgnore]
+    public long StartOffset { get; set; }
+
+    /// <summary>
+    /// Offset just past this event in its file, where the checkpoint can move once it's durable.
+    /// </summary>
+    [JsonIgnore]
+    public long EndOffset { get; set; }
+
+    /// <summary>
     /// When the event occurred.
     /// </summary>
     [JsonIgnore]

@@ -59,7 +59,8 @@ public static class Program
             return new FileStateRegistry(
                 agentConfig.Registry.Path,
                 agentConfig.Registry.SaveIntervalSeconds,
-                logger);
+                logger,
+                agentConfig.MaxLineBytes);
         });
 
         // HTTP client for forwarding (with SSL verification toggle)
@@ -94,6 +95,10 @@ public static class Program
             var logger = sp.GetRequiredService<ILogger<FileMonitorService>>();
             return new FileMonitorService(agentConfig, registry, forwarder, logger);
         });
+
+        // Stopping delivers what's queued, so allow for that plus some margin
+        builder.Services.Configure<HostOptions>(options =>
+            options.ShutdownTimeout = TimeSpan.FromSeconds(agentConfig.Output.ShutdownFlushSeconds + 15));
 
         // Support systemd on Linux and Windows Service
         builder.Services.AddSystemd();

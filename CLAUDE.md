@@ -72,6 +72,12 @@ Backends are interchangeable: SQLite (default/dev), In-Memory (tests), PostgreSQ
 
 Game log parsers and moderation detectors live in `Cabinet.Extras.Gaming`, off unless `Gaming:Enabled` is set. Keep game-specific code out of Core and the other services. `DetectionController` stays in the API because extensions can't reference it, and `ExcludeControllersFeatureProvider` removes its routes when the extension is off. `api-spec.json` describes the default configuration, so it omits them. Parser order matters: a line goes to the first parser that accepts it (`AddCabinetParsers`).
 
+### Agent delivery (`Cabinet.Agent`)
+
+Delivery is at-least-once with server-side dedupe, and both halves matter. A checkpoint moves only from `LogForwarder.BatchDurable`, after the server accepts a batch or it's on disk, never when an event is queued. Event IDs derive from `FileKey` and byte offset, so retries and re-reads collapse. `FileKey` belongs to a file's contents, surviving renames and replaced on rotation. `ILogStorage` implementations must ignore an existing ID rather than overwrite it. Never drop events to relieve pressure: a full queue pauses reading.
+
+After changing agent delivery, run `./tests/EndToEnd/agent-chaos.sh 5`. It kills the API, agent and Postgres mid-stream and needs every line stored exactly once. Its bugs are timing-dependent, so one clean run proves little.
+
 ### BQL query engine (`Cabinet.Query`)
 
 Hand-written recursive-descent parser (~3000 lines in `Bql/BqlParser.cs`) — not a parser generator. Pipeline:
