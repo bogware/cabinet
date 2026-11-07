@@ -39,7 +39,9 @@ file it runs, including that expression. The controls that hold are:
 
 Updates are manual. To change an action, resolve the release tag to a commit, check it against the
 project's security advisories, and pin it as `owner/action@<sha> # vX`. New third-party actions must
-also be added to the repository's allowed list.
+also be added to the repository's allowed list, including actions they call themselves. Because of
+their compromise history, `trivy-action` and `setup-trivy` are allowed only at their exact commits, so
+updating Trivy also means updating both entries in that list.
 
 ## Before making this repository public
 

@@ -70,7 +70,7 @@ jobs:
     - name: Check packaging tools
       if: runner.environment == 'self-hosted'
       run: |
-        for tool in docker zip dpkg-deb sha256sum; do
+        for tool in docker python3 dpkg-deb sha256sum; do
           command -v "$tool" >/dev/null || echo "::warning::$tool is missing; release jobs need it"
         done
 
@@ -179,7 +179,7 @@ jobs:
       if: matrix.rid == 'win-x64'
       run: |
         cd publish
-        zip -r ../${{ matrix.artifact_name }}.zip api/ cli/ agent/
+        python3 -m zipfile -c ../${{ matrix.artifact_name }}.zip api/ cli/ agent/
         cd ..
         sha256sum ${{ matrix.artifact_name }}.zip > ${{ matrix.artifact_name }}.zip.sha256
 
