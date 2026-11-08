@@ -122,7 +122,7 @@ async Task QueryAsync(int querier)
         "find * | head 100",
         "find * from last 15m | stats count by host",
         "find * from last 1h | timechart span=1m count by status",
-        "find * from last 1h | stats avg(duration_ms), p95(duration_ms) by path | sort - p95(duration_ms) | head 10",
+        "find * from last 1h | stats avg(duration_ms) as avg_ms, p95(duration_ms) as p95_ms by path | sort - p95_ms | head 10",
         "find \"error\" from last 15m | head 50",
         "find * from last 1h | where status = 500 | stats count by host",
     ];
@@ -132,15 +132,29 @@ async Task QueryAsync(int querier)
     while (!stopping.IsCancellationRequested)
     {
         var query = queries[random.Next(queries.Length)];
-        var started = Stopwatch.GetTimestamp();
-        try
+
+        // An instance killed mid-query never answers. Ask another once, as a client behind a
+        // load balancer would; the query fails only if that doesn't answer either.
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            using var response = await clients[instance].PostAsJsonAsync("/api/v1/query/execute", new { query }, CancellationToken.None);
-            stats.Record("query", Stopwatch.GetElapsedTime(started), (int)response.StatusCode);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            stats.Record("query", Stopwatch.GetElapsedTime(started), 0);
+            var started = Stopwatch.GetTimestamp();
+            try
+            {
+                using var response = await clients[instance].PostAsJsonAsync("/api/v1/query/execute", new { query }, CancellationToken.None);
+                stats.Record("query", Stopwatch.GetElapsedTime(started), (int)response.StatusCode);
+                break;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                if (attempt == 1 || clients.Length == 1)
+                {
+                    stats.Record("query", Stopwatch.GetElapsedTime(started), 0);
+                    break;
+                }
+
+                stats.Retried();
+                instance = (instance + 1) % clients.Length;
+            }
         }
 
         instance = (instance + 1) % clients.Length;
@@ -332,7 +346,7 @@ internal sealed class Stats
         text.AppendLine($"| Events acknowledged | {acknowledged:N0} |");
         text.AppendLine($"| Events stored | {stored:N0} |");
         text.AppendLine($"| Ingest rate | {acknowledged / elapsed.TotalSeconds:N0} events/s |");
-        text.AppendLine($"| Batches retried | {Interlocked.Read(ref _retries):N0} |");
+        text.AppendLine($"| Requests retried on another instance | {Interlocked.Read(ref _retries):N0} |");
         text.AppendLine();
 
         if (stored < acknowledged)

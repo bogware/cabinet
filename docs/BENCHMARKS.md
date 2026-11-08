@@ -38,18 +38,30 @@ Parsing alone runs at 25,000 to 39,000 lines a second on one thread. The server 
 
 | Query | SQLite | PostgreSQL | OpenSearch | In-memory |
 |---|---:|---:|---:|---:|
-| Newest 100 | 3.0 ms | 9.0 ms | 12 ms | 331 ms |
-| Newest 100 on one host | 3.9 ms | 9.5 ms | 32 ms | 260 ms |
-| Text search for a rare word, first 100 | 279 ms | 12 ms | 14 ms | 538 ms |
-| Errors and worse, first 100 | 9.3 ms | 13 ms | 21 ms | 173 ms |
-| Count everything | 148 ms | 91 ms | 12 ms | 156 ms |
-| Last hour: count by host | 123 ms | 204 ms | 235 ms | 212 ms |
-| All events: count by host | 13 s | 13 s | 33 s | 37 s |
-| All events: hourly timechart | 13 s | 13 s | 28 s | 30 s |
-| All events: avg and p95 by host | 13 s | 13 s | 30 s | 32 s |
-| All events: top 10 paths | 13 s | 12 s | 33 s | 27 s |
+| Newest 100 | 3.1 ms | 11 ms | 36 ms | 331 ms |
+| Newest 100 on one host | 3.9 ms | 14 ms | 49 ms | 260 ms |
+| Text search for a rare word, first 100 | 288 ms | 11 ms | 27 ms | 538 ms |
+| Errors and worse, first 100 | 10 ms | 12 ms | 24 ms | 173 ms |
+| Count everything | 144 ms | 44 ms | 19 ms | 156 ms |
+| Last hour: count by host | 27 ms | 7.4 ms | 29 ms | 212 ms |
+| All events: count by host | 4.6 s | 292 ms | 17 ms | 37 s |
+| All events: hourly timechart | 3.0 s | 720 ms | 29 ms | 30 s |
+| All events: avg and p95 by host | 14 s | 3.8 s | 30 s | 32 s |
+| All events: top 10 paths | 13 s | 15 s | 33 s | 27 s |
 
-In-memory storage sorts every match on each read, so it's for tests rather than volume.
+In-memory storage sorts every match on each read, so it's for tests rather than volume. The in-memory and OpenSearch `avg and p95` and `top` figures are from the run before aggregates moved into storage, since neither is pushed down there.
+
+### Aggregates in the database
+
+`stats` and `timechart` run inside the database when that gives the same answer (see ARCHITECTURE.md, "Aggregate Pushdown"). Before, every aggregate read all its events through the API:
+
+| All events, 1,000,000 | Before: SQLite | Now: SQLite | Before: PostgreSQL | Now: PostgreSQL | Before: OpenSearch | Now: OpenSearch |
+|---|---:|---:|---:|---:|---:|---:|
+| Count by host | 13 s | 4.6 s | 13 s | 292 ms | 33 s | 17 ms |
+| Hourly timechart | 13 s | 3.0 s | 13 s | 720 ms | 28 s | 29 ms |
+| Avg and p95 of a JSON field by host | 13 s | 14 s | 13 s | 3.8 s | 30 s | 30 s |
+
+SQLite has no percentiles, so the last query still runs in the pipeline there, and OpenSearch pushes down counts only. `top` isn't pushed down on any backend: `stats count by path | sort -count | head 10` gives the same rows and is.
 
 ## Memory
 
@@ -64,8 +76,30 @@ The important result is that aggregates over a million events used no more memor
 
 The SQLite database for a million events was 838 MB, about 840 bytes an event with indexes.
 
+## Soak
+
+`tests/EndToEnd/soak.sh 30m 1000 300` ran two API instances on one PostgreSQL database for 30 minutes, at 1,000 events a second in batches of 200 from several writers, with queries running alongside. Every five minutes one instance was killed with `kill -9` and restarted 15 seconds later. Clients retried on the other instance, as they would behind a load balancer.
+
+| | |
+|---|---:|
+| Events acknowledged | 1,800,000 |
+| Events stored | 1,800,000, each once |
+| Instances killed | 5 |
+| Ingest requests | 9,018, of which 18 got no answer from a dying instance and were retried |
+| Ingest latency, p50 / p95 / p99 | 183 ms / 846 ms / 1.6 s |
+| Queries | 1,631, none failed; 50 were retried on the other instance |
+| Query latency, p50 / p95 / p99 | 292 ms / 18 s / 56 s |
+| Queries over the 60-second limit | 13, all the one-hour average and percentile by path |
+| Memory per instance | 93 to 522 MB |
+
+Nothing was lost or stored twice, and leadership moved each time its holder died. What this doesn't show:
+
+- **Days of uptime.** Thirty minutes with restarts every five can't rule out slow leaks. One instance's memory rose at about 116 MB an hour after warm-up, the other's at 17 MB. Run the Soak workflow for longer before relying on long uptimes.
+- **Heavy queries under ingest.** The one-hour percentile query reads about 3.6 million events while they're being written, and sometimes needed more than 60 seconds. Use a search job for queries like it.
+- **More than two instances, or more than one database.**
+
 ## What this means
 
 - **Finding things stays fast as data grows.** Reads for the newest matches use an index on time and ID, so they don't depend on how much is stored.
-- **Aggregates are linear in events read**, at about 80,000 events a second on PostgreSQL and SQLite, and 30,000 on OpenSearch. A time range is the way to keep them quick: a query's 60-second limit on `/query/execute` covers about 5 million events, and a 10-minute search job about 50 million.
-- **Beyond that, aggregates need pushing down to the database**, which isn't done yet. It's the next big step for scale. Data models can pre-aggregate in the meantime.
+- **Aggregates the database can compute scale with the database.** On PostgreSQL, counting a million events by host takes 0.3 s and a JSON-field average and percentile 3.8 s; OpenSearch counts in tens of milliseconds.
+- **Aggregates that run in the pipeline are linear in events read**, at about 80,000 events a second on PostgreSQL and SQLite, and 30,000 on OpenSearch: `top`, `rare`, anything after `eval` or `rex`, percentiles on SQLite, and everything but counts on OpenSearch. A time range keeps them quick: the 60-second limit on `/query/execute` covers about 5 million events, and a 10-minute search job about 50 million. Data models can pre-aggregate beyond that.

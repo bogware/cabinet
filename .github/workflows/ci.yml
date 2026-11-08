@@ -151,12 +151,17 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
+    - name: Version from tag
+      id: version
+      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
     - name: Publish API
       run: |
         dotnet publish src/Cabinet.API/Cabinet.API.csproj \
           --configuration Release \
           --runtime ${{ matrix.rid }} \
           --self-contained true \
+          -p:Version=${{ steps.version.outputs.version }} \
           -p:PublishSingleFile=true \
           -p:PublishTrimmed=false \
           -p:IncludeNativeLibrariesForSelfExtract=true \
@@ -168,6 +173,7 @@ jobs:
           --configuration Release \
           --runtime ${{ matrix.rid }} \
           --self-contained true \
+          -p:Version=${{ steps.version.outputs.version }} \
           -p:PublishSingleFile=true \
           -p:PublishTrimmed=false \
           -p:IncludeNativeLibrariesForSelfExtract=true \
@@ -179,6 +185,7 @@ jobs:
           --configuration Release \
           --runtime ${{ matrix.rid }} \
           --self-contained true \
+          -p:Version=${{ steps.version.outputs.version }} \
           -p:PublishSingleFile=true \
           -p:PublishTrimmed=false \
           -p:IncludeNativeLibrariesForSelfExtract=true \
@@ -492,9 +499,23 @@ jobs:
         cp scripts/install-agent.sh artifacts/
         cp scripts/install-agent.ps1 artifacts/
 
+    - name: Release notes from CHANGELOG.md
+      run: |
+        version="${GITHUB_REF_NAME#v}"
+        awk -v heading="## [$version]" '
+          index($0, heading) == 1 { found = 1; next }
+          found && /^## \[/ { exit }
+          found { print }
+        ' CHANGELOG.md > release-notes.md
+        if [ ! -s release-notes.md ]; then
+          echo "::error::CHANGELOG.md has no section for $version"
+          exit 1
+        fi
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
+        body_path: release-notes.md
         generate_release_notes: true
         files: |
           artifacts/**/*.tar.gz
