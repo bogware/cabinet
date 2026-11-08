@@ -71,10 +71,8 @@ public static class Program
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             };
 
-            if (!agentConfig.Output.VerifySsl)
-            {
-                handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
-            }
+            handler.SslOptions.RemoteCertificateValidationCallback =
+                Cabinet.Agent.Forwarding.CertificatePinning.Create(agentConfig.Output.CertificateSha256, agentConfig.Output.VerifySsl);
 
             return new HttpClient(handler);
         });

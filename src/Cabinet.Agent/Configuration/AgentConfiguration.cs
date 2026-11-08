@@ -176,6 +176,13 @@ public sealed class OutputConfiguration
     public bool VerifySsl { get; set; } = true;
 
     /// <summary>
+    /// SHA-256 fingerprint of the server's certificate. When set, the agent accepts that
+    /// certificate and no other, so a server can use its own self-signed one. The Windows
+    /// installer prints it.
+    /// </summary>
+    public string? CertificateSha256 { get; set; }
+
+    /// <summary>
     /// Events to queue in memory. When full, file reading pauses until there's room.
     /// </summary>
     public int MaxBufferSize { get; set; } = 10000;

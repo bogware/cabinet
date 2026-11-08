@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-11-08
+
+### Added
+
+- `install-server.ps1 -Https` serves HTTPS with a self-signed certificate it creates, for agents on other networks, and prints the fingerprint for them to pin. Plain HTTP then answers only the server itself.
+- Agents pin a server certificate with `Output:CertificateSha256`, so a self-signed certificate is safe without a domain name or certificate authority.
+
+### Fixed
+
+- Requests from the server itself are no longer redirected to HTTPS, so the dashboard opened there doesn't land on a certificate warning.
+
 ## [2.0.1] - 2026-11-08
 
 Found by installing on Windows Server and reading live Left 4 Dead 2 servers.

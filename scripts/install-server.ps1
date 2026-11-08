@@ -21,6 +21,11 @@
 .PARAMETER IngestKeys
     Names for ingest-only keys to create on first install, one per sender, such as l4d2-dev.
 
+.PARAMETER Https
+    Serve HTTPS on -HttpsPort (default 8443) with a self-signed certificate made here, for agents
+    on other networks. Plain HTTP on -Port then answers only this machine, for the dashboard.
+    Prints the certificate's fingerprint, which each agent pins (Output:CertificateSha256).
+
 .PARAMETER Gaming
     Turn on the game log parsers (Left 4 Dead 2, SourceMod, SteamCMD).
 
@@ -28,7 +33,7 @@
     Delete events older than this many days (default 90, 0 keeps everything).
 
 .EXAMPLE
-    .\install-server.ps1 -Gaming -IngestKeys l4d2-dev,l4d2-prod -AllowFrom 74.91.113.130,192.223.30.60
+    .\install-server.ps1 -Gaming -IngestKeys game-dev,game-prod -Https -AllowFrom 203.0.113.10,203.0.113.20
 #>
 
 param(
@@ -41,6 +46,8 @@ param(
     [string[]]$AllowFrom = @(),
     [string[]]$IngestKeys = @(),
     [switch]$Gaming,
+    [switch]$Https,
+    [int]$HttpsPort = 8443,
     [int]$RetentionDays = 90,
     [switch]$IncludeAgent
 )
@@ -71,7 +78,7 @@ Write-Host "  Data:    $DataDir"
 Write-Host "  Port:    $Port"
 Write-Host ""
 
-# ─── Find the binaries ─────────────────────────────────────────────────
+# --- Find the binaries
 Write-Host "[1/6] Finding binaries" -ForegroundColor Green
 $source = $null
 foreach ($candidate in @((Get-Location).Path, $PSScriptRoot, (Split-Path $PSScriptRoot -Parent))) {
@@ -83,7 +90,7 @@ if (-not $source) {
 }
 Write-Host "  From $source"
 
-# ─── Stop the service while files are replaced ─────────────────────────
+# --- Stop the service while files are replaced -------------------------
 $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existing -and $existing.Status -ne "Stopped") {
     Write-Host "  Stopping $serviceName"
@@ -91,7 +98,7 @@ if ($existing -and $existing.Status -ne "Stopped") {
     $existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
 }
 
-# ─── Copy ──────────────────────────────────────────────────────────────
+# --- Copy-------------
 Write-Host "[2/6] Copying files" -ForegroundColor Green
 foreach ($dir in @("$InstallDir\api", "$InstallDir\cli", "$DataDir\db", "$DataDir\backups")) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -105,7 +112,7 @@ if ($IncludeAgent -and (Test-Path "$source\agent")) {
     Copy-Item "$source\agent\*" "$InstallDir\agent" -Recurse -Force
 }
 
-# ─── Settings and keys ─────────────────────────────────────────────────
+# --- Settings and keys
 Write-Host "[3/6] Settings" -ForegroundColor Green
 $settingsPath = "$DataDir\appsettings.Production.json"
 $keysPath = "$DataDir\api-keys.txt"
@@ -147,12 +154,50 @@ else {
     Write-Host "  Created $settingsPath"
     Write-Host "  Keys written to $keysPath (administrators only)"
 }
+# --- HTTPS ------------------------------------------------------------
+$fingerprint = $null
+$pfxPath = "$DataDir\https.pfx"
+$current = Get-Content $settingsPath -Raw | ConvertFrom-Json
+if ($Https -and (-not $current.Kestrel -or -not (Test-Path $pfxPath))) {
+    $password = New-Key
+    $names = @("cabinet", "localhost", $env:COMPUTERNAME) | Select-Object -Unique
+    $certificate = New-SelfSignedCertificate -Subject "CN=cabinet" -DnsName $names `
+        -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(10) `
+        -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy Exportable -FriendlyName "Cabinet HTTPS"
+    Export-PfxCertificate -Cert $certificate -FilePath $pfxPath `
+        -Password (ConvertTo-SecureString $password -AsPlainText -Force) | Out-Null
+    Remove-Item "Cert:\LocalMachine\My\$($certificate.Thumbprint)"
+    Protect-File $pfxPath
+
+    $kestrel = @{
+        Endpoints = @{
+            Http = @{ Url = "http://localhost:$Port" }
+            Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Path = $pfxPath; Password = $password } }
+        }
+    }
+    $current | Add-Member -NotePropertyName Kestrel -NotePropertyValue $kestrel -Force
+    $current | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+    Protect-File $settingsPath
+    $current = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    Write-Host "  Created a self-signed certificate, valid 10 years: $pfxPath"
+}
+$useKestrel = [bool]$current.Kestrel
+if ($useKestrel) {
+    $https = $current.Kestrel.Endpoints.Https
+    $HttpsPort = ([Uri]($https.Url -replace "0\.0\.0\.0", "localhost")).Port
+    $loaded = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($https.Certificate.Path, $https.Certificate.Password)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fingerprint = -join ($sha.ComputeHash($loaded.RawData) | ForEach-Object { $_.ToString("X2") })
+    Set-Content -Path "$DataDir\https-fingerprint.txt" -Value $fingerprint -Encoding ASCII
+}
+
 Copy-Item $settingsPath "$InstallDir\api\appsettings.Production.json" -Force
 Protect-File "$InstallDir\api\appsettings.Production.json"
 
-# ─── Service ───────────────────────────────────────────────────────────
+# --- Service----------
 Write-Host "[4/6] Service" -ForegroundColor Green
-$binaryPath = "`"$InstallDir\api\Cabinet.API.exe`" --urls http://0.0.0.0:$Port"
+# With HTTPS, the addresses come from the Kestrel section of the settings
+$binaryPath = if ($useKestrel) { "`"$InstallDir\api\Cabinet.API.exe`"" } else { "`"$InstallDir\api\Cabinet.API.exe`" --urls http://0.0.0.0:$Port" }
 if (-not $existing) {
     New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName "Cabinet API Server" `
         -Description "Cabinet log search and detection" -StartupType Automatic | Out-Null
@@ -166,20 +211,22 @@ sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/30000/res
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -Name Environment `
     -Type MultiString -Value @("ASPNETCORE_ENVIRONMENT=Production", "DOTNET_ENVIRONMENT=Production")
 
-# ─── Firewall ──────────────────────────────────────────────────────────
+# --- Firewall---------
 Write-Host "[5/6] Firewall" -ForegroundColor Green
-$ruleName = "Cabinet API (TCP $Port)"
-Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+# Remove rules from earlier installs, then open only the port agents use
+Get-NetFirewallRule -DisplayName "Cabinet API (TCP *" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+$openPort = if ($useKestrel) { $HttpsPort } else { $Port }
+$ruleName = "Cabinet API (TCP $openPort)"
 if ($AllowFrom.Count -gt 0) {
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $Port `
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $openPort `
         -RemoteAddress $AllowFrom -Action Allow -Profile Any | Out-Null
-    Write-Host "  Port $Port open to: $($AllowFrom -join ', ')"
+    Write-Host "  Port $openPort open to: $($AllowFrom -join ', ')"
 }
 else {
     Write-Host "  No -AllowFrom given: only this machine can connect"
 }
 
-# ─── PATH and start ────────────────────────────────────────────────────
+# --- PATH and start---
 Write-Host "[6/6] Starting" -ForegroundColor Green
 $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 if ($machinePath -notlike "*$InstallDir\cli*") {
@@ -209,4 +256,10 @@ Write-Host "  Dashboard: http://localhost:$Port/  (sign in with the admin key)"
 Write-Host "  Keys:      $keysPath"
 Write-Host "  Settings:  $settingsPath  (rerun this script after editing it)"
 Write-Host "  Logs:      $InstallDir\api\logs\"
+if ($fingerprint) {
+    Write-Host ""
+    Write-Host "  Agents send to https://<this server's address>:$HttpsPort and pin this certificate:"
+    Write-Host "    CertificateSha256: $fingerprint" -ForegroundColor Cyan
+    Write-Host "  (also in $DataDir\https-fingerprint.txt)"
+}
 Write-Host ""

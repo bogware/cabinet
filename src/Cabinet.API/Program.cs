@@ -325,7 +325,11 @@ try
         OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache",
     });
 
-    app.UseHttpsRedirection();
+    // Requests from this machine stay on plain HTTP, so the dashboard opened on the server itself
+    // isn't sent to a certificate it doesn't trust. Everything else goes to HTTPS when it's on.
+    app.UseWhen(
+        context => context.Connection.RemoteIpAddress is not { } address || !System.Net.IPAddress.IsLoopback(address),
+        branch => branch.UseHttpsRedirection());
     app.UseCors("AllowConfiguredOrigins");
     app.UseResponseCaching();
     app.UseResponseCompression();

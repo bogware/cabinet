@@ -135,6 +135,14 @@ Extract `cabinet-win-x64.zip`, put `install-server.ps1` from the same release in
 
 It copies the binaries to `C:\Program Files\Cabinet\`, writes settings to `C:\ProgramData\Cabinet\appsettings.Production.json`, and on first install creates an admin key and an ingest key for each name in `-IngestKeys`, listed in `C:\ProgramData\Cabinet\api-keys.txt`. Both files are readable only by administrators. It then installs and starts the `CabinetAPI` service, set to restart after a crash, and opens the port (`-Port`, default 8080) to `-AllowFrom` only. `100.64.0.0/10` is the Tailscale range. `-RetentionDays` (default 90) limits how long events are kept, and `-Gaming` turns on the game log parsers.
 
+For agents on other networks, add `-Https`. The installer creates a self-signed certificate valid for 10 years and serves HTTPS on `-HttpsPort` (default 8443), opened only to `-AllowFrom`; plain HTTP on `-Port` then answers only this machine, for the dashboard. It prints the certificate's SHA-256 fingerprint, also saved in `C:\ProgramData\Cabinet\https-fingerprint.txt`. Each agent sends to `https://<address>:8443` with that fingerprint in `Output:CertificateSha256`, and accepts that certificate and no other, so no domain name or certificate authority is needed. Running the installer with `-Https` on an existing install adds HTTPS and keeps the keys.
+
+```powershell
+.\install-server.ps1 -Gaming -IngestKeys game-dev,game-prod -Https -AllowFrom 203.0.113.10,203.0.113.20
+```
+
+Behind a home router, forward TCP 8443 to this machine, and use your public address in the agents. If your ISP changes it, agents keep their events on disk and deliver them once their `ServerUrl` is updated.
+
 Run it again from a newer release to upgrade; settings and keys are kept. To change settings, edit the file in `C:\ProgramData\Cabinet\` and run the installer again. Logs are in `C:\Program Files\Cabinet\api\logs\`.
 
 ### macOS
@@ -223,6 +231,7 @@ Delivery is at-least-once, and the server stores each event once.
 - **Paths.** `*`, `?` and `**` work in any path segment. `Recursive` also matches the last segment in subdirectories. New files are found every `ScanIntervalSeconds` (default 10).
 - **Old files.** `IgnoreOlderThanHours` on an input skips files last written longer ago than that, for folders with years of history. A file the agent was already reading is always finished, and an ignored file is read in full if it's written to again.
 - **Quiet files.** A file read to the end that hasn't changed for `CloseInactiveSeconds` (default 300) is closed, and reopened from its checkpoint when it changes. Programs that start a new file per session, such as game servers, don't leave thousands open.
+- **Pinned certificates.** `Output:CertificateSha256` makes the agent accept the server's certificate only if its SHA-256 fingerprint matches, whoever issued it and whatever name it holds. A malformed fingerprint stops the agent at startup.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
 
