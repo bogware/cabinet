@@ -31,6 +31,12 @@ public sealed class AgentConfiguration
     public string Hostname { get; set; } = string.Empty;
 
     /// <summary>
+    /// Time zone that files without offsets in their times were written in, IANA or Windows
+    /// name. Empty = this machine's.
+    /// </summary>
+    public string TimeZone { get; set; } = string.Empty;
+
+    /// <summary>
     /// How often each file is checked for new lines (milliseconds).
     /// </summary>
     public int PollIntervalMilliseconds { get; set; } = 1000;
@@ -75,6 +81,19 @@ public sealed class InputConfiguration
     /// Multi-line event configuration.
     /// </summary>
     public MultiLineConfiguration? MultiLine { get; set; }
+
+    /// <summary>
+    /// Don't read files last written longer ago than this, unless they're already being followed.
+    /// For folders holding years of history. 0 reads every file.
+    /// </summary>
+    public int IgnoreOlderThanHours { get; set; }
+
+    /// <summary>
+    /// Stop following a file once it's fully read and hasn't changed for this long, so programs
+    /// that start a new file for each session don't leave thousands open. Reading resumes from
+    /// the checkpoint if it changes again. 0 follows files until they're removed.
+    /// </summary>
+    public int CloseInactiveSeconds { get; set; } = 300;
 }
 
 /// <summary>

@@ -20,15 +20,21 @@ using OpenTelemetry.Trace;
 using Serilog.Events;
 using System.Reflection;
 
+// A Windows service starts in System32, so settings, the dashboard and logs would be looked
+// for there. Use the program's own folder instead, as the hosting docs recommend.
+var contentRoot = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService()
+    ? AppContext.BaseDirectory
+    : Directory.GetCurrentDirectory();
+
 // Shared by the logger used during startup and the one configuration can adjust
-static LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
+LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
     .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
     .MinimumLevel.Override("Microsoft.AspNetCore.Authentication", LogEventLevel.Information)
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File("logs/cabinet-api-.log",
+    .WriteTo.File(Path.Combine(contentRoot, "logs", "cabinet-api-.log"),
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}",
         rollingInterval: RollingInterval.Day,
         rollOnFileSizeLimit: true,
@@ -39,7 +45,7 @@ Log.Logger = ConfigureLogging(new LoggerConfiguration()).CreateLogger();
 
 try
 {
-    var builder = WebApplication.CreateBuilder(args);
+    var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = contentRoot });
 
     // A one-off command rather than running the server
     if (args.Length > 0 && args[0] == "--restore")

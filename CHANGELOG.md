@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-08
+
+Found by installing on Windows Server and reading live Left 4 Dead 2 servers.
+
+### Added
+
+- Agent inputs take `IgnoreOlderThanHours`, to skip old history, and `CloseInactiveSeconds` (default 300), which closes quiet files and reopens them from their checkpoint when they change.
+- The agent sends its time zone, and times written without an offset are read in it.
+- `install-server.ps1` creates API keys (`-IngestKeys`), opens the firewall only to `-AllowFrom`, turns on the game parsers with `-Gaming`, sets retention, and restarts the service after a crash. Upgrades keep settings and keys.
+- `install-agent.sh` takes `--config`, `--groups`, `--binary`, `--source-type` and `--index`, finds the binary in the release archive, and starts the service.
+- The Left 4 Dead 2 parser reads the full player format (character, state, health, position), both sides of a kill, ban length and who banned, map, world and connection events, and flags the restart-for-update notice as a warning.
+
+### Fixed
+
+- As a Windows service, the API looked for its settings, dashboard and logs in `C:\Windows\System32`, so the dashboard returned 404.
+- `install-server.ps1` couldn't find the binaries in the release archive, created no API keys, and opened the firewall only on Domain and Private networks.
+- The agent's service couldn't read files under `/home`.
+- The agent read every file a pattern matched, however old, and never closed them.
+- Left 4 Dead 2 and SourceMod times were read as UTC, so events from servers in other zones were hours off.
+- Words in game chat, such as "lag" or "error", raised severity or added tags, and every special infected bot leaving was tagged as an admin action.
+- SourceMod's console was recorded as a Steam ID, and the plugin named in "Blaming:" was lost.
+- `agent-chaos.sh` stopped working when Compose began requiring `CABINET_AGENT_API_KEY`.
+
 ## [2.0.0] - 2026-11-07
 
 Upgrading from 1.0: settings under `Distributed:*` and the SQLite RBAC database are gone (see Removed), the Compose agent needs its own `CABINET_AGENT_API_KEY`, and changing detection rules, data models, knowledge objects and field extractions now needs the capability on every index.

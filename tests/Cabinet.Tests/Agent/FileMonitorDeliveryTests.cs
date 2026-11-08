@@ -82,6 +82,62 @@ public sealed class FileMonitorDeliveryTests : IAsyncLifetime
         await agent.StopAsync();
     }
 
+    [Fact]
+    public async Task OldHistory_IsSkipped_UntilWrittenAgain()
+    {
+        // A game server's log folder can hold years of files, one per map
+        var old = Path.Combine(LogDirectory, "old.log");
+        await Append(old, "from last year");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-3));
+        await Append(LogFile, "today");
+
+        await StartAgent(input => input.IgnoreOlderThanHours = 24);
+        await WaitForStored(1);
+        await Settle();
+        StoredShouldBe("today");
+
+        // Written to again, it's current, and read whole
+        await Append(old, "again");
+        await WaitForStored(3);
+        await Settle();
+        StoredShouldBe("today", "from last year", "again");
+    }
+
+    [Fact]
+    public async Task QuietFile_IsClosed_AndResumesWhereItLeftOff()
+    {
+        await Append(LogFile, "one");
+        await StartAgent(input => input.CloseInactiveSeconds = 1);
+        await WaitForStored(1);
+
+        // Long enough to close it, and for a scan to see it unchanged
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        await Append(LogFile, "two");
+        await WaitForStored(2);
+        await Settle();
+        StoredShouldBe("one", "two");
+    }
+
+    [Fact]
+    public async Task ManyQuietFiles_AreEachReadOnce()
+    {
+        var files = Enumerable.Range(0, 40).Select(i => Path.Combine(LogDirectory, $"map{i:D2}.log")).ToList();
+        foreach (var file in files)
+        {
+            await Append(file, Path.GetFileNameWithoutExtension(file));
+        }
+
+        await StartAgent(input => input.CloseInactiveSeconds = 1);
+        await WaitForStored(40);
+        await Task.Delay(TimeSpan.FromSeconds(3));
+        await Append(files[7], "later");
+        await WaitForStored(41);
+        await Settle();
+
+        _collector.Stored.Should().HaveCount(41).And.OnlyHaveUniqueItems().And.Contain("later");
+    }
+
     private static async Task Append(string path, params string[] lines)
     {
         await using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);

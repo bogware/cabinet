@@ -1,302 +1,212 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Cabinet API Server Installer for Windows
+    Installs the Cabinet API server as a Windows service.
 
 .DESCRIPTION
-    Installs Cabinet API as a Windows Service with proper configuration.
-    Also installs the CLI tool and optionally the forwarding agent.
+    Run from the folder you extracted cabinet-win-x64.zip into (the one holding api\, cli\ and
+    agent\), with this script beside it or in it. It copies the binaries, writes the settings,
+    creates API keys on first install, installs and starts the CabinetAPI service, and opens the
+    port in the firewall to the addresses you list.
 
-.PARAMETER InstallDir
-    Installation directory (default: C:\Program Files\Cabinet)
+    Running it again upgrades the binaries and keeps the settings and keys.
 
 .PARAMETER Port
-    HTTP port for the API server (default: 8080)
+    HTTP port (default 8080).
 
-.PARAMETER Storage
-    Storage backend: sqlite, postgresql, opensearch (default: sqlite)
+.PARAMETER AllowFrom
+    Addresses or ranges allowed through the firewall, such as your game servers' IPs or a
+    Tailscale range (100.64.0.0/10). Without it, only this machine can connect.
 
-.PARAMETER ConnectionString
-    Storage connection string (auto-generated for SQLite)
+.PARAMETER IngestKeys
+    Names for ingest-only keys to create on first install, one per sender, such as l4d2-dev.
 
-.PARAMETER RunWizard
-    Launch the interactive setup wizard after install
+.PARAMETER Gaming
+    Turn on the game log parsers (Left 4 Dead 2, SourceMod, SteamCMD).
+
+.PARAMETER RetentionDays
+    Delete events older than this many days (default 90, 0 keeps everything).
 
 .EXAMPLE
-    .\install-server.ps1
-    .\install-server.ps1 -Port 5000 -Storage postgresql
-    .\install-server.ps1 -RunWizard
+    .\install-server.ps1 -Gaming -IngestKeys l4d2-dev,l4d2-prod -AllowFrom 74.91.113.130,192.223.30.60
 #>
 
 param(
     [string]$InstallDir = "$env:ProgramFiles\Cabinet",
     [string]$DataDir = "$env:ProgramData\Cabinet",
     [int]$Port = 8080,
-    [ValidateSet("sqlite", "postgresql", "opensearch")]
+    [ValidateSet("sqlite", "postgresql")]
     [string]$Storage = "sqlite",
     [string]$ConnectionString = "",
-    [switch]$RunWizard,
+    [string[]]$AllowFrom = @(),
+    [string[]]$IngestKeys = @(),
+    [switch]$Gaming,
+    [int]$RetentionDays = 90,
     [switch]$IncludeAgent
 )
 
 $ErrorActionPreference = "Stop"
+$serviceName = "CabinetAPI"
 
-# ─── Banner ────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "  +=======================================+" -ForegroundColor Cyan
-Write-Host "  |   Cabinet API Server Installer        |" -ForegroundColor Cyan
-Write-Host "  |   Log Intelligence System - Windows   |" -ForegroundColor Cyan
-Write-Host "  +=======================================+" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Install dir: $InstallDir"
-Write-Host "  Data dir:    $DataDir"
-Write-Host "  Port:        $Port"
-Write-Host "  Storage:     $Storage"
-Write-Host ""
-
-# ─── Create directories ───────────────────────────────────────────────
-Write-Host "[1/6] Creating directories" -ForegroundColor Green
-
-$dirs = @(
-    "$InstallDir\api",
-    "$InstallDir\cli",
-    "$DataDir\db",
-    "$DataDir\backups",
-    "$DataDir\logs"
-)
-
-if ($IncludeAgent) {
-    $dirs += "$InstallDir\agent"
-    $dirs += "$DataDir\agent\spool"
-    $dirs += "$DataDir\agent\data"
+function New-Key {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    return -join ($bytes | ForEach-Object { $_.ToString("x2") })
 }
 
-foreach ($dir in $dirs) {
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+# Readable only by administrators and the service, since it holds the keys
+function Protect-File([string]$Path) {
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($who in @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "Allow")))
     }
+    Set-Acl -Path $Path -AclObject $acl
 }
 
-# ─── Check for binaries ───────────────────────────────────────────────
-Write-Host "[2/6] Checking for Cabinet binaries" -ForegroundColor Green
+Write-Host ""
+Write-Host "Cabinet API server installer" -ForegroundColor Cyan
+Write-Host "  Install: $InstallDir"
+Write-Host "  Data:    $DataDir"
+Write-Host "  Port:    $Port"
+Write-Host ""
 
-$binaryFound = $false
-
-# Check if API binary exists in install dir or current dir
-if (Test-Path "$InstallDir\api\Cabinet.API.exe") {
-    Write-Host "  Found existing API binary"
-    $binaryFound = $true
+# ─── Find the binaries ─────────────────────────────────────────────────
+Write-Host "[1/6] Finding binaries" -ForegroundColor Green
+$source = $null
+foreach ($candidate in @((Get-Location).Path, $PSScriptRoot, (Split-Path $PSScriptRoot -Parent))) {
+    if (-not $candidate) { continue }
+    if (Test-Path (Join-Path $candidate "api\Cabinet.API.exe")) { $source = $candidate; break }
 }
-elseif (Test-Path ".\Cabinet.API.exe") {
-    Write-Host "  Copying API binary from current directory"
-    Copy-Item ".\Cabinet.API*" "$InstallDir\api\" -Force
-    Copy-Item ".\appsettings*" "$InstallDir\api\" -Force -ErrorAction SilentlyContinue
-    if (Test-Path ".\wwwroot") {
-        Copy-Item ".\wwwroot" "$InstallDir\api\" -Recurse -Force
-    }
-    $binaryFound = $true
+if (-not $source) {
+    throw "Cabinet.API.exe not found. Extract cabinet-win-x64.zip and run this from that folder, which holds api\, cli\ and agent\."
 }
+Write-Host "  From $source"
 
-# Check for CLI
-if (Test-Path ".\cabinet.exe") {
-    Write-Host "  Copying CLI binary from current directory"
-    Copy-Item ".\cabinet*" "$InstallDir\cli\" -Force
-}
-
-# Check for Agent
-if ($IncludeAgent -and (Test-Path ".\cabinet-agent.exe")) {
-    Write-Host "  Copying Agent binary from current directory"
-    Copy-Item ".\cabinet-agent*" "$InstallDir\agent\" -Force
+# ─── Stop the service while files are replaced ─────────────────────────
+$existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($existing -and $existing.Status -ne "Stopped") {
+    Write-Host "  Stopping $serviceName"
+    Stop-Service -Name $serviceName -Force
+    $existing.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
 }
 
-if (-not $binaryFound) {
-    Write-Host ""
-    Write-Host "  NOTE: No Cabinet.API.exe binary found." -ForegroundColor Yellow
-    Write-Host "  After installation, copy the binary for win-x64 to:"
-    Write-Host "    $InstallDir\api\"
-    Write-Host ""
-    Write-Host "  Download from: https://github.com/bogware/cabinet/releases" -ForegroundColor Cyan
-    Write-Host ""
+# ─── Copy ──────────────────────────────────────────────────────────────
+Write-Host "[2/6] Copying files" -ForegroundColor Green
+foreach ($dir in @("$InstallDir\api", "$InstallDir\cli", "$DataDir\db", "$DataDir\backups")) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+}
+# Settings live in $DataDir and are kept on upgrade
+Get-ChildItem "$source\api" | Where-Object { $_.Name -ne "appsettings.Production.json" } |
+    Copy-Item -Destination "$InstallDir\api" -Recurse -Force
+if (Test-Path "$source\cli") { Copy-Item "$source\cli\*" "$InstallDir\cli" -Recurse -Force }
+if ($IncludeAgent -and (Test-Path "$source\agent")) {
+    New-Item -ItemType Directory -Path "$InstallDir\agent" -Force | Out-Null
+    Copy-Item "$source\agent\*" "$InstallDir\agent" -Recurse -Force
 }
 
-# ─── Generate configuration ───────────────────────────────────────────
-Write-Host "[3/6] Generating configuration" -ForegroundColor Green
-
-# Storage config
-switch ($Storage) {
-    "sqlite" {
+# ─── Settings and keys ─────────────────────────────────────────────────
+Write-Host "[3/6] Settings" -ForegroundColor Green
+$settingsPath = "$DataDir\appsettings.Production.json"
+$keysPath = "$DataDir\api-keys.txt"
+if (Test-Path $settingsPath) {
+    Write-Host "  Keeping existing settings and keys in $settingsPath"
+}
+else {
+    if ($Storage -eq "sqlite") {
         $storageType = "SQLite"
         if (-not $ConnectionString) { $ConnectionString = "Data Source=$DataDir\db\cabinet.db" }
     }
-    "postgresql" {
+    else {
         $storageType = "PostgreSQL"
-        if (-not $ConnectionString) { $ConnectionString = "SET_VIA_ENV_VAR" }
+        if (-not $ConnectionString) { throw "-ConnectionString is required for PostgreSQL" }
     }
-    "opensearch" {
-        $storageType = "OpenSearch"
-        if (-not $ConnectionString) { $ConnectionString = "SET_VIA_ENV_VAR" }
-    }
-}
 
-$configPath = "$DataDir\appsettings.json"
-if (-not (Test-Path $configPath)) {
-    $config = @{
-        Urls = "http://0.0.0.0:$Port"
-        Storage = @{
+    $keys = @(@{ Key = (New-Key); Tier = "Admin"; Name = "admin" })
+    foreach ($name in $IngestKeys) {
+        $keys += @{ Key = (New-Key); Tier = "Ingest"; Name = $name }
+    }
+
+    $settings = [ordered]@{
+        Storage = [ordered]@{
             Type = $storageType
             ConnectionString = $ConnectionString
+            RetentionDays = $RetentionDays
         }
-        Logging = @{
-            LogLevel = @{
-                Default = "Information"
-                "Microsoft.AspNetCore" = "Warning"
-            }
-        }
-        RateLimiting = @{
-            Basic = @{ RequestsPerMinute = 100 }
-            Professional = @{ RequestsPerMinute = 1000 }
-            Enterprise = @{ RequestsPerMinute = 10000 }
-        }
-        Cors = @{
-            AllowedOrigins = @("http://localhost:3000")
-        }
-        Backup = @{
-            ArchivePath = "$DataDir\backups"
-            RetentionDays = 30
-            AutoBackupEnabled = $false
-        }
-    } | ConvertTo-Json -Depth 5
+        ApiKeys = @{ Keys = $keys }
+        Gaming = @{ Enabled = [bool]$Gaming }
+        Backup = @{ ArchivePath = "$DataDir\backups" }
+    }
+    $settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsPath -Encoding UTF8
+    Protect-File $settingsPath
 
-    Set-Content -Path $configPath -Value $config -Encoding UTF8
-    Write-Host "  Configuration written to $configPath"
+    $lines = @("# Cabinet API keys. The admin key is for the dashboard; each other key is for one sender.")
+    foreach ($key in $keys) { $lines += "$($key.Name) ($($key.Tier)): $($key.Key)" }
+    Set-Content -Path $keysPath -Value $lines -Encoding UTF8
+    Protect-File $keysPath
+    Write-Host "  Created $settingsPath"
+    Write-Host "  Keys written to $keysPath (administrators only)"
+}
+Copy-Item $settingsPath "$InstallDir\api\appsettings.Production.json" -Force
+Protect-File "$InstallDir\api\appsettings.Production.json"
+
+# ─── Service ───────────────────────────────────────────────────────────
+Write-Host "[4/6] Service" -ForegroundColor Green
+$binaryPath = "`"$InstallDir\api\Cabinet.API.exe`" --urls http://0.0.0.0:$Port"
+if (-not $existing) {
+    New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName "Cabinet API Server" `
+        -Description "Cabinet log search and detection" -StartupType Automatic | Out-Null
+    Write-Host "  Created $serviceName"
 }
 else {
-    Write-Host "  Configuration already exists at $configPath"
+    sc.exe config $serviceName binPath= $binaryPath | Out-Null
 }
+# Restart after a crash: 5 s, 30 s, then every 60 s
+sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -Name Environment `
+    -Type MultiString -Value @("ASPNETCORE_ENVIRONMENT=Production", "DOTNET_ENVIRONMENT=Production")
 
-# Copy config to API dir so the binary finds it
-Copy-Item $configPath "$InstallDir\api\appsettings.Production.json" -Force
-
-# ─── Install Windows Service ──────────────────────────────────────────
-Write-Host "[4/6] Installing Windows Service" -ForegroundColor Green
-
-$serviceName = "CabinetAPI"
-$serviceDisplayName = "Cabinet API Server"
-$serviceDescription = "Cabinet Log Intelligence System - REST API Server"
-$binaryPath = "$InstallDir\api\Cabinet.API.exe --urls http://0.0.0.0:$Port"
-
-# Stop existing service if running
-$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-if ($existingService) {
-    Write-Host "  Stopping existing service..."
-    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    sc.exe delete $serviceName | Out-Null
-    Start-Sleep -Seconds 1
-}
-
-if ($binaryFound) {
-    # Create the service
-    New-Service -Name $serviceName `
-        -BinaryPathName $binaryPath `
-        -DisplayName $serviceDisplayName `
-        -Description $serviceDescription `
-        -StartupType Automatic | Out-Null
-
-    # Set environment variables for the service
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
-    $env = @(
-        "ASPNETCORE_ENVIRONMENT=Production",
-        "DOTNET_ENVIRONMENT=Production",
-        "Storage__ConnectionString=$ConnectionString"
-    )
-    Set-ItemProperty -Path $regPath -Name "Environment" -Value $env -Type MultiString
-
-    Write-Host "  Windows Service installed: $serviceName"
+# ─── Firewall ──────────────────────────────────────────────────────────
+Write-Host "[5/6] Firewall" -ForegroundColor Green
+$ruleName = "Cabinet API (TCP $Port)"
+Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+if ($AllowFrom.Count -gt 0) {
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $Port `
+        -RemoteAddress $AllowFrom -Action Allow -Profile Any | Out-Null
+    Write-Host "  Port $Port open to: $($AllowFrom -join ', ')"
 }
 else {
-    Write-Host "  Skipping service creation (no binary found)" -ForegroundColor Yellow
+    Write-Host "  No -AllowFrom given: only this machine can connect"
 }
 
-# ─── Install Agent Service ────────────────────────────────────────────
-if ($IncludeAgent) {
-    Write-Host "[4b] Installing Agent Windows Service" -ForegroundColor Green
+# ─── PATH and start ────────────────────────────────────────────────────
+Write-Host "[6/6] Starting" -ForegroundColor Green
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+if ($machinePath -notlike "*$InstallDir\cli*") {
+    [Environment]::SetEnvironmentVariable("Path", "$machinePath;$InstallDir\cli", "Machine")
+}
+Start-Service -Name $serviceName
 
-    $agentServiceName = "CabinetAgent"
-    $existingAgent = Get-Service -Name $agentServiceName -ErrorAction SilentlyContinue
-    if ($existingAgent) {
-        Stop-Service -Name $agentServiceName -Force -ErrorAction SilentlyContinue
-        sc.exe delete $agentServiceName | Out-Null
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health/ready" -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -eq 200) { $ready = $true; break }
+    }
+    catch {
         Start-Sleep -Seconds 1
     }
-
-    if (Test-Path "$InstallDir\agent\cabinet-agent.exe") {
-        New-Service -Name $agentServiceName `
-            -BinaryPathName "$InstallDir\agent\cabinet-agent.exe" `
-            -DisplayName "Cabinet Log Forwarding Agent" `
-            -Description "Cabinet Agent - Monitors log files and forwards to Cabinet API" `
-            -StartupType Automatic | Out-Null
-
-        Write-Host "  Agent service installed: $agentServiceName"
-    }
 }
 
-# ─── Add to PATH ──────────────────────────────────────────────────────
-Write-Host "[5/6] Configuring PATH" -ForegroundColor Green
-
-$cliPath = "$InstallDir\cli"
-$currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-if ($currentPath -notlike "*$cliPath*") {
-    [Environment]::SetEnvironmentVariable("Path", "$currentPath;$cliPath", "Machine")
-    Write-Host "  Added $cliPath to system PATH"
-    Write-Host "  (restart terminal to use 'cabinet' command)"
+Write-Host ""
+if ($ready) {
+    Write-Host "Cabinet is running." -ForegroundColor Green
 }
 else {
-    Write-Host "  CLI already in PATH"
+    Write-Host "Cabinet didn't report ready within 60 seconds. Check $InstallDir\api\logs\." -ForegroundColor Yellow
 }
-
-# ─── Firewall rule ────────────────────────────────────────────────────
-Write-Host "[6/6] Configuring firewall" -ForegroundColor Green
-
-$ruleName = "Cabinet API Server (TCP $Port)"
-$existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if (-not $existingRule) {
-    New-NetFirewallRule -DisplayName $ruleName `
-        -Direction Inbound -Protocol TCP -LocalPort $Port `
-        -Action Allow -Profile Domain,Private | Out-Null
-    Write-Host "  Firewall rule created for port $Port (Domain + Private networks)"
-}
-else {
-    Write-Host "  Firewall rule already exists"
-}
-
-# ─── Done ──────────────────────────────────────────────────────────────
+Write-Host "  Dashboard: http://localhost:$Port/  (sign in with the admin key)"
+Write-Host "  Keys:      $keysPath"
+Write-Host "  Settings:  $settingsPath  (rerun this script after editing it)"
+Write-Host "  Logs:      $InstallDir\api\logs\"
 Write-Host ""
-Write-Host "  Installation complete!" -ForegroundColor Green
-Write-Host ""
-Write-Host "  +─────────────────────────────────────────────────+" -ForegroundColor Cyan
-Write-Host "  |  Quick Start                                    |" -ForegroundColor Cyan
-Write-Host "  +─────────────────────────────────────────────────+" -ForegroundColor Cyan
-Write-Host "  |  Start:     Start-Service CabinetAPI            |"
-Write-Host "  |  Stop:      Stop-Service CabinetAPI             |"
-Write-Host "  |  Status:    Get-Service CabinetAPI              |"
-Write-Host "  |  Logs:      Get-EventLog -LogName Application   |"
-Write-Host "  |  Dashboard: http://localhost:$Port/              |"
-Write-Host "  |  API Docs:  http://localhost:$Port/swagger       |"
-Write-Host "  +─────────────────────────────────────────────────+" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Config:   $DataDir\appsettings.json"
-Write-Host "  Data:     $DataDir\"
-Write-Host "  Binaries: $InstallDir\"
-Write-Host ""
-
-if (-not $binaryFound) {
-    Write-Host "  IMPORTANT: Copy Cabinet.API.exe to $InstallDir\api\ before starting." -ForegroundColor Yellow
-    Write-Host ""
-}
-
-# Run wizard if requested
-if ($RunWizard -and (Test-Path "$InstallDir\cli\cabinet.exe")) {
-    Write-Host "  Launching setup wizard..."
-    & "$InstallDir\cli\cabinet.exe" setup
-}

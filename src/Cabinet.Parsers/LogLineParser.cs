@@ -25,11 +25,16 @@ public sealed class LogLineParser
     /// <param name="line">The raw line.</param>
     /// <param name="sourceType">The sender's source type, if any.</param>
     /// <param name="fallbackTime">Used when the line has no timestamp of its own.</param>
+    /// <param name="timeZone">
+    /// The sender's time zone, for lines whose time has no offset, such as game servers' logs.
+    /// Without it, those times are read as UTC.
+    /// </param>
     /// <param name="cancellationToken">Cancels parsing.</param>
     public async Task<LogEvent> ParseAsync(
         string line,
         string? sourceType = null,
         DateTime? fallbackTime = null,
+        TimeZoneInfo? timeZone = null,
         CancellationToken cancellationToken = default)
     {
         var parser = SelectParser(line, sourceType);
@@ -45,6 +50,7 @@ public sealed class LogLineParser
             Timestamp = startedAt,
         };
 
+        logEvent.Timestamp = ToUtc(logEvent.Timestamp, timeZone);
         logEvent.IndexTime = startedAt;
         if (fallbackTime is { } time && logEvent.Timestamp >= startedAt)
         {
@@ -58,6 +64,64 @@ public sealed class LogLineParser
         }
 
         return logEvent;
+    }
+
+    /// <summary>A time with no zone, read in the sender's zone, or as UTC.</summary>
+    public static DateTime ToUtc(DateTime time, TimeZoneInfo? timeZone)
+    {
+        if (time.Kind != DateTimeKind.Unspecified)
+        {
+            return time.ToUniversalTime();
+        }
+
+        if (timeZone == null)
+        {
+            return DateTime.SpecifyKind(time, DateTimeKind.Utc);
+        }
+
+        // An hour skipped when clocks go forward can't be converted; it can only be a slow clock
+        if (timeZone.IsInvalidTime(time))
+        {
+            time = time.AddHours(1);
+        }
+
+        return TimeZoneInfo.ConvertTimeToUtc(time, timeZone);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, TimeZoneInfo?> Zones = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A time zone by IANA or Windows name, or null if it isn't known. Bounded, since senders
+    /// supply the names.
+    /// </summary>
+    public static TimeZoneInfo? FindTimeZone(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 64)
+        {
+            return null;
+        }
+
+        if (Zones.TryGetValue(name, out var cached))
+        {
+            return cached;
+        }
+
+        TimeZoneInfo? zone = null;
+        try
+        {
+            zone = TimeZoneInfo.FindSystemTimeZoneById(name);
+        }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+        {
+            zone = null;
+        }
+
+        if (Zones.Count < 1000)
+        {
+            Zones[name] = zone;
+        }
+
+        return zone;
     }
 
     private ILogParser? SelectParser(string line, string? sourceType)

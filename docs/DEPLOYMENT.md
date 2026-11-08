@@ -127,15 +127,15 @@ The installer creates a non-root `cabinet` service user, installs to `/opt/cabin
 
 ### Windows
 
-```powershell
-# Run PowerShell as Administrator
-.\install-server.ps1 -Port 8080 -Storage sqlite -RunWizard
+Extract `cabinet-win-x64.zip`, put `install-server.ps1` from the same release in that folder, and in an Administrator PowerShell there:
 
-# Include the agent
-.\install-server.ps1 -IncludeAgent
+```powershell
+.\install-server.ps1 -Gaming -IngestKeys game-dev,game-prod -AllowFrom 100.64.0.0/10
 ```
 
-The installer uses `C:\Program Files\Cabinet\` with data in `C:\ProgramData\Cabinet\`, registers the `CabinetAPI` Windows service, adds a firewall rule for the API port, and adds the CLI to the system PATH.
+It copies the binaries to `C:\Program Files\Cabinet\`, writes settings to `C:\ProgramData\Cabinet\appsettings.Production.json`, and on first install creates an admin key and an ingest key for each name in `-IngestKeys`, listed in `C:\ProgramData\Cabinet\api-keys.txt`. Both files are readable only by administrators. It then installs and starts the `CabinetAPI` service, set to restart after a crash, and opens the port (`-Port`, default 8080) to `-AllowFrom` only. `100.64.0.0/10` is the Tailscale range. `-RetentionDays` (default 90) limits how long events are kept, and `-Gaming` turns on the game log parsers.
+
+Run it again from a newer release to upgrade; settings and keys are kept. To change settings, edit the file in `C:\ProgramData\Cabinet\` and run the installer again. Logs are in `C:\Program Files\Cabinet\api\logs\`.
 
 ### macOS
 
@@ -170,7 +170,13 @@ A default Production configuration starts on SQLite. The API runs as a systemd (
 The agent tails files and forwards them to `/services/collector/event`.
 
 ```bash
-# Linux
+# Linux, from the extracted cabinet-linux-x64.tar.gz
+sudo ./install-agent.sh --server http://cabinet:8080 --api-key "$KEY" --paths "/var/log/*.log"
+
+# Several inputs: write the settings yourself, and let the agent read other users' folders
+sudo ./install-agent.sh --config agent.json --groups gameuser1,gameuser2
+
+# Or the package
 sudo dpkg -i cabinet-agent_<version>_amd64.deb
 # Edit the agent's appsettings.json with your server URL and API key
 sudo systemctl start cabinet-agent
@@ -215,6 +221,9 @@ Delivery is at-least-once, and the server stores each event once.
 - **Partial lines.** A line without its line ending waits until the ending arrives, so a last line that never gets one isn't sent. Lines longer than `MaxLineBytes` (default 1 MiB) are truncated.
 - **Multi-line events.** `MultiLine:Pattern`, `Negate`, `MaxLines` and `TimeoutSeconds` configure merging per input. An event stays open across polls until the next one starts or `TimeoutSeconds` passes with no new lines.
 - **Paths.** `*`, `?` and `**` work in any path segment. `Recursive` also matches the last segment in subdirectories. New files are found every `ScanIntervalSeconds` (default 10).
+- **Old files.** `IgnoreOlderThanHours` on an input skips files last written longer ago than that, for folders with years of history. A file the agent was already reading is always finished, and an ignored file is read in full if it's written to again.
+- **Quiet files.** A file read to the end that hasn't changed for `CloseInactiveSeconds` (default 300) is closed, and reopened from its checkpoint when it changes. Programs that start a new file per session, such as game servers, don't leave thousands open.
+- **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
 
 ### Agent limits

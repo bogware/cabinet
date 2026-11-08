@@ -75,6 +75,12 @@ public sealed class LogEventDto
     public string? Index { get; set; }
 
     /// <summary>
+    /// This host's time zone, so the server can place times written without an offset.
+    /// </summary>
+    [JsonPropertyName("tz")]
+    public string? TimeZone { get; set; }
+
+    /// <summary>
     /// Line number in the source file.
     /// </summary>
     [JsonIgnore]

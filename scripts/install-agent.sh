@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Cabinet Agent Installer
-# Usage: curl -sSL https://your-server/install-agent.sh | bash
-# Or: ./install-agent.sh [--server URL] [--api-key KEY] [--paths "/var/log/*.log"]
+# Cabinet agent installer for Linux (systemd).
+#
+# Run as root from the folder you extracted cabinet-linux-x64.tar.gz into (it finds
+# agent/cabinet-agent there), or pass --binary.
+#
+#   ./install-agent.sh --server http://cabinet:8080 --api-key KEY --paths "/var/log/*.log"
+#   ./install-agent.sh --config my-agent.json --groups game1,game2
+#
+# --config installs a complete appsettings.json instead of generating one, for several inputs.
+# --groups adds the service user to groups, to read logs in other users' folders.
+# Running it again upgrades the binary and keeps the settings and checkpoints.
 
 set -euo pipefail
 
@@ -10,167 +18,121 @@ SERVICE_USER="cabinet-agent"
 SERVER_URL=""
 API_KEY=""
 LOG_PATHS=""
+SOURCE_TYPE="generic"
+INDEX="main"
+CONFIG_FILE=""
+BINARY=""
+GROUPS_CSV=""
+START=true
 
-# Parse arguments
+usage() {
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    echo "Options: --server URL --api-key KEY --paths \"a,b\" --source-type T --index I"
+    echo "         --config FILE --binary PATH --groups g1,g2 --install-dir DIR --no-start"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --server)
-            SERVER_URL="$2"
-            shift 2
-            ;;
-        --api-key)
-            API_KEY="$2"
-            shift 2
-            ;;
-        --paths)
-            LOG_PATHS="$2"
-            shift 2
-            ;;
-        --install-dir)
-            INSTALL_DIR="$2"
-            shift 2
-            ;;
-        --help)
-            echo "Usage: $0 [--server URL] [--api-key KEY] [--paths \"/var/log/*.log\"] [--install-dir DIR]"
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
+        --server) SERVER_URL="$2"; shift 2 ;;
+        --api-key) API_KEY="$2"; shift 2 ;;
+        --paths) LOG_PATHS="$2"; shift 2 ;;
+        --source-type) SOURCE_TYPE="$2"; shift 2 ;;
+        --index) INDEX="$2"; shift 2 ;;
+        --config) CONFIG_FILE="$2"; shift 2 ;;
+        --binary) BINARY="$2"; shift 2 ;;
+        --groups) GROUPS_CSV="$2"; shift 2 ;;
+        --install-dir) INSTALL_DIR="$2"; shift 2 ;;
+        --no-start) START=false; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
 
-# Detect OS and architecture
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-
-case "$ARCH" in
-    x86_64)  RID="${OS}-x64" ;;
-    aarch64) RID="${OS}-arm64" ;;
-    arm64)   RID="${OS}-arm64" ;;
-    *)
-        echo "Unsupported architecture: $ARCH"
-        exit 1
-        ;;
-esac
-
-case "$OS" in
-    linux)  RID="linux-${RID#linux-}" ;;
-    darwin) RID="osx-${RID#darwin-}" ;;
-    *)
-        echo "Unsupported OS: $OS (use Linux or macOS)"
-        exit 1
-        ;;
-esac
-
-echo "Cabinet Agent Installer"
-echo "======================"
-echo "OS/Arch: $RID"
-echo "Install dir: $INSTALL_DIR"
-echo ""
-
-# Check for root
 if [[ $EUID -ne 0 ]]; then
-    echo "This installer must be run as root (or with sudo)."
+    echo "Run this as root (or with sudo)." >&2
     exit 1
 fi
 
-# Create service user
+if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "This installer is for Linux." >&2
+    exit 1
+fi
+
+# The binary: given, or beside this script as the release archive lays it out
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "$BINARY" ]]; then
+    for candidate in "$PWD/agent/cabinet-agent" "$here/agent/cabinet-agent" "$here/../agent/cabinet-agent" "$PWD/cabinet-agent"; do
+        if [[ -f "$candidate" ]]; then BINARY="$candidate"; break; fi
+    done
+fi
+if [[ -z "$BINARY" || ! -f "$BINARY" ]]; then
+    echo "cabinet-agent not found. Extract the release archive and run this from that folder, or pass --binary." >&2
+    exit 1
+fi
+
+echo "Cabinet agent installer"
+echo "  Binary:  $BINARY"
+echo "  Install: $INSTALL_DIR"
+
 if ! id "$SERVICE_USER" &>/dev/null; then
-    echo "Creating service user: $SERVICE_USER"
-    useradd --system --no-create-home --shell /sbin/nologin "$SERVICE_USER"
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-# Create install directory
-echo "Creating install directory: $INSTALL_DIR"
+if [[ -n "$GROUPS_CSV" ]]; then
+    usermod -a -G "$GROUPS_CSV" "$SERVICE_USER"
+    echo "  Groups:  $GROUPS_CSV"
+fi
+
+systemctl stop cabinet-agent 2>/dev/null || true
 mkdir -p "$INSTALL_DIR"/{spool,data}
+install -m 755 "$BINARY" "$INSTALL_DIR/cabinet-agent"
 
-# Check if binary already exists (upgrade scenario)
-if [[ -f "$INSTALL_DIR/cabinet-agent" ]]; then
-    echo "Existing installation found. Stopping service..."
-    systemctl stop cabinet-agent 2>/dev/null || true
-fi
-
-echo ""
-echo "NOTE: Copy the cabinet-agent binary for your platform ($RID) to $INSTALL_DIR/"
-echo "      Download from: https://github.com/bogware/cabinet/releases"
-echo ""
-
-# Generate default configuration if not present
-if [[ ! -f "$INSTALL_DIR/appsettings.json" ]]; then
-    echo "Generating default configuration..."
-
-    # Build paths JSON array
-    if [[ -n "$LOG_PATHS" ]]; then
-        PATHS_JSON=$(echo "$LOG_PATHS" | tr ',' '\n' | sed 's/^/      "/;s/$/"/' | paste -sd, -)
-    else
-        PATHS_JSON='"/var/log/syslog", "/var/log/auth.log"'
+# Settings are kept on upgrade, unless a new --config is given
+if [[ -n "$CONFIG_FILE" ]]; then
+    install -m 600 "$CONFIG_FILE" "$INSTALL_DIR/appsettings.json"
+    echo "  Settings from $CONFIG_FILE"
+elif [[ ! -f "$INSTALL_DIR/appsettings.json" ]]; then
+    if [[ -z "$SERVER_URL" || -z "$API_KEY" ]]; then
+        echo "Give --server and --api-key, or --config." >&2
+        exit 1
     fi
-
+    paths_json='"/var/log/syslog", "/var/log/auth.log"'
+    if [[ -n "$LOG_PATHS" ]]; then
+        paths_json=$(echo "$LOG_PATHS" | tr ',' '\n' | sed 's/^ *//;s/ *$//;s/^/"/;s/$/"/' | paste -sd, -)
+    fi
     cat > "$INSTALL_DIR/appsettings.json" <<EOF
 {
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Cabinet.Agent": "Information"
-    }
-  },
   "Agent": {
     "Inputs": [
       {
-        "Paths": [$PATHS_JSON],
-        "Recursive": false,
-        "SourceType": "syslog",
-        "Index": "main",
-        "ExcludePatterns": ["*.gz", "*.zip", "*.bz2"]
+        "Paths": [$paths_json],
+        "SourceType": "$SOURCE_TYPE",
+        "Index": "$INDEX",
+        "ExcludePatterns": ["*.gz", "*.zip", "*.bz2"],
+        "IgnoreOlderThanHours": 24
       }
     ],
     "Output": {
-      "ServerUrl": "${SERVER_URL:-http://localhost:5000}",
-      "ApiKey": "${API_KEY}",
-      "BatchSize": 100,
-      "FlushIntervalSeconds": 5,
-      "MaxRetries": 5,
-      "TimeoutSeconds": 30,
-      "VerifySsl": true,
-      "MaxBufferSize": 10000,
+      "ServerUrl": "$SERVER_URL",
+      "ApiKey": "$API_KEY",
       "SpillDirectory": "$INSTALL_DIR/spool"
     },
     "Registry": {
-      "Path": "$INSTALL_DIR/data/registry.json",
-      "SaveIntervalSeconds": 10
-    },
-    "ScanIntervalSeconds": 10,
-    "Hostname": ""
+      "Path": "$INSTALL_DIR/data/registry.json"
+    }
   }
 }
 EOF
-    # It holds the API key
-    chmod 600 "$INSTALL_DIR/appsettings.json"
-
-    echo "Configuration written to $INSTALL_DIR/appsettings.json"
+    echo "  Settings written to $INSTALL_DIR/appsettings.json"
 fi
 
-# Create .env file for sensitive config
-if [[ ! -f "$INSTALL_DIR/.env" ]]; then
-    cat > "$INSTALL_DIR/.env" <<EOF
-# Cabinet Agent environment variables
-# Override configuration values here (e.g., API key)
-# Agent__Output__ApiKey=your-api-key-here
-EOF
-    chmod 600 "$INSTALL_DIR/.env"
-fi
-
-# Set ownership
+# It holds the API key
+chmod 600 "$INSTALL_DIR/appsettings.json"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-# Install systemd service
-if [[ -d /etc/systemd/system ]]; then
-    echo "Installing systemd service..."
-    cat > /etc/systemd/system/cabinet-agent.service <<SVCEOF
+cat > /etc/systemd/system/cabinet-agent.service <<EOF
 [Unit]
-Description=Cabinet Log Forwarding Agent
+Description=Cabinet log forwarding agent
 Documentation=https://github.com/bogware/cabinet
 After=network-online.target
 Wants=network-online.target
@@ -181,23 +143,25 @@ ExecStart=$INSTALL_DIR/cabinet-agent
 WorkingDirectory=$INSTALL_DIR
 Restart=always
 RestartSec=5
-KillSignal=SIGTERM
 TimeoutStopSec=30
 
 User=$SERVICE_USER
 Group=$SERVICE_USER
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# Logs often live in home folders. Readable, never writable.
+ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=$INSTALL_DIR /var/log
+ReadWritePaths=$INSTALL_DIR
+# Reading logs is light; never take CPU from what's being logged
+Nice=10
+CPUWeight=20
 
 Environment=DOTNET_ENVIRONMENT=Production
-EnvironmentFile=-$INSTALL_DIR/.env
 
 StandardOutput=journal
 StandardError=journal
@@ -205,22 +169,16 @@ SyslogIdentifier=cabinet-agent
 
 [Install]
 WantedBy=multi-user.target
-SVCEOF
+EOF
 
-    systemctl daemon-reload
-    echo "Systemd service installed."
-    echo ""
-    echo "To start:  systemctl start cabinet-agent"
-    echo "To enable: systemctl enable cabinet-agent"
-    echo "To check:  systemctl status cabinet-agent"
-    echo "Logs:      journalctl -u cabinet-agent -f"
+systemctl daemon-reload
+systemctl enable cabinet-agent >/dev/null
+
+if $START; then
+    systemctl restart cabinet-agent
+    sleep 3
+    systemctl --no-pager --lines=0 status cabinet-agent | head -3
 fi
 
 echo ""
-echo "Installation complete!"
-echo ""
-echo "Next steps:"
-echo "  1. Copy the cabinet-agent binary to $INSTALL_DIR/"
-echo "  2. Edit $INSTALL_DIR/appsettings.json (set ServerUrl and ApiKey)"
-echo "  3. Start: systemctl start cabinet-agent"
-echo "  4. Enable on boot: systemctl enable cabinet-agent"
+echo "Done. Follow it with: journalctl -u cabinet-agent -f"

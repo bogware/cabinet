@@ -25,7 +25,11 @@ public sealed class FileMonitorService : BackgroundService
     private readonly LogForwarder _forwarder;
     private readonly ILogger<FileMonitorService> _logger;
     private readonly string _hostname;
+    private readonly string _timeZone;
     private readonly ConcurrentDictionary<string, Harvester> _harvesters = new(FileStateRegistry.PathComparer);
+
+    // Files closed for inactivity, and how they looked then. They're reopened when that changes.
+    private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _closed = new(FileStateRegistry.PathComparer);
     private readonly TimeSpan _pollInterval;
 
     public FileMonitorService(
@@ -42,6 +46,7 @@ public sealed class FileMonitorService : BackgroundService
             ? Environment.MachineName
             : config.Hostname;
         _pollInterval = TimeSpan.FromMilliseconds(config.PollIntervalMilliseconds);
+        _timeZone = string.IsNullOrEmpty(config.TimeZone) ? LocalTimeZoneName() : config.TimeZone;
         _forwarder.BatchDurable += OnBatchDurable;
     }
 
@@ -97,18 +102,44 @@ public sealed class FileMonitorService : BackgroundService
 
     private void DiscoverFiles()
     {
+        var tracked = new HashSet<string>(_registry.GetTrackedPaths(), FileStateRegistry.PathComparer);
         foreach (var input in _config.Inputs)
         {
+            var ignoreBefore = input.IgnoreOlderThanHours > 0
+                ? DateTime.UtcNow.AddHours(-input.IgnoreOlderThanHours)
+                : DateTime.MinValue;
+
             foreach (var pattern in input.Paths)
             {
                 try
                 {
                     foreach (var file in ExpandGlob(pattern, input.Recursive))
                     {
-                        if (!IsExcluded(file, input.ExcludePatterns) && !_harvesters.ContainsKey(file))
+                        if (IsExcluded(file, input.ExcludePatterns) || _harvesters.ContainsKey(file))
                         {
-                            StartHarvester(file, input);
+                            continue;
                         }
+
+                        var info = new FileInfo(file);
+                        if (!info.Exists)
+                        {
+                            continue;
+                        }
+
+                        // Unchanged since it was closed for inactivity
+                        if (_closed.TryGetValue(file, out var closed) && closed.Length == info.Length && closed.Written == info.LastWriteTimeUtc)
+                        {
+                            continue;
+                        }
+
+                        // Old history is skipped, but a file already part read is always finished
+                        if (info.LastWriteTimeUtc < ignoreBefore && !tracked.Contains(file))
+                        {
+                            continue;
+                        }
+
+                        _closed.TryRemove(file, out _);
+                        StartHarvester(file, input);
                     }
                 }
                 catch (Exception ex)
@@ -127,6 +158,7 @@ public sealed class FileMonitorService : BackgroundService
             {
                 _logger.LogInformation("File deleted, no longer tracking: {Path}", path);
                 _registry.Remove(path);
+                _closed.TryRemove(path, out _);
             }
         }
     }
@@ -212,6 +244,8 @@ public sealed class FileMonitorService : BackgroundService
         _registry.SaveNewKeys();
         var reader = new LineReader(stream, state.Offset, _config.MaxLineBytes);
         var lineNumber = state.LinesRead;
+        var lastActivity = DateTime.UtcNow;
+        var lastLength = stream.Length;
 
         while (true)
         {
@@ -265,6 +299,23 @@ public sealed class FileMonitorService : BackgroundService
                 _logger.LogInformation("File replaced by a smaller one, switching to it: {Path}", filePath);
                 await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
                 return true;
+            }
+
+            if (stream.Length != lastLength)
+            {
+                lastLength = stream.Length;
+                lastActivity = DateTime.UtcNow;
+            }
+            else if (input.CloseInactiveSeconds > 0
+                && current.Length == stream.Length
+                && DateTime.UtcNow - lastActivity >= TimeSpan.FromSeconds(input.CloseInactiveSeconds))
+            {
+                // Read to the end and quiet: release it until it changes. What's been read stays
+                // queued for delivery, and the checkpoint follows delivery as always.
+                await FlushMergedAsync(merger, filePath, input, state, cancellationToken);
+                _closed[filePath] = (current.Length, current.LastWriteTimeUtc);
+                _logger.LogInformation("No changes for {Seconds} s, closing until it changes: {Path}", input.CloseInactiveSeconds, filePath);
+                return false;
             }
 
             await Task.Delay(_pollInterval, cancellationToken);
@@ -343,6 +394,7 @@ public sealed class FileMonitorService : BackgroundService
             Timestamp = DateTime.UtcNow,
             Host = _hostname,
             Source = filePath,
+            TimeZone = _timeZone,
             SourceType = input.SourceType,
             Index = input.Index,
             Event = line.Text,
@@ -355,6 +407,20 @@ public sealed class FileMonitorService : BackgroundService
     /// <summary>
     /// The same bytes of the same file always get the same ID, however many times they're sent.
     /// </summary>
+    /// <summary>
+    /// This machine's zone by IANA name where possible, which every platform understands.
+    /// </summary>
+    public static string LocalTimeZoneName()
+    {
+        var local = TimeZoneInfo.Local;
+        if (local.HasIanaId)
+        {
+            return local.Id;
+        }
+
+        return TimeZoneInfo.TryConvertWindowsIdToIanaId(local.Id, out var iana) ? iana : local.Id;
+    }
+
     public static string CreateEventId(string fileKey, long startOffset)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{fileKey}:{startOffset}"));

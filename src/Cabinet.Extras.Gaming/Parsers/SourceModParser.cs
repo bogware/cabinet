@@ -44,7 +44,8 @@ public partial class SourceModParser : GamingLogParser
                     Regex.Replace(match.Groups[1].Value, @"\s+", " ", RegexOptions.None, RegexTimeout),
                     "MM/dd/yyyy - HH:mm:ss",
                     CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    // Local time with no offset, read in the sender's time zone (see LogLineParser)
+                    DateTimeStyles.None,
                     out var timestamp))
             {
                 logEvent.Timestamp = timestamp;
@@ -66,6 +67,15 @@ public partial class SourceModParser : GamingLogParser
         if (line.Contains("[SM]"))
         {
             logEvent.Tags.Add("sourcemod_core");
+        }
+
+        // "[SM] Blaming: dir/plugin.smx" names the plugin behind the exception before it
+        var blaming = Regex.Match(line, @"\[SM\] Blaming: (\S+\.smx)", RegexOptions.None, RegexTimeout);
+        if (blaming.Success)
+        {
+            logEvent.SetField("Plugin", blaming.Groups[1].Value);
+            logEvent.Tags.Add("plugin_error");
+            logEvent.Severity = LogSeverity.Error;
         }
     }
 
@@ -138,6 +148,9 @@ public partial class SourceModParser : GamingLogParser
         }
     }
 
+    private static bool IsSteamId(string value) =>
+        value.StartsWith("STEAM_", StringComparison.Ordinal) || value.StartsWith("[U:", StringComparison.Ordinal);
+
     private void ExtractPlayerActions(string line, LogEvent logEvent)
     {
         // Player pattern: "Name<id><steamid><team>"
@@ -149,7 +162,12 @@ public partial class SourceModParser : GamingLogParser
             var firstMatch = matches[0];
             logEvent.SetField("PlayerName", firstMatch.Groups[1].Value);
             logEvent.SetField("PlayerId", firstMatch.Groups[2].Value);
-            logEvent.SetField("SteamId", firstMatch.Groups[3].Value);
+
+            // The server console and bots have no Steam ID
+            if (IsSteamId(firstMatch.Groups[3].Value))
+            {
+                logEvent.SetField("SteamId", firstMatch.Groups[3].Value);
+            }
             if (firstMatch.Groups[4].Success)
             {
                 logEvent.SetField("Team", firstMatch.Groups[4].Value);
@@ -160,7 +178,10 @@ public partial class SourceModParser : GamingLogParser
             {
                 var secondMatch = matches[1];
                 logEvent.SetField("TargetName", secondMatch.Groups[1].Value);
-                logEvent.SetField("TargetSteamId", secondMatch.Groups[3].Value);
+                if (IsSteamId(secondMatch.Groups[3].Value))
+                {
+                    logEvent.SetField("TargetSteamId", secondMatch.Groups[3].Value);
+                }
             }
         }
 

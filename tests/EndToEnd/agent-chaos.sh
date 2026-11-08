@@ -12,6 +12,7 @@ cd "$(dirname "$0")/../.."
 runs="${1:-1}"
 project=cabinet-chaos
 export CABINET_API_KEY=chaos-test-key
+export CABINET_AGENT_API_KEY=chaos-test-agent-key
 export CABINET_DB_PASSWORD=chaos-test-db
 export CABINET_REDIS_PASSWORD=chaos-test-redis
 export CABINET_GRAFANA_PASSWORD=chaos-test-grafana

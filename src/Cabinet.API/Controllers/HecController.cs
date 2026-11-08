@@ -283,7 +283,7 @@ public class HecController : ControllerBase
             : hecEvent.Event?.ToString() ?? string.Empty;
 
         // A timestamp in the line says when it happened. The sender's is when it was read.
-        var logEvent = await _lineParser.ParseAsync(rawLine, hecEvent.SourceType, sentTime, cancellationToken);
+        var logEvent = await _lineParser.ParseAsync(rawLine, hecEvent.SourceType, sentTime, LogLineParser.FindTimeZone(hecEvent.TimeZone), cancellationToken);
 
         if (IsValidEventId(hecEvent.Id))
         {
@@ -335,6 +335,13 @@ public class HecEvent
 
     public string? Index { get; set; }
     public Dictionary<string, object>? Fields { get; set; }
+
+    /// <summary>
+    /// The sender's time zone, IANA or Windows name, for lines whose time has no offset. A
+    /// Cabinet extension; the agent sends it.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("tz")]
+    public string? TimeZone { get; set; }
 }
 
 /// <summary>

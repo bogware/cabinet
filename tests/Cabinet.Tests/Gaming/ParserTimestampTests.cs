@@ -1,39 +1,80 @@
 using Cabinet.Extras.Gaming;
 using Cabinet.Extras.Gaming.Parsers;
+using Cabinet.Parsers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Cabinet.Tests.Gaming;
 
 /// <summary>
-/// Log lines without an offset are read as UTC, so the same line produces the
-/// same instant on every host. CI runs these under a non-UTC time zone.
+/// Game servers write local time with no offset. The sender's time zone places it; without one,
+/// it's read as UTC, so the same line gives the same instant on every host. CI runs these under
+/// a non-UTC time zone.
 /// </summary>
 public class ParserTimestampTests
 {
     private static readonly DateTime Expected = new(2024, 12, 7, 10, 23, 45, DateTimeKind.Utc);
 
-    [Fact]
-    public async Task L4D2Parser_TimestampWithoutOffset_IsReadAsUtc()
+    private static readonly LogLineParser LineParser = new ServiceCollection()
+        .AddLogging()
+        .AddCabinetParsers(s => s.AddGamingParsers())
+        .BuildServiceProvider()
+        .GetRequiredService<LogLineParser>();
+
+    [Theory]
+    [InlineData(GamingSourceTypes.L4D2, "L 12/07/2024 - 10:23:45: World triggered \"Round_Start\"")]
+    [InlineData(GamingSourceTypes.SourceMod, "L 12/07/2024 - 10:23:45: [SM] Test message")]
+    public async Task WithoutTheSendersZone_TimeIsReadAsUtc(string sourceType, string line)
     {
-        var parser = new L4D2Parser(NullLogger<L4D2Parser>.Instance);
+        var result = await LineParser.ParseAsync(line, sourceType);
 
-        var result = await parser.ParseAsync("L 12/07/2024 - 10:23:45: Test message");
-
-        result!.Timestamp.Should().Be(Expected);
+        result.Timestamp.Should().Be(Expected);
         result.Timestamp.Kind.Should().Be(DateTimeKind.Utc);
     }
 
-    [Fact]
-    public async Task SourceModParser_TimestampWithoutOffset_IsReadAsUtc()
+    [Theory]
+    [InlineData(GamingSourceTypes.L4D2, "L 11/08/2026 - 06:00:12: World triggered \"Round_Start\"", 12)]
+    [InlineData(GamingSourceTypes.SourceMod, "L 11/08/2026 - 06:00:12: [SM] Test message", 12)]
+    [InlineData(GamingSourceTypes.L4D2, "L 07/04/2026 - 06:00:12: World triggered \"Round_Start\"", 11)]
+    public async Task WithTheSendersZone_TimeIsPlacedInIt(string sourceType, string line, int utcHour)
     {
-        var parser = new SourceModParser(NullLogger<SourceModParser>.Instance);
+        // Central time: six hours behind UTC in winter, five in summer
+        var chicago = LogLineParser.FindTimeZone("America/Chicago");
 
-        var result = await parser.ParseAsync("L 12/07/2024 - 10:23:45: [SM] Test message");
+        var result = await LineParser.ParseAsync(line, sourceType, timeZone: chicago);
 
-        result!.Timestamp.Should().Be(Expected);
         result.Timestamp.Kind.Should().Be(DateTimeKind.Utc);
+        result.Timestamp.Hour.Should().Be(utcHour);
+        result.Timestamp.Minute.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("America/Chicago")]
+    [InlineData("Central Standard Time")]
+    public void ZoneNames_WorkInEitherForm(string name)
+    {
+        LogLineParser.FindTimeZone(name).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Not/AZone")]
+    public void UnknownZone_IsNull(string? name)
+    {
+        LogLineParser.FindTimeZone(name).Should().BeNull();
+    }
+
+    [Fact]
+    public void TimeSkippedWhenClocksGoForward_StillConverts()
+    {
+        var chicago = LogLineParser.FindTimeZone("America/Chicago")!;
+
+        var act = () => LogLineParser.ToUtc(new DateTime(2026, 3, 8, 2, 30, 0, DateTimeKind.Unspecified), chicago);
+
+        act.Should().NotThrow();
     }
 
     [Fact]
