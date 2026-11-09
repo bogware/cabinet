@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [2.3.0] - 2026-11-09
+## [2.3.1] - 2026-11-09
+
+This release includes everything planned for 2.3.0, which was never published.
+
+### Fixed
+
+- Several instances starting together with encryption on and no key file yet could each create their own key on Linux, leaving events that the other instances couldn't decrypt. Exactly one instance now creates the key, and the others use it.
 
 ### Added
 

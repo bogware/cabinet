@@ -20,6 +20,10 @@ public sealed class EncryptionService : IDisposable
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int KeySize = 32; // 256 bits
+
+    // How long a key file another instance has just created may stay locked or short while it's written
+    private static readonly TimeSpan KeyFileSettleTime = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan KeyFileRetryDelay = TimeSpan.FromMilliseconds(20);
     private const string EncryptedPrefix = "enc:";
 
     public EncryptionService(EncryptionConfiguration config, ILogger<EncryptionService> logger)
@@ -231,44 +235,35 @@ public sealed class EncryptionService : IDisposable
 
         if (File.Exists(keyPath))
         {
-            var keyBytes = await File.ReadAllBytesAsync(keyPath, cancellationToken);
-            if (keyBytes.Length != KeySize)
-                throw new InvalidOperationException($"Key file '{keyPath}' has invalid size ({keyBytes.Length} bytes, expected {KeySize})");
-
+            var existing = await ReadKeyFileAsync(keyPath, cancellationToken);
             _logger.LogInformation("Loaded encryption key from {KeyPath}", keyPath);
-            return keyBytes;
+            return existing;
         }
 
-        // Generate a new key — write atomically (temp + rename) to prevent corruption on crash
         var newKey = new byte[KeySize];
         RandomNumberGenerator.Fill(newKey);
-        var tempPath = $"{keyPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await File.WriteAllBytesAsync(tempPath, newKey, cancellationToken);
-            try
+            // Creating with CreateNew is atomic on every platform: when instances start together,
+            // exactly one creates the file and the others read its key. A move that refuses to
+            // overwrite isn't atomic on Linux, so two instances could each keep their own key.
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+            if (!OperatingSystem.IsWindows())
             {
-                // Not overwriting: if another instance got there first, its key is the one in use
-                File.Move(tempPath, keyPath, overwrite: false);
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             }
-            catch (IOException) when (File.Exists(keyPath))
-            {
-                File.Delete(tempPath);
-                return await File.ReadAllBytesAsync(keyPath, cancellationToken);
-            }
+
+            await using var stream = new FileStream(keyPath, options);
+            await stream.WriteAsync(newKey, cancellationToken);
+            stream.Flush(flushToDisk: true);
         }
-        catch
+        catch (IOException) when (File.Exists(keyPath))
         {
-            try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
-            throw;
+            _logger.LogInformation("Another instance created the encryption key at {KeyPath}; using it", keyPath);
+            return await ReadKeyFileAsync(keyPath, cancellationToken);
         }
 
-        // Set restrictive file permissions (owner-only read/write)
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        else
+        if (OperatingSystem.IsWindows())
         {
             _logger.LogWarning(
                 "Running on Windows: encryption key file at {KeyPath} may have overly permissive ACLs. " +
@@ -277,6 +272,39 @@ public sealed class EncryptionService : IDisposable
 
         _logger.LogWarning("Generated new encryption key at {KeyPath}. Back up this file securely!", keyPath);
         return newKey;
+    }
+
+    // Another instance may be part way through writing the key it just created, so a locked or
+    // short file is retried for a moment before it counts as invalid.
+    private static async Task<byte[]> ReadKeyFileAsync(string keyPath, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + KeyFileSettleTime;
+        while (true)
+        {
+            byte[]? keyBytes = null;
+            IOException? readError = null;
+            try
+            {
+                keyBytes = await File.ReadAllBytesAsync(keyPath, cancellationToken);
+                if (keyBytes.Length == KeySize)
+                {
+                    return keyBytes;
+                }
+            }
+            catch (IOException exception)
+            {
+                readError = exception;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw readError is null
+                    ? new InvalidOperationException($"Key file '{keyPath}' has invalid size ({keyBytes!.Length} bytes, expected {KeySize})")
+                    : new InvalidOperationException($"Key file '{keyPath}' couldn't be read: {readError.Message}", readError);
+            }
+
+            await Task.Delay(KeyFileRetryDelay, cancellationToken);
+        }
     }
 
     private byte[] LoadEnvironmentKey()
