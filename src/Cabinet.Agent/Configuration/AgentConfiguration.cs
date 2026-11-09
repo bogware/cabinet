@@ -21,6 +21,11 @@ public sealed class AgentConfiguration
     public RegistryConfiguration Registry { get; set; } = new();
 
     /// <summary>
+    /// Keeping the agent at the server's version.
+    /// </summary>
+    public Cabinet.Agent.Updating.UpdateConfiguration Update { get; set; } = new();
+
+    /// <summary>
     /// How often to scan for new files matching input patterns (seconds).
     /// </summary>
     public int ScanIntervalSeconds { get; set; } = 10;
@@ -94,6 +99,13 @@ public sealed class InputConfiguration
     /// the checkpoint if it changes again. 0 follows files until they're removed.
     /// </summary>
     public int CloseInactiveSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Delete a file once the server has stored all of it and it hasn't been written to for this
+    /// many days, to free space where logs are written. Only files this agent has read are
+    /// deleted. 0, the default, never deletes. The service needs write access to the folder.
+    /// </summary>
+    public int DeleteDeliveredAfterDays { get; set; }
 }
 
 /// <summary>

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-08
+
+### Added
+
+- Updating from the dashboard (Settings > Updates), the CLI (`cabinet update`, `cabinet update apply`) and the API (`/api/v1/updates`). The server downloads the release, checks its SHA-256, and swaps itself in through a separate updater that keeps settings, backs up the old version and restores it if the new one doesn't start. Agents get the matching build from their server and restart on it.
+- `install-server.ps1 -UpdateToken`, for a private repository's releases.
+- Agent inputs take `DeleteDeliveredAfterDays`, which deletes files the server has stored in full once they've been quiet that long. `install-agent.sh --writable` lets the service delete there.
+
 ### Fixed
 
 - `install-server.ps1 -Https` failed on an existing install with "Cannot convert value ... to type SwitchParameter": a variable shared the `-Https` switch's name, which PowerShell doesn't tell apart by case.

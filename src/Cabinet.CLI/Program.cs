@@ -32,6 +32,7 @@ class Program
         // Add commands
         rootCommand.AddCommand(new HelpCommand());
         rootCommand.AddCommand(new VersionCommand());
+        rootCommand.AddCommand(new UpdateCommand());
         rootCommand.AddCommand(new PeekCommand());
         rootCommand.AddCommand(new TailCommand());
         rootCommand.AddCommand(new IngestCommand());

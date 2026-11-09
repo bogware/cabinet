@@ -94,6 +94,13 @@ public static class Program
             return new FileMonitorService(agentConfig, registry, forwarder, logger);
         });
 
+        // Keeps the agent at the server's version
+        builder.Services.AddHostedService(sp => new Cabinet.Agent.Updating.AgentUpdater(
+            sp.GetRequiredService<HttpClient>(),
+            agentConfig,
+            sp.GetRequiredService<IHostApplicationLifetime>(),
+            sp.GetRequiredService<ILogger<Cabinet.Agent.Updating.AgentUpdater>>()));
+
         // Stopping delivers what's queued, so allow for that plus some margin
         builder.Services.Configure<HostOptions>(options =>
             options.ShutdownTimeout = TimeSpan.FromSeconds(agentConfig.Output.ShutdownFlushSeconds + 15));

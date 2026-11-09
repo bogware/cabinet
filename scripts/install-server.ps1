@@ -26,6 +26,10 @@
     on other networks. Plain HTTP on -Port then answers only this machine, for the dashboard.
     Prints the certificate's fingerprint, which each agent pins (Output:CertificateSha256).
 
+.PARAMETER UpdateToken
+    A GitHub token that can read the repository's releases, for updating from the dashboard,
+    CLI or API while the repository is private. Saved in the settings; works on an existing install.
+
 .PARAMETER Gaming
     Turn on the game log parsers (Left 4 Dead 2, SourceMod, SteamCMD).
 
@@ -47,6 +51,7 @@ param(
     [string[]]$IngestKeys = @(),
     [switch]$Gaming,
     [switch]$Https,
+    [string]$UpdateToken = "",
     [int]$HttpsPort = 8443,
     [int]$RetentionDays = 90,
     [switch]$IncludeAgent
@@ -154,6 +159,15 @@ else {
     Write-Host "  Created $settingsPath"
     Write-Host "  Keys written to $keysPath (administrators only)"
 }
+# --- Update token -----------------------------------------------------
+if ($UpdateToken) {
+    $withToken = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    $withToken | Add-Member -NotePropertyName Updates -NotePropertyValue @{ Token = $UpdateToken } -Force
+    $withToken | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+    Protect-File $settingsPath
+    Write-Host "  Saved the update token"
+}
+
 # --- HTTPS ------------------------------------------------------------
 $fingerprint = $null
 $pfxPath = "$DataDir\https.pfx"

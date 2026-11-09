@@ -138,6 +138,82 @@ public sealed class FileMonitorDeliveryTests : IAsyncLifetime
         _collector.Stored.Should().HaveCount(41).And.OnlyHaveUniqueItems().And.Contain("later");
     }
 
+    private static Task WaitUntilGone(string path) =>
+        FakeCollector.WaitUntilAsync(() => !File.Exists(path), $"{Path.GetFileName(path)} is deleted");
+
+    [Fact]
+    public async Task DeliveredQuietFile_IsDeleted()
+    {
+        var old = Path.Combine(LogDirectory, "old.log");
+        await Append(old, "one", "two");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-3));
+
+        await StartAgent(input =>
+        {
+            input.CloseInactiveSeconds = 1;
+            input.DeleteDeliveredAfterDays = 2;
+        });
+        await WaitForStored(2);
+        await WaitUntilGone(old);
+
+        StoredShouldBe("one", "two");
+    }
+
+    [Fact]
+    public async Task FileEndingInACutOffLine_IsDeletedOnceTheRestIsStored()
+    {
+        var old = Path.Combine(LogDirectory, "cut.log");
+        await File.AppendAllTextAsync(old, "whole line\nhalf a li");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-3));
+
+        await StartAgent(input =>
+        {
+            input.CloseInactiveSeconds = 1;
+            input.DeleteDeliveredAfterDays = 2;
+        });
+        await WaitForStored(1);
+        await WaitUntilGone(old);
+
+        StoredShouldBe("whole line");
+    }
+
+    [Fact]
+    public async Task RecentFiles_SkippedFiles_AndDisabledInputs_AreKept()
+    {
+        var recent = Path.Combine(LogDirectory, "recent.log");
+        await Append(recent, "recent");
+        var skipped = Path.Combine(LogDirectory, "skipped.log");
+        await Append(skipped, "never read");
+        File.SetLastWriteTimeUtc(skipped, DateTime.UtcNow.AddDays(-30));
+
+        await StartAgent(input =>
+        {
+            input.CloseInactiveSeconds = 1;
+            input.DeleteDeliveredAfterDays = 2;
+            input.IgnoreOlderThanHours = 24 * 7;
+        });
+        await WaitForStored(1);
+        await Task.Delay(TimeSpan.FromSeconds(4));
+
+        File.Exists(recent).Should().BeTrue("it was written today");
+        File.Exists(skipped).Should().BeTrue("the agent never read it, so it isn't stored");
+        StoredShouldBe("recent");
+    }
+
+    [Fact]
+    public async Task WithoutTheSetting_NothingIsDeleted()
+    {
+        var old = Path.Combine(LogDirectory, "old.log");
+        await Append(old, "one");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-30));
+
+        await StartAgent(input => input.CloseInactiveSeconds = 1);
+        await WaitForStored(1);
+        await Task.Delay(TimeSpan.FromSeconds(4));
+
+        File.Exists(old).Should().BeTrue();
+    }
+
     private static async Task Append(string path, params string[] lines)
     {
         await using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);

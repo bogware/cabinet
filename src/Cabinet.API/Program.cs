@@ -465,6 +465,15 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
     services.AddHostedService<Cabinet.API.Services.ClusterHeartbeatService>();
 
+    // Updates from GitHub releases: checked on a schedule, applied only when asked
+    var updateOptions = configuration.GetSection("Updates").Get<Cabinet.API.Services.Updates.UpdateOptions>() ?? new();
+    services.AddSingleton(updateOptions);
+    services.AddSingleton<Cabinet.API.Services.Updates.IReleaseSource>(_ =>
+        new Cabinet.API.Services.Updates.GitHubReleaseSource(new HttpClient { Timeout = TimeSpan.FromMinutes(10) }, updateOptions));
+    services.AddSingleton<Cabinet.API.Services.Updates.UpdateApplier>();
+    services.AddSingleton<Cabinet.API.Services.Updates.UpdateService>();
+    services.AddHostedService<Cabinet.API.Services.Updates.UpdateCheckService>();
+
     // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
     services.AddCabinetMetadataStorage(configuration);
 

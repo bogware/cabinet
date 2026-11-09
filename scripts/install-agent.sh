@@ -9,6 +9,7 @@
 #
 # --config installs a complete appsettings.json instead of generating one, for several inputs.
 # --groups adds the service user to groups, to read logs in other users' folders.
+# --writable lists folders the service may change, for inputs with DeleteDeliveredAfterDays.
 # Running it again upgrades the binary and keeps the settings and checkpoints.
 
 set -euo pipefail
@@ -23,12 +24,13 @@ INDEX="main"
 CONFIG_FILE=""
 BINARY=""
 GROUPS_CSV=""
+WRITABLE_CSV=""
 START=true
 
 usage() {
     sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
     echo "Options: --server URL --api-key KEY --paths \"a,b\" --source-type T --index I"
-    echo "         --config FILE --binary PATH --groups g1,g2 --install-dir DIR --no-start"
+    echo "         --config FILE --binary PATH --groups g1,g2 --writable d1,d2 --install-dir DIR --no-start"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
         --config) CONFIG_FILE="$2"; shift 2 ;;
         --binary) BINARY="$2"; shift 2 ;;
         --groups) GROUPS_CSV="$2"; shift 2 ;;
+        --writable) WRITABLE_CSV="$2"; shift 2 ;;
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --no-start) START=false; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -81,6 +84,15 @@ fi
 if [[ -n "$GROUPS_CSV" ]]; then
     usermod -a -G "$GROUPS_CSV" "$SERVICE_USER"
     echo "  Groups:  $GROUPS_CSV"
+fi
+
+# Folders the agent deletes delivered logs from: writable through the sandbox. Kept from the
+# previous install unless given again.
+writable_paths=""
+if [[ -n "$WRITABLE_CSV" ]]; then
+    writable_paths=$(echo "$WRITABLE_CSV" | tr ',' ' ')
+elif [[ -f /etc/systemd/system/cabinet-agent.service ]]; then
+    writable_paths=$(sed -n 's/^# Writable: //p' /etc/systemd/system/cabinet-agent.service)
 fi
 
 systemctl stop cabinet-agent 2>/dev/null || true
@@ -156,7 +168,8 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=$INSTALL_DIR
+ReadWritePaths=$INSTALL_DIR $writable_paths
+# Writable: $writable_paths
 # Reading logs is light; never take CPU from what's being logged
 Nice=10
 CPUWeight=20

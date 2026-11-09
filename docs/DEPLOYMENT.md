@@ -231,6 +231,8 @@ Delivery is at-least-once, and the server stores each event once.
 - **Paths.** `*`, `?` and `**` work in any path segment. `Recursive` also matches the last segment in subdirectories. New files are found every `ScanIntervalSeconds` (default 10).
 - **Old files.** `IgnoreOlderThanHours` on an input skips files last written longer ago than that, for folders with years of history. A file the agent was already reading is always finished, and an ignored file is read in full if it's written to again.
 - **Quiet files.** A file read to the end that hasn't changed for `CloseInactiveSeconds` (default 300) is closed, and reopened from its checkpoint when it changes. Programs that start a new file per session, such as game servers, don't leave thousands open.
+- **Deleting delivered files.** `DeleteDeliveredAfterDays` on an input deletes a file once the server has stored all of it and it hasn't been written to for that many days. Off by default. Only files the agent has read are deleted, so skipped history stays. A final line the writer never finished doesn't stop deletion. The service needs write access: `install-agent.sh --writable /path/to/logs`, and the folder's own permissions must allow the agent's user to delete.
+- **Updates.** The agent asks its server every `Agent:Update:CheckIntervalMinutes` (default 60) for the agent build matching the server's version, checks its SHA-256, swaps it in, and restarts through systemd. `Agent:Update:Enabled=false` turns this off.
 - **Pinned certificates.** `Output:CertificateSha256` makes the agent accept the server's certificate only if its SHA-256 fingerprint matches, whoever issued it and whatever name it holds. A malformed fingerprint stops the agent at startup.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
@@ -240,6 +242,16 @@ Delivery is at-least-once, and the server stores each event once.
 - A file deleted before it's fully read loses its unread lines.
 - If the registry file is lost, files are read again from the start under new event IDs, which creates duplicates.
 - A replacement file with the same first line, and the same text at the checkpoint offset, can't be told from the original.
+
+## Updating
+
+Updates come from the GitHub releases. The server looks for a new one every `Updates:CheckIntervalHours` (default 6) and never installs one by itself: start it from **Settings > Updates** on the dashboard, `cabinet update apply`, or `POST /api/v1/updates/apply`, which need the `UserManagement` capability. `cabinet update` and `GET /api/v1/updates` show the running and newest versions and each agent's version.
+
+Installing downloads the release's archive for this platform, checks it against the release's SHA-256, and starts a separate updater, which stops the service, backs up the program to `backup\api`, copies the new one in, and starts it again. Settings (`appsettings.Production.json`) and logs are never replaced. If the new version doesn't answer `/health/ready` within 90 seconds, the backup is restored. Progress goes to `updates\update.log` beside the program folder.
+
+While the repository is private, the server needs a GitHub token that can read it: a fine-grained token limited to this repository with read-only Contents access. Give it to the Windows installer once with `-UpdateToken`, or set `Updates:Token` or `CABINET_UPDATE_TOKEN`. Agents never need it: they get their builds from the server.
+
+A server can update itself when it runs as a Windows service, or as a systemd service running as root. In Docker, pull the new image instead.
 
 ## Kubernetes
 

@@ -1226,6 +1226,53 @@ function loadSettings() {
     document.getElementById('settingsTsFormat').value = localStorage.getItem('cabinet_ts_format') || 'local';
     loadRetentionPolicies();
     loadRoles();
+    loadUpdates();
+}
+
+/* ===== Updates ===== */
+function renderUpdates(s) {
+    const el = document.getElementById('updateStatus');
+    const row = (label, value) => `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px"><span style="color:var(--text-secondary)">${esc(label)}</span><span>${esc(value)}</span></div>`;
+    let html = row('Running', s.current) + row('Newest release', s.latest || 'not checked yet');
+    if (s.available) html += `<div style="margin:6px 0;font-size:12px;color:var(--accent)">Version ${esc(s.latest)} is available.</div>`;
+    if (s.state && s.state !== 'Idle') html += row('State', `${s.state}${s.message ? ': ' + s.message : ''}`);
+    if (s.checkError) html += `<div style="font-size:12px;color:var(--error)">Last check failed: ${esc(s.checkError)}</div>`;
+    if (!s.canApply && s.cannotApplyReason) html += `<div style="font-size:12px;color:var(--text-secondary)">${esc(s.cannotApplyReason)}</div>`;
+    if (s.agents && s.agents.length) {
+        html += '<div style="margin-top:8px;font-size:12px;font-weight:500">Agents</div>';
+        s.agents.forEach(a => {
+            const behind = s.current && a.version !== s.current;
+            html += row(`${a.host} (${a.platform})`, `${a.version}${behind ? ' (updating)' : ''}`);
+        });
+    }
+    el.innerHTML = html;
+    document.getElementById('applyUpdateButton').disabled = !(s.available && s.canApply && s.state !== 'Applying');
+}
+
+async function loadUpdates() {
+    try { renderUpdates(await api('GET', '/api/v1/updates')); }
+    catch (e) { document.getElementById('updateStatus').innerHTML = `<div style="font-size:12px;color:var(--text-secondary)">${esc(e.message)}</div>`; }
+}
+
+async function checkForUpdates() {
+    try { renderUpdates(await api('POST', '/api/v1/updates/check')); toast('Checked for updates', 'success'); }
+    catch (e) { toast(e.message, 'error'); }
+}
+
+async function applyUpdate() {
+    if (!confirm('Install the newest release now? Cabinet restarts on it, and goes back to this version if it does not start.')) return;
+    const button = document.getElementById('applyUpdateButton');
+    button.disabled = true;
+    try {
+        renderUpdates(await api('POST', '/api/v1/updates/apply'));
+        toast('Updating. Cabinet will be back in a minute.', 'success');
+        setTimeout(waitForRestart, 15000);
+    } catch (e) { toast(e.message, 'error'); button.disabled = false; }
+}
+
+async function waitForRestart(tries = 0) {
+    try { renderUpdates(await api('GET', '/api/v1/updates')); toast('Cabinet is back', 'success'); }
+    catch (e) { if (tries < 20) setTimeout(() => waitForRestart(tries + 1), 5000); }
 }
 
 function saveApiSettings() {

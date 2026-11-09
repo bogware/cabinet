@@ -28,6 +28,9 @@ public sealed class FileMonitorService : BackgroundService
     private readonly string _timeZone;
     private readonly ConcurrentDictionary<string, Harvester> _harvesters = new(FileStateRegistry.PathComparer);
 
+    // Files that couldn't be deleted, so the warning isn't repeated every scan
+    private readonly ConcurrentDictionary<string, byte> _undeletable = new(FileStateRegistry.PathComparer);
+
     // Files closed for inactivity, and how they looked then. They're reopened when that changes.
     private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _closed = new(FileStateRegistry.PathComparer);
     private readonly TimeSpan _pollInterval;
@@ -69,6 +72,7 @@ public sealed class FileMonitorService : BackgroundService
             {
                 DiscoverFiles();
                 CleanupDeletedFiles();
+                DeleteDeliveredFiles();
             }
         }
         catch (OperationCanceledException)
@@ -160,6 +164,110 @@ public sealed class FileMonitorService : BackgroundService
                 _registry.Remove(path);
                 _closed.TryRemove(path, out _);
             }
+        }
+    }
+
+    /// <summary>
+    /// Deletes files the server has stored completely and that have been quiet for the input's
+    /// <see cref="InputConfiguration.DeleteDeliveredAfterDays"/>. The checkpoint only moves once
+    /// the server has accepted events, so a file at its end has nothing left to send.
+    /// </summary>
+    private void DeleteDeliveredFiles()
+    {
+        foreach (var input in _config.Inputs.Where(input => input.DeleteDeliveredAfterDays > 0))
+        {
+            var quietSince = DateTime.UtcNow.AddDays(-input.DeleteDeliveredAfterDays);
+            foreach (var pattern in input.Paths)
+            {
+                IReadOnlyList<string> files;
+                try
+                {
+                    files = ExpandGlob(pattern, input.Recursive);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Couldn't list {Pattern} for deletion", pattern);
+                    continue;
+                }
+
+                foreach (var file in files)
+                {
+                    if (_harvesters.ContainsKey(file) || _undeletable.ContainsKey(file) || IsExcluded(file, input.ExcludePatterns))
+                    {
+                        continue;
+                    }
+
+                    TryDeleteDelivered(file, quietSince);
+                }
+            }
+        }
+    }
+
+    private void TryDeleteDelivered(string file, DateTime quietSince)
+    {
+        var info = new FileInfo(file);
+        if (!info.Exists || info.LastWriteTimeUtc > quietSince)
+        {
+            return;
+        }
+
+        // Only files this agent has read, still holding the contents it read
+        var state = _registry.GetState(file);
+        if (state == null || state.Displaced || FileStateRegistry.ComputeFingerprint(file) != state.Fingerprint)
+        {
+            return;
+        }
+
+        var remaining = info.Length - state.Offset;
+        if (remaining > 0 && !IsUnfinishedLine(file, state.Offset, remaining))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(file);
+            _registry.Remove(file);
+            _closed.TryRemove(file, out _);
+            if (remaining > 0)
+            {
+                _logger.LogInformation("Deleted {Path}, stored in full but for {Bytes} bytes of a final line that was never finished", file, remaining);
+            }
+            else
+            {
+                _logger.LogInformation("Deleted {Path}, stored in full", file);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _undeletable[file] = 0;
+            _logger.LogWarning("Can't delete {Path}, which is stored in full: {Message}. The agent's service needs write access to its folder.", file, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Whether what's left after the checkpoint is a single line that never got its line ending,
+    /// such as one cut off when the writer stopped. It can never be sent, and the file is quiet.
+    /// </summary>
+    private bool IsUnfinishedLine(string file, long offset, long remaining)
+    {
+        if (remaining > _config.MaxLineBytes)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Position = offset;
+            var buffer = new byte[remaining];
+            var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+            return Array.IndexOf(buffer, (byte)'\n', 0, read) < 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(ex, "Couldn't check the end of {Path}", file);
+            return false;
         }
     }
 
