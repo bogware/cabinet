@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-09
+
+### Added
+
+- Settings, Storage shows where your data is: the database file's full path, or the PostgreSQL host and database, with its size, event count and time span.
+- Move storage from the dashboard, the API (`/api/v1/storage`) or the Windows installer, with progress you can watch and cancel:
+  - to another file or drive, copying the SQLite database whole;
+  - to PostgreSQL, creating the database if asked, copying events, dashboards, lookups, macros, saved and scheduled searches, keys and history while Cabinet keeps running;
+  - or to a new, empty database.
+  Ingest pauses for a few seconds at the switch, answering 503 with `Retry-After`, and agents resend. Counts are checked at both ends before switching, and the old database is never changed.
+- The Windows installer installs a local PostgreSQL (17, signature checked, answering only this machine) and uses it by default for new installs; `-Storage postgresql` moves an existing install to it.
+
+### Changed
+
+- New Windows installs use PostgreSQL unless `-Storage sqlite` is given. Existing installs keep their storage.
+
+### Security
+
+- The settings file the dashboard writes, which can hold database passwords and the update token, is now readable only by administrators and the service account. It used to inherit `Program Files` permissions, readable by every user on the machine.
+
 ## [2.2.0] - 2026-11-09
 
 This release includes everything planned for 2.1.0, which was never published.

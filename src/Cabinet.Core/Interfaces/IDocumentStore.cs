@@ -21,6 +21,15 @@ public interface IDocumentStore
 
     /// <summary>Reads every document in a collection.</summary>
     Task<IReadOnlyList<T>> ListAsync<T>(string collection, CancellationToken cancellationToken = default);
+
+    /// <summary>Every collection that holds a document. For copying a store whole.</summary>
+    Task<IReadOnlyList<string>> ListCollectionsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>A collection's documents as stored: ID and JSON. For copying a store whole.</summary>
+    Task<IReadOnlyList<KeyValuePair<string, string>>> ExportAsync(string collection, CancellationToken cancellationToken = default);
+
+    /// <summary>Writes a document as stored, replacing one with its ID. For copying a store whole.</summary>
+    Task ImportAsync(string collection, string id, string json, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

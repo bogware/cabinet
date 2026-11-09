@@ -141,6 +141,12 @@ For agents on other networks, add `-Https`. The installer creates a self-signed 
 .\install-server.ps1 -Gaming -IngestKeys game-dev,game-prod -Https -AllowFrom 203.0.113.10,203.0.113.20
 ```
 
+Events go in PostgreSQL by default. With no `-ConnectionString`, the installer downloads PostgreSQL 17 from EnterpriseDB, checks the installer's signature, and installs it answering only this machine (port 5432, or the next free one; `-PostgresPort` to choose), with its data in `C:\ProgramData\Cabinet\postgresql\` and a `cabinet` database and user. The credentials are in `C:\ProgramData\Cabinet\postgres.txt`, readable only by administrators. `-ConnectionString` uses a PostgreSQL you already have instead, and `-Storage sqlite` keeps everything in one file, `C:\ProgramData\Cabinet\db\cabinet.db`.
+
+Running the installer on an existing install keeps its storage. Give `-Storage` to move it: `.\install-server.ps1 -Storage postgresql` installs PostgreSQL if needed, then copies every event, setting, rule, key and history entry into it while Cabinet keeps running, pauses ingest for a few seconds to switch, and restarts on it. Agents resend what arrived during the pause. The old database is left as it was.
+
+The same is in the dashboard under **Settings, Storage**: where the database is (the file's full path, or the PostgreSQL host and database), its size and the span of events, and moving to another file or drive, switching to PostgreSQL (creating the database if needed), or starting a new, empty database. Moves are checked by counting the events at both ends before switching, and a failed or cancelled move leaves Cabinet on its current database.
+
 Behind a home router, forward TCP 8443 to this machine, and use your public address in the agents. If your ISP changes it, agents keep their events on disk and deliver them once their `ServerUrl` is updated.
 
 Run it again from a newer release to upgrade; settings and keys are kept. To change settings, edit the file in `C:\ProgramData\Cabinet\` and run the installer again. Logs are in `C:\Program Files\Cabinet\api\logs\`.

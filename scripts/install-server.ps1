@@ -14,6 +14,19 @@
 .PARAMETER Port
     HTTP port (default 8080).
 
+.PARAMETER Storage
+    Where events are kept: postgresql (the default) or sqlite. With postgresql and no
+    -ConnectionString, PostgreSQL is installed on this machine, answering only this machine, with
+    a cabinet database and user; its credentials go in C:\ProgramData\Cabinet\postgres.txt.
+    Given on an existing install, Cabinet moves there: everything is copied, then it restarts on
+    it. Without -Storage, an existing install keeps its storage.
+
+.PARAMETER ConnectionString
+    An existing PostgreSQL to use instead of installing one: "Host=...;Database=...;Username=...;Password=...".
+
+.PARAMETER PostgresPort
+    Port for a PostgreSQL installed here (default 5432; the next free one if that's taken).
+
 .PARAMETER AllowFrom
     Addresses or ranges allowed through the firewall, such as your game servers' IPs or a
     Tailscale range (100.64.0.0/10). Without it, only this machine can connect.
@@ -45,7 +58,7 @@ param(
     [string]$DataDir = "$env:ProgramData\Cabinet",
     [int]$Port = 8080,
     [ValidateSet("sqlite", "postgresql")]
-    [string]$Storage = "sqlite",
+    [string]$Storage = "postgresql",
     [string]$ConnectionString = "",
     [string[]]$AllowFrom = @(),
     [string[]]$IngestKeys = @(),
@@ -54,6 +67,7 @@ param(
     [string]$UpdateToken = "",
     [int]$HttpsPort = 8443,
     [int]$RetentionDays = 90,
+    [int]$PostgresPort = 5432,
     [switch]$IncludeAgent
 )
 
@@ -74,6 +88,95 @@ function Protect-File([string]$Path) {
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "Allow")))
     }
     Set-Acl -Path $Path -AclObject $acl
+}
+
+# PostgreSQL for Windows from EnterpriseDB, the PostgreSQL project's Windows distributor
+$postgresVersion = "17.7-1"
+$postgresMajor = "17"
+$postgresCredentials = "$DataDir\postgres.txt"
+
+function Get-LocalPostgres {
+    if (-not (Test-Path $postgresCredentials)) { return $null }
+    $line = Get-Content $postgresCredentials | Where-Object { $_ -like "ConnectionString: *" } | Select-Object -First 1
+    if ($line) { return $line.Substring("ConnectionString: ".Length) }
+    return $null
+}
+
+# Installs PostgreSQL here, only for this machine, with a cabinet user and database. Returns the
+# connection string. Reuses one this script installed before.
+function Install-LocalPostgres {
+    $known = Get-LocalPostgres
+    if ($known) {
+        Write-Host "  Using the PostgreSQL installed earlier (credentials in $postgresCredentials)"
+        return $known
+    }
+
+    $existingService = Get-Service -Name "postgresql*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existingService) {
+        throw "PostgreSQL is already installed here ($($existingService.Name)), and its password isn't known to this script. Create a cabinet database and user in it, then run this again with -ConnectionString `"Host=localhost;Database=cabinet;Username=cabinet;Password=...`"."
+    }
+
+    $port = $PostgresPort
+    while (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { $port++ }
+
+    $installer = Join-Path $env:TEMP "postgresql-$postgresVersion-windows-x64.exe"
+    if (-not (Test-Path $installer)) {
+        Write-Host "  Downloading PostgreSQL $postgresVersion (about 370 MB)"
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/postgresql-$postgresVersion-windows-x64.exe" -OutFile $installer -UseBasicParsing
+    }
+
+    # Run nothing that isn't signed by EnterpriseDB
+    $signature = Get-AuthenticodeSignature $installer
+    if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "EnterpriseDB") {
+        Remove-Item $installer -Force
+        throw "The PostgreSQL installer's signature isn't valid ($($signature.Status)); it was deleted. Try again, or install PostgreSQL yourself and use -ConnectionString."
+    }
+
+    $superPassword = New-Key
+    $cabinetPassword = New-Key
+    $prefix = "$env:ProgramFiles\PostgreSQL\$postgresMajor"
+    $dataDirectory = "$DataDir\postgresql"
+    Write-Host "  Installing PostgreSQL on port $port, data in $dataDirectory (a few minutes)"
+    $arguments = @("--mode", "unattended", "--unattendedmodeui", "none", "--superpassword", $superPassword,
+        "--serverport", "$port", "--prefix", "`"$prefix`"", "--datadir", "`"$dataDirectory`"",
+        "--install_runtimes", "0", "--disable-components", "pgAdmin,stackbuilder")
+    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "The PostgreSQL installer stopped with code $($process.ExitCode). Its log is in $env:TEMP\install-postgresql.log." }
+
+    # Only this machine
+    $config = "$dataDirectory\postgresql.conf"
+    (Get-Content $config) -replace "^\s*#?\s*listen_addresses\s*=.*", "listen_addresses = 'localhost'" | Set-Content $config -Encoding ASCII
+    $pgService = Get-Service -Name "postgresql*" | Select-Object -First 1
+    Restart-Service -Name $pgService.Name -Force
+
+    $psql = "$prefix\bin\psql.exe"
+    $env:PGPASSWORD = $superPassword
+    try {
+        for ($i = 0; $i -lt 30; $i++) {
+            & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -tAc "SELECT 1" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 1
+        }
+        & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 -qc "CREATE ROLE cabinet LOGIN PASSWORD '$cabinetPassword'"
+        if ($LASTEXITCODE -ne 0) { throw "Creating the cabinet user failed" }
+        & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 -qc "CREATE DATABASE cabinet OWNER cabinet ENCODING 'UTF8'"
+        if ($LASTEXITCODE -ne 0) { throw "Creating the cabinet database failed" }
+    }
+    finally {
+        Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
+    }
+
+    $connection = "Host=localhost;Port=$port;Database=cabinet;Username=cabinet;Password=$cabinetPassword"
+    Set-Content -Path $postgresCredentials -Encoding ASCII -Value @(
+        "# PostgreSQL installed for Cabinet. Keep this safe.",
+        "Service: $($pgService.Name)",
+        "Data: $dataDirectory",
+        "Superuser: postgres / $superPassword",
+        "ConnectionString: $connection")
+    Protect-File $postgresCredentials
+    Write-Host "  PostgreSQL ready; credentials in $postgresCredentials (administrators only)"
+    return $connection
 }
 
 Write-Host ""
@@ -131,7 +234,7 @@ else {
     }
     else {
         $storageType = "PostgreSQL"
-        if (-not $ConnectionString) { throw "-ConnectionString is required for PostgreSQL" }
+        if (-not $ConnectionString) { $ConnectionString = Install-LocalPostgres }
     }
 
     $keys = @(@{ Key = (New-Key); Tier = "Admin"; Name = "admin" })
@@ -257,6 +360,73 @@ for ($i = 0; $i -lt 60; $i++) {
     }
     catch {
         Start-Sleep -Seconds 1
+    }
+}
+
+# --- Moving an existing install ----------------------------------------
+# Only when asked: -Storage given on an install that already has settings
+$moveTo = $null
+if ($existing -and $PSBoundParameters.ContainsKey("Storage") -and $ready) {
+    $current = (Get-Content $settingsPath -Raw | ConvertFrom-Json).Storage.Type
+    $overrides = "$InstallDir\settings\cabinet.settings.json"
+    if (Test-Path $overrides) {
+        $fromDashboard = (Get-Content $overrides -Raw | ConvertFrom-Json).Storage.Type
+        if ($fromDashboard) { $current = $fromDashboard }
+    }
+    $wanted = if ($Storage -eq "postgresql") { "PostgreSQL" } else { "SQLite" }
+    if ($current -ne $wanted) { $moveTo = $wanted }
+}
+
+if ($moveTo) {
+    Write-Host ""
+    Write-Host "Moving to $moveTo" -ForegroundColor Green
+    if ($moveTo -eq "PostgreSQL") {
+        $target = if ($ConnectionString) { $ConnectionString } else { Install-LocalPostgres }
+    }
+    else {
+        $target = if ($ConnectionString) { $ConnectionString } else { "Data Source=$DataDir\db\cabinet.db" }
+    }
+
+    $adminLine = Get-Content $keysPath -ErrorAction SilentlyContinue | Where-Object { $_ -match "^admin \(Admin\): " } | Select-Object -First 1
+    if (-not $adminLine) {
+        Write-Host "  The admin key isn't in $keysPath, so finish in the dashboard: Settings, Storage." -ForegroundColor Yellow
+    }
+    else {
+        $headers = @{ "X-API-Key" = ($adminLine -replace "^admin \(Admin\): ", "").Trim() }
+        $api = "http://127.0.0.1:$Port/api/v1/storage"
+        try {
+            Invoke-RestMethod -Method Post -Uri "$api/migrate" -Headers $headers -ContentType "application/json" `
+                -Body (@{ type = $moveTo; connectionString = $target; copy = $true } | ConvertTo-Json) | Out-Null
+            $shown = ""
+            do {
+                Start-Sleep -Seconds 2
+                $status = Invoke-RestMethod -Uri "$api/migrate" -Headers $headers
+                $line = "  $($status.phase)"
+                if ($status.eventsToCopy -gt 0) { $line += "  ($('{0:N0}' -f $status.eventsCopied) of $('{0:N0}' -f $status.eventsToCopy) events)" }
+                if ($line -ne $shown) { Write-Host $line; $shown = $line }
+            } while ($status.state -eq "Running")
+
+            if ($status.state -eq "Failed") {
+                Write-Host "  The move stopped: $($status.error). Cabinet carries on with its current database." -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "  Waiting for Cabinet to restart on $moveTo"
+                Start-Sleep -Seconds 5
+                for ($i = 0; $i -lt 90; $i++) {
+                    try {
+                        if ((Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health/ready" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) { break }
+                    }
+                    catch {
+                        Start-Sleep -Seconds 1
+                    }
+                }
+                $now = Invoke-RestMethod -Uri $api -Headers $headers
+                Write-Host "  Now using $($now.current.location): $('{0:N0}' -f $now.current.eventsStored) events" -ForegroundColor Green
+            }
+        }
+        catch {
+            Write-Host "  The move couldn't start: $($_.Exception.Message). Finish it in the dashboard: Settings, Storage." -ForegroundColor Yellow
+        }
     }
 }
 

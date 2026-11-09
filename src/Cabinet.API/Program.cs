@@ -317,6 +317,21 @@ try
     // Pre-auth IP rate limiting (must run before error handling and logging to block attacks early)
     app.UseMiddleware<IpRateLimitingMiddleware>();
 
+    // While storage switches, senders are asked to resend shortly rather than writing to the old database
+    app.Use(async (context, next) =>
+    {
+        var gate = context.RequestServices.GetRequiredService<Cabinet.API.Services.Storage.IngestGate>();
+        if (gate.PausedBecause is { } reason && Cabinet.API.Services.Storage.IngestGate.IsIngest(context.Request))
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.RetryAfter = "15";
+            await context.Response.WriteAsJsonAsync(new { title = "Service Unavailable", status = 503, detail = reason + ". Resend in a moment; nothing was stored." });
+            return;
+        }
+
+        await next();
+    });
+
     // Global error handling
     app.UseMiddleware<ErrorHandlingMiddleware>();
 
@@ -451,26 +466,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Storage — supports SQLite, Memory, PostgreSQL, and OpenSearch.
     services.AddSingleton<ILogStorage>(sp =>
     {
-        var storageType = configuration["Storage:Type"] ?? "SQLite";
-        var connectionString = configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db";
-
-        ILogStorage backend = storageType.ToUpperInvariant() switch
-        {
-            "POSTGRESQL" or "POSTGRES" => new Cabinet.Database.Providers.PostgresLogStorage(
-                connectionString,
-                sp.GetRequiredService<ILogger<Cabinet.Database.Providers.PostgresLogStorage>>()),
-            "OPENSEARCH" or "ELASTICSEARCH" => new Cabinet.Database.Providers.OpenSearchLogStorage(
-                connectionString,
-                sp.GetRequiredService<ILogger<Cabinet.Database.Providers.OpenSearchLogStorage>>(),
-                indexPrefix: configuration["Storage:IndexPrefix"] ?? "cabinet-logs",
-                username: configuration["Storage:Username"],
-                password: configuration["Storage:Password"],
-                allowInsecureSsl: configuration.GetValue<bool>("Storage:AllowInsecureSsl")),
-            "MEMORY" => new InMemoryStorage(),
-            _ => new SqliteLogStorage(
-                sp.GetRequiredService<IOptions<Cabinet.Core.Configuration.CabinetConfiguration>>(),
-                sp.GetRequiredService<ILogger<SqliteLogStorage>>())
-        };
+        // Built the same way a storage migration builds it, so the two can't disagree
+        var backend = Cabinet.API.Services.Storage.StorageBackends.CreateLogStorage(configuration, sp.GetRequiredService<ILoggerFactory>());
 
         if (configuration.GetValue<bool>("Encryption:Enabled"))
         {
@@ -495,6 +492,10 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.Updates.UpdateApplier>();
     services.AddSingleton<Cabinet.API.Services.Updates.UpdateService>();
     services.AddHostedService<Cabinet.API.Services.Updates.UpdateCheckService>();
+
+    // Moving to another database, and holding back ingest while it switches
+    services.AddSingleton<Cabinet.API.Services.Storage.IngestGate>();
+    services.AddSingleton<Cabinet.API.Services.Storage.StorageMigrationService>();
 
     // The settings screen
     services.AddSingleton<Cabinet.API.Services.Settings.ServiceRestarter>();

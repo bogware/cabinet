@@ -41,6 +41,25 @@ public sealed class InMemoryDocumentStore : IDocumentStore
             .ToList();
         return Task.FromResult(documents);
     }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>> ListCollectionsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_documents.Keys.Select(key => key.Collection).Distinct().Order(StringComparer.Ordinal).ToList());
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<KeyValuePair<string, string>>> ExportAsync(string collection, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<KeyValuePair<string, string>>>(_documents
+            .Where(document => document.Key.Collection == collection)
+            .OrderBy(document => document.Key.Id, StringComparer.Ordinal)
+            .Select(document => new KeyValuePair<string, string>(document.Key.Id, document.Value))
+            .ToList());
+
+    /// <inheritdoc />
+    public Task ImportAsync(string collection, string id, string json, CancellationToken cancellationToken = default)
+    {
+        _documents[(collection, id)] = json;
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Keeps documents in the instance's SQLite database.</summary>
@@ -135,5 +154,38 @@ public sealed class SqliteDocumentStore : IDocumentStore
             "SELECT body FROM cabinet_documents WHERE collection = @Collection ORDER BY id",
             new { Collection = collection });
         return bodies.Select(body => JsonSerializer.Deserialize<T>(body)!).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListCollectionsAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = new SqliteConnection(_connectionString);
+        return (await connection.QueryAsync<string>("SELECT DISTINCT collection FROM cabinet_documents ORDER BY collection")).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<KeyValuePair<string, string>>> ExportAsync(string collection, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = new SqliteConnection(_connectionString);
+        var rows = await connection.QueryAsync<(string Id, string Body)>(
+            "SELECT id AS Id, body AS Body FROM cabinet_documents WHERE collection = @Collection ORDER BY id",
+            new { Collection = collection });
+        return rows.Select(row => new KeyValuePair<string, string>(row.Id, row.Body)).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task ImportAsync(string collection, string id, string json, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO cabinet_documents (collection, id, body, updated_at)
+            VALUES (@Collection, @Id, @Body, @UpdatedAt)
+            ON CONFLICT (collection, id) DO UPDATE SET body = @Body, updated_at = @UpdatedAt
+            """,
+            new { Collection = collection, Id = id, Body = json, UpdatedAt = DateTime.UtcNow.ToString("o") });
     }
 }

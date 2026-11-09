@@ -450,3 +450,54 @@ public sealed class ManagedApiKeyTests
         (await service.ValidateKeyAsync("settings-key-0123456789")).IsValid.Should().BeTrue();
     }
 }
+
+public sealed class SettingsFileProtectionTests
+{
+    [Fact]
+    public async Task UpdateAsync_LeavesTheFileReadableOnlyByAdministratorsAndThisAccount()
+    {
+        // The overrides file can hold database passwords and update tokens, and on Windows it sits
+        // under Program Files, where every user can read files by default.
+        var directory = Directory.CreateTempSubdirectory("cabinet-protect-");
+        try
+        {
+            var path = Path.Combine(directory.FullName, "cabinet.settings.json");
+            var store = new SettingsOverrideStore(path);
+
+            await store.UpdateAsync(new Dictionary<string, System.Text.Json.Nodes.JsonNode?>
+            {
+                ["Storage:ConnectionString"] = "Host=localhost;Password=secret",
+            });
+
+            if (OperatingSystem.IsWindows())
+            {
+                var expected = ExpectedAccounts();
+                AccountsAllowed(path).Should().NotBeEmpty().And.OnlyContain(sid => expected.Contains(sid));
+            }
+            else
+            {
+                File.GetUnixFileMode(path).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static string[] ExpectedAccounts() =>
+    [
+        new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null).Value,
+        new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null).Value,
+        System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value,
+    ];
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static List<string> AccountsAllowed(string path) =>
+        new FileInfo(path).GetAccessControl()
+            .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.Security.AccessControl.FileSystemAccessRule>()
+            .Select(rule => rule.IdentityReference.Value)
+            .ToList();
+}

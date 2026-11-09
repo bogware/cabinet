@@ -122,3 +122,31 @@
     .st-row { grid-template-columns: 1fr; }
     .st-savebar { left: 16px; right: 16px; transform: none; justify-content: flex-end; }
 }
+
+/* Storage */
+.st-where { background: var(--bg-secondary); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+.st-where-label { font-size: 13px; color: var(--text-secondary); }
+.st-where-path { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.st-where-path code { font-size: 15px; color: var(--text-primary); background: var(--bg-tertiary); padding: 4px 8px; border-radius: 4px; word-break: break-all; }
+.st-where-meta { font-size: 13px; color: var(--text-secondary); }
+.st-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+.st-actions[hidden] { display: none; }
+.st-actions .st-card { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.st-card h3 { font-size: 15px; margin: 0; color: var(--text-primary); }
+.st-card[hidden] { display: none; }
+.st-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.st-field input, .st-field select, .st-advanced textarea {
+    padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-primary);
+    color: var(--text-primary); font-size: 13px; font-family: inherit; width: 100%;
+}
+.st-advanced textarea { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 12px; margin-top: 6px; }
+.st-advanced summary { cursor: pointer; font-size: 12px; color: var(--accent); }
+.st-check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text-primary); }
+.st-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.st-result { font-size: 13px; min-height: 18px; }
+.st-result-ok { color: var(--success); }
+.st-result-bad { color: var(--error); }
+.st-migration { border-left: 4px solid var(--warning); }
+.st-migration[hidden] { display: none; }
+.st-meter-big { height: 10px; border-radius: 5px; }
+.st-log { font-size: 12px; max-height: 220px; overflow: auto; background: var(--bg-primary); padding: 8px; border-radius: 6px; white-space: pre-wrap; }

@@ -7,6 +7,7 @@
 const settingsState = {
     data: null,
     storage: null,
+    storageOverview: null,
     keys: [],
     edits: {},
     errors: {},
@@ -16,7 +17,7 @@ const settingsState = {
 };
 
 const FIXED_SECTIONS = [
-    { id: 'overview', label: 'Overview' },
+    { id: 'overview', label: 'Storage' },
     { id: 'keys', label: 'API keys' },
     { id: 'updates', label: 'Install updates' },
     { id: 'retention', label: 'Retention by index' },
@@ -47,7 +48,7 @@ async function loadServerSettings() {
 
     const [settings, storage, keys] = await Promise.allSettled([
         api('GET', '/api/v1/settings'),
-        api('GET', '/api/v1/settings/storage'),
+        api('GET', '/api/v1/storage'),
         api('GET', '/api/v1/keys'),
     ]);
 
@@ -65,7 +66,8 @@ async function loadServerSettings() {
         settingsState.forbidden = false;
     }
 
-    settingsState.storage = storage.status === 'fulfilled' ? storage.value : null;
+    settingsState.storage = storage.status === 'fulfilled' ? storage.value.current : null;
+    settingsState.storageOverview = storage.status === 'fulfilled' ? storage.value : null;
     settingsState.keys = keys.status === 'fulfilled' ? keys.value : [];
     renderSettingsNav();
     renderStorageOverview();
@@ -129,32 +131,212 @@ function renderSettingsVisibility() {
     document.getElementById('settingsNoMatch').hidden = matches > 0;
 }
 
-/* ===== Overview ===== */
+/* ===== Storage ===== */
+
+const STORAGE_POLL_MS = 1000;
+let storagePoll = null;
+
+function storageTypeLabel(type) {
+    return type === 'SQLite' ? 'SQLite file' : type === 'PostgreSQL' ? 'PostgreSQL database' : type;
+}
 
 function renderStorageOverview() {
+    const where = document.getElementById('storageWhere');
     const box = document.getElementById('storageOverview');
+    const overview = settingsState.storageOverview;
     const s = settingsState.storage;
     const d = settingsState.data;
-    if (!s && !d) { box.innerHTML = '<div class="st-card st-muted">Storage details need an Admin key.</div>'; return; }
-    const card = (label, value, detail) => `<div class="st-stat"><div class="st-stat-label">${esc(label)}</div><div class="st-stat-value">${value}</div>${detail ? `<div class="st-stat-detail">${detail}</div>` : ''}</div>`;
-    const parts = [];
-    if (s) {
-        const used = s.diskTotalBytes ? 1 - (s.diskFreeBytes / s.diskTotalBytes) : null;
-        parts.push(card('Logs are stored in', esc(s.type), `<code class="st-path" title="${esc(s.location)}">${esc(s.location)}</code>`));
-        parts.push(card('Events stored', esc(fmt(s.eventsStored)), s.oldestEvent ? `${esc(fmtTime(s.oldestEvent))} to ${esc(fmtTime(s.newestEvent))}` : 'none yet'));
-        parts.push(card('Size on disk', esc(bytes(s.sizeBytes)), s.eventsStored && s.sizeBytes ? `about ${esc(bytes(s.sizeBytes / s.eventsStored))} an event` : ''));
-        parts.push(card('Free disk', esc(bytes(s.diskFreeBytes)), used !== null ? `<div class="st-meter" role="meter" aria-valuenow="${Math.round(used * 100)}" aria-valuemin="0" aria-valuemax="100" aria-label="Disk used"><span style="width:${(used * 100).toFixed(1)}%"></span></div>${esc(Math.round(used * 100))}% of ${esc(bytes(s.diskTotalBytes))} used` : ''));
-        parts.push(card('Kept for', s.retentionDays > 0 ? `${esc(fmt(s.retentionDays))} days` : 'Forever', `<a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Change retention</a>`));
-        if (s.metadataLocation) parts.push(card('Settings, rules and history in', 'Metadata', `<code class="st-path">${esc(s.metadataLocation)}</code>`));
+    if (!s) {
+        where.innerHTML = '<div class="st-card st-muted">Storage details need an Admin key.</div>';
+        box.innerHTML = '';
+        document.getElementById('storageActions').hidden = true;
+        return;
     }
 
+    const type = overview ? overview.type : s.type;
+    const span = s.oldestEvent ? `${esc(fmtTime(s.oldestEvent))} to ${esc(fmtTime(s.newestEvent))}` : 'no events yet';
+    where.innerHTML = `<div class="st-where">
+        <div class="st-where-label">Your data is stored in a ${esc(storageTypeLabel(type))}</div>
+        <div class="st-where-path"><code id="storageLocation">${esc(s.location || type)}</code>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="copyStorageLocation">Copy</button></div>
+        <div class="st-where-meta">${esc(fmt(s.eventsStored))} events &middot; ${esc(bytes(s.sizeBytes))} &middot; ${span} &middot; ${s.retentionDays > 0 ? `kept ${esc(fmt(s.retentionDays))} days` : 'kept forever'}</div>
+    </div>`;
+
+    const card = (label, value, detail) => `<div class="st-stat"><div class="st-stat-label">${esc(label)}</div><div class="st-stat-value">${value}</div>${detail ? `<div class="st-stat-detail">${detail}</div>` : ''}</div>`;
+    const used = s.diskTotalBytes ? 1 - (s.diskFreeBytes / s.diskTotalBytes) : null;
+    const parts = [
+        card('Free disk', esc(bytes(s.diskFreeBytes)), used !== null ? `<div class="st-meter" role="meter" aria-valuenow="${Math.round(used * 100)}" aria-valuemin="0" aria-valuemax="100" aria-label="Disk used"><span style="width:${(used * 100).toFixed(1)}%"></span></div>${esc(Math.round(used * 100))}% of ${esc(bytes(s.diskTotalBytes))} used` : ''),
+        card('Size per event', s.eventsStored && s.sizeBytes ? esc(bytes(s.sizeBytes / s.eventsStored)) : '-', s.eventsStored && s.sizeBytes && s.diskFreeBytes ? `Room for about ${esc(fmt(Math.floor(s.diskFreeBytes / (s.sizeBytes / s.eventsStored))))} more` : ''),
+        card('Kept for', s.retentionDays > 0 ? `${esc(fmt(s.retentionDays))} days` : 'Forever', `<a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Change retention</a>`),
+    ];
+    if (s.metadataLocation) parts.push(card('Settings, rules and history', 'Separate', `<code class="st-path">${esc(s.metadataLocation)}</code>`));
     if (d) {
         parts.push(card('Listening on', (d.listeningAddresses || []).map(a => `<code>${esc(a)}</code>`).join('<br>') || '-', 'Change with the installer (-Port, -Https)'));
-        parts.push(card('Changes made on these pages', 'Settings file', `<code class="st-path">${esc(d.overridesFile)}</code>Outside the program folder, so upgrades keep it. Environment variables still win.`));
+        parts.push(card('Changes made on these pages', 'Settings file', `<code class="st-path">${esc(d.overridesFile)}</code>Outside the program folder, so upgrades keep it.`));
     }
 
-    box.innerHTML = parts.join('') +
-        '<p class="st-hint">To move the database, change <b>Storage &gt; Connection string</b> and restart; existing events stay in the old file until you copy it across while Cabinet is stopped.</p>';
+    box.innerHTML = parts.join('');
+    const movable = overview && overview.movableTo.includes(type);
+    document.getElementById('storageActions').hidden = !movable;
+    document.getElementById('moveSqliteCard').hidden = type !== 'SQLite';
+    renderStorageProgress(overview ? overview.migration : null);
+}
+
+async function copyStorageLocation() {
+    const text = document.getElementById('storageLocation').textContent;
+    try { await navigator.clipboard.writeText(text); toast('Location copied', 'success'); }
+    catch (e) { toast(text, 'info'); }
+}
+
+function quoteValue(value) {
+    return /[;="'\s]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function postgresConnection() {
+    const pasted = document.getElementById('pgConnection').value.trim();
+    if (pasted) return pasted;
+    const part = (key, id) => `${key}=${quoteValue(document.getElementById(id).value.trim())}`;
+    return [part('Host', 'pgHost'), part('Port', 'pgPort'), part('Database', 'pgDatabase'), part('Username', 'pgUser'), part('Password', 'pgPassword'), part('SSL Mode', 'pgSsl')].join(';');
+}
+
+function sqliteConnection(path) {
+    return `Data Source=${path.trim()}`;
+}
+
+function showResult(id, ok, message) {
+    const box = document.getElementById(id);
+    box.className = `st-result ${ok ? 'st-result-ok' : 'st-result-bad'}`;
+    box.textContent = message;
+}
+
+async function testStorage(type, connectionString, resultId) {
+    try {
+        const result = await api('POST', '/api/v1/storage/test', { type, connectionString });
+        showResult(resultId, result.ok, `${result.location ? result.location + ': ' : ''}${result.message}`);
+        return result;
+    } catch (e) {
+        showResult(resultId, false, e.message);
+        return null;
+    }
+}
+
+function testSqliteTarget() {
+    const path = document.getElementById('movePath').value.trim();
+    if (!path) { showResult('moveResult', false, 'Enter the full path of the new file, such as D:\\Cabinet\\cabinet.db'); return; }
+    return testStorage('SQLite', sqliteConnection(path), 'moveResult');
+}
+
+async function moveSqlite() {
+    const path = document.getElementById('movePath').value.trim();
+    if (!path) { showResult('moveResult', false, 'Enter the full path of the new file'); return; }
+    if (!confirm(`Move the database to ${path}? New events wait a few seconds while it copies, then Cabinet restarts on the new file. The current file is left as it is.`)) return;
+    await startMove({ type: 'SQLite', connectionString: sqliteConnection(path), copy: true }, 'moveResult');
+}
+
+async function testPostgresTarget() {
+    const connectionString = postgresConnection();
+    const result = await testStorage('PostgreSQL', connectionString, 'postgresResult');
+    if (result && !result.ok && document.getElementById('pgCreate').checked && /doesn't exist/.test(result.message)) {
+        showResult('postgresResult', true, 'Connected to the server. The database doesn\'t exist yet; it will be created when you switch.');
+    }
+}
+
+async function switchToPostgres() {
+    let connectionString = postgresConnection();
+    const copy = document.getElementById('pgCopy').checked;
+    if (document.getElementById('pgCreate').checked) {
+        try {
+            const created = await api('POST', '/api/v1/storage/postgres/database', { type: 'PostgreSQL', connectionString });
+            if (!created.ok) { showResult('postgresResult', false, created.message); return; }
+            if (copy && created.eventsStored > 0) { showResult('postgresResult', false, `That database already holds ${fmt(created.eventsStored)} events. Choose an empty one, or untick "Copy".`); return; }
+        } catch (e) {
+            showResult('postgresResult', false, e.message);
+            return;
+        }
+    }
+
+    const what = copy ? 'Copy everything into PostgreSQL and switch to it' : 'Switch to PostgreSQL without copying (it starts with what it holds)';
+    if (!confirm(`${what}? Cabinet keeps running while it copies, then restarts on PostgreSQL. The SQLite file is left as it is.`)) return;
+    await startMove({ type: 'PostgreSQL', connectionString, copy }, 'postgresResult');
+}
+
+async function startFresh() {
+    const type = document.getElementById('freshType').value;
+    const connectionString = type === 'SQLite' ? sqliteConnection(document.getElementById('freshPath').value) : postgresConnection();
+    if (type === 'SQLite' && !document.getElementById('freshPath').value.trim()) { showResult('freshResult', false, 'Enter the full path of the new file'); return; }
+    if (!confirm('Start Cabinet on a new, empty database? Search will show nothing until new events arrive. The current database is kept, so you can move back to it.')) return;
+    await startMove({ type, connectionString, copy: false }, 'freshResult');
+}
+
+async function startMove(request, resultId) {
+    try {
+        const status = await api('POST', '/api/v1/storage/migrate', request);
+        showResult(resultId, true, 'Started. Progress is shown above.');
+        renderStorageProgress(status);
+        pollStorageProgress();
+        document.getElementById('storageProgress').scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } catch (e) {
+        showResult(resultId, false, e.message);
+    }
+}
+
+function pollStorageProgress() {
+    clearTimeout(storagePoll);
+    storagePoll = setTimeout(async () => {
+        try {
+            const status = await api('GET', '/api/v1/storage/migrate');
+            renderStorageProgress(status);
+            if (status.state === 'Running') pollStorageProgress();
+            else if (status.state === 'Succeeded') waitForStorageRestart();
+        } catch (e) {
+            // The server is restarting on the new database
+            waitForStorageRestart();
+        }
+    }, STORAGE_POLL_MS);
+}
+
+async function waitForStorageRestart() {
+    const started = Date.now();
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    while (Date.now() - started < 120000) {
+        try {
+            const response = await fetch('/health/ready', { cache: 'no-store' });
+            if (response.ok) { toast('Cabinet is running on the new database', 'success'); loadServerSettings(); return; }
+        } catch (e) {
+            // Still restarting
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    toast('Cabinet hasn\'t come back after two minutes. Check the service on the server.', 'error');
+}
+
+function renderStorageProgress(status) {
+    const box = document.getElementById('storageProgress');
+    if (!status || status.state === 'Idle') { box.hidden = true; return; }
+    box.hidden = false;
+    const running = status.state === 'Running';
+    const percent = status.eventsToCopy > 0 ? Math.min(100, (status.eventsCopied / status.eventsToCopy) * 100) : (running ? 0 : 100);
+    const tone = status.state === 'Failed' ? 'st-result-bad' : status.state === 'Cancelled' ? '' : 'st-result-ok';
+    box.innerHTML = `
+        <h3>${running ? 'Moving' : status.state === 'WaitingForRestart' ? 'Ready: restart to finish' : status.state === 'Succeeded' ? 'Done' : status.state === 'Cancelled' ? 'Cancelled' : 'Stopped'}</h3>
+        <div class="st-desc">${esc(status.source || '')} &rarr; ${esc(status.target || '')}</div>
+        ${status.copy ? `<div class="st-meter st-meter-big" role="progressbar" aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100" aria-label="Events copied"><span style="width:${percent.toFixed(1)}%"></span></div>
+        <div class="st-desc">${esc(fmt(status.eventsCopied))} of ${esc(fmt(status.eventsToCopy))} events${status.metadataCopied ? `, ${esc(fmt(status.metadataCopied))} settings, rules, keys and history records` : ''}</div>` : ''}
+        <div class="st-result ${tone}">${esc(status.phase || '')}</div>
+        <details class="st-advanced"${status.state === 'Failed' ? ' open' : ''}><summary>Details</summary><pre class="st-log">${esc((status.log || []).join('\n'))}</pre></details>
+        <div class="st-buttons">
+            ${running ? '<button type="button" class="btn btn-secondary btn-sm" data-click="cancelStorageMove">Cancel</button>' : ''}
+            ${status.state === 'WaitingForRestart' && settingsState.data && settingsState.data.canRestart ? '<button type="button" class="btn btn-primary btn-sm" data-click="restartServer">Restart now</button>' : ''}
+        </div>`;
+    document.getElementById('storageActions').hidden = running || status.state === 'WaitingForRestart' || !(settingsState.storageOverview && settingsState.storageOverview.movableTo.includes(settingsState.storageOverview.type));
+    if (running) pollStorageProgress();
+}
+
+async function cancelStorageMove() {
+    try { await api('POST', '/api/v1/storage/migrate/cancel'); toast('Cancelling', 'info'); pollStorageProgress(); }
+    catch (e) { toast(e.message, 'error'); }
 }
 
 /* ===== Settings groups ===== */

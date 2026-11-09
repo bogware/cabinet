@@ -101,12 +101,47 @@ public sealed class SettingsOverrideStore
             }
 
             var temporary = Path + ".tmp";
+            await File.WriteAllTextAsync(temporary, string.Empty, cancellationToken);
+
+            // It can hold database passwords and tokens: readable only by the server and administrators
+            Protect(temporary);
             await File.WriteAllTextAsync(temporary, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
             File.Move(temporary, Path, overwrite: true);
         }
         finally
         {
             _lock.Release();
+        }
+    }
+
+    /// <summary>Limits a file to the account running Cabinet, SYSTEM and administrators.</summary>
+    public static void Protect(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var security = new System.Security.AccessControl.FileSecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var owners = new List<System.Security.Principal.SecurityIdentifier>
+            {
+                new(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null),
+                new(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
+            };
+            if (System.Security.Principal.WindowsIdentity.GetCurrent().User is { } self)
+            {
+                owners.Add(self);
+            }
+
+            foreach (var owner in owners.Distinct())
+            {
+                security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    owner, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+            }
+
+            new FileInfo(path).SetAccessControl(security);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
 

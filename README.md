@@ -93,7 +93,8 @@ search error | sort -timestamp | head 10
 | Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
 | Web dashboard | Available | Search with charts, dashboards with a panel editor and auto-refresh, detections, and keyboard and screen reader support. Served from the API outside the Development environment. |
 | Search in the dashboard | Available | Time picker, timeline with drag-to-zoom, fields sidebar with top values and one-click filters, query highlighting and autocomplete, shareable links, CSV and JSON export. |
-| Settings in the dashboard | Available | Every server setting described and editable, with defaults, limits and where each value comes from; storage overview; API keys; restart. |
+| Settings in the dashboard | Available | Every server setting described and editable, with defaults, limits and where each value comes from; API keys; restart. |
+| Storage management | Available | Where the database is, its size and span; move to another file or drive, switch to PostgreSQL, or start empty, from the dashboard, API or Windows installer, with ingest paused only for the switch. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
 | Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |
 | Scheduled searches | Available | Cron-based, run by one instance. Require an Enterprise-tier key. |

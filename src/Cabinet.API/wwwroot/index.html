@@ -813,9 +813,66 @@
                         <div class="st-notice" id="settingsAccessNotice" hidden></div>
 
                         <section class="st-section" data-section="overview" aria-labelledby="st-h-overview">
-                            <h2 id="st-h-overview">Overview</h2>
-                            <p class="st-intro">Where Cabinet keeps your logs, how much it holds, and where the settings on these pages are saved.</p>
-                            <div class="st-cards" id="storageOverview"><div class="st-loading">Loading...</div></div>
+                            <h2 id="st-h-overview">Storage</h2>
+                            <p class="st-intro">Where Cabinet keeps your events, settings, rules, keys and history, and moving them to another folder, another drive, or PostgreSQL. The database in use now is never changed or deleted by a move.</p>
+                            <div id="storageWhere"><div class="st-loading">Loading...</div></div>
+                            <div class="st-cards" id="storageOverview"></div>
+
+                            <div class="st-card st-migration" id="storageProgress" hidden></div>
+
+                            <div class="st-actions" id="storageActions" hidden>
+                                <div class="st-card" id="moveSqliteCard">
+                                    <h3>Move to another folder or drive</h3>
+                                    <p class="st-desc">Copies the database file whole: events, settings, rules, keys and history. New events wait a few seconds while it copies, then Cabinet restarts on the new file. The old file stays where it is until you delete it.</p>
+                                    <label class="st-field">New file
+                                        <input type="text" id="movePath" placeholder="D:\Cabinet\cabinet.db" spellcheck="false">
+                                    </label>
+                                    <div class="st-buttons">
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="testSqliteTarget">Check</button>
+                                        <button type="button" class="btn btn-primary btn-sm" data-click="moveSqlite">Move</button>
+                                    </div>
+                                    <div class="st-result" id="moveResult" role="status"></div>
+                                </div>
+
+                                <div class="st-card" id="postgresCard">
+                                    <h3>Switch to PostgreSQL</h3>
+                                    <p class="st-desc">Faster searches and aggregates on large volumes, and room for more than one Cabinet server. Everything is copied while Cabinet keeps running; at the end new events wait a few seconds for the switch.</p>
+                                    <div class="st-grid-2">
+                                        <label class="st-field">Host <input type="text" id="pgHost" value="localhost" spellcheck="false"></label>
+                                        <label class="st-field">Port <input type="number" id="pgPort" value="5432" min="1" max="65535"></label>
+                                        <label class="st-field">Database <input type="text" id="pgDatabase" value="cabinet" spellcheck="false"></label>
+                                        <label class="st-field">User <input type="text" id="pgUser" value="cabinet" spellcheck="false" autocomplete="off"></label>
+                                        <label class="st-field">Password <input type="password" id="pgPassword" autocomplete="new-password"></label>
+                                        <label class="st-field">Encryption
+                                            <select id="pgSsl"><option value="Prefer">Use it if the server offers it</option><option value="Require">Require it</option><option value="Disable">Off (same machine only)</option></select>
+                                        </label>
+                                    </div>
+                                    <details class="st-advanced"><summary>Or paste a connection string</summary>
+                                        <textarea id="pgConnection" rows="2" spellcheck="false" placeholder="Host=localhost;Port=5432;Database=cabinet;Username=cabinet;Password=..."></textarea>
+                                    </details>
+                                    <label class="st-check"><input type="checkbox" id="pgCreate" checked> Create the database if it doesn't exist</label>
+                                    <label class="st-check"><input type="checkbox" id="pgCopy" checked> Copy my events, settings, rules, keys and history into it</label>
+                                    <div class="st-buttons">
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="testPostgresTarget">Test connection</button>
+                                        <button type="button" class="btn btn-primary btn-sm" data-click="switchToPostgres">Switch to PostgreSQL</button>
+                                    </div>
+                                    <div class="st-result" id="postgresResult" role="status"></div>
+                                    <p class="st-hint">No PostgreSQL yet? On this server, run the installer with <code>-Storage postgresql</code> to install one locally.</p>
+                                </div>
+
+                                <div class="st-card" id="freshCard">
+                                    <h3>Start a new, empty database</h3>
+                                    <p class="st-desc">Cabinet starts over with no events, and none of the rules, keys, saved searches or history made in the dashboard. Settings saved on these pages and keys from the installer stay. The current database is kept, so you can switch back to it.</p>
+                                    <div class="st-grid-2">
+                                        <label class="st-field">Kind
+                                            <select id="freshType"><option value="SQLite">SQLite file</option><option value="PostgreSQL">PostgreSQL (uses the fields above)</option></select>
+                                        </label>
+                                        <label class="st-field">New file (SQLite) <input type="text" id="freshPath" placeholder="D:\Cabinet\cabinet-new.db" spellcheck="false"></label>
+                                    </div>
+                                    <div class="st-buttons"><button type="button" class="btn btn-secondary btn-sm" data-click="startFresh">Start empty</button></div>
+                                    <div class="st-result" id="freshResult" role="status"></div>
+                                </div>
+                            </div>
                         </section>
 
                         <section class="st-section" data-section="keys" aria-labelledby="st-h-keys" hidden>

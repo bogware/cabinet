@@ -107,6 +107,39 @@ public sealed class PostgresDocumentStore : IDocumentStore, IDisposable
     {
         _dataSource.Dispose();
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListCollectionsAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<string>("SELECT DISTINCT collection FROM cabinet_documents ORDER BY collection")).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<KeyValuePair<string, string>>> ExportAsync(string collection, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<(string Id, string Body)>(
+            "SELECT id AS Id, body AS Body FROM cabinet_documents WHERE collection = @Collection ORDER BY id",
+            new { Collection = collection });
+        return rows.Select(row => new KeyValuePair<string, string>(row.Id, row.Body)).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task ImportAsync(string collection, string id, string json, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(
+            """
+            INSERT INTO cabinet_documents (collection, id, body)
+            VALUES (@Collection, @Id, @Body)
+            ON CONFLICT (collection, id) DO UPDATE SET body = @Body, updated_at = NOW()
+            """,
+            new { Collection = collection, Id = id, Body = json });
+    }
 }
 
 /// <summary>
