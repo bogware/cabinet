@@ -183,9 +183,9 @@ if ($Https -and (-not $current.Kestrel -or -not (Test-Path $pfxPath))) {
 }
 $useKestrel = [bool]$current.Kestrel
 if ($useKestrel) {
-    $https = $current.Kestrel.Endpoints.Https
-    $HttpsPort = ([Uri]($https.Url -replace "0\.0\.0\.0", "localhost")).Port
-    $loaded = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($https.Certificate.Path, $https.Certificate.Password)
+    $httpsEndpoint = $current.Kestrel.Endpoints.Https
+    $HttpsPort = ([Uri]($httpsEndpoint.Url -replace "0\.0\.0\.0", "localhost")).Port
+    $loaded = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($httpsEndpoint.Certificate.Path, $httpsEndpoint.Certificate.Password)
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $fingerprint = -join ($sha.ComputeHash($loaded.RawData) | ForEach-Object { $_.ToString("X2") })
     Set-Content -Path "$DataDir\https-fingerprint.txt" -Value $fingerprint -Encoding ASCII
@@ -204,7 +204,8 @@ if (-not $existing) {
     Write-Host "  Created $serviceName"
 }
 else {
-    sc.exe config $serviceName binPath= $binaryPath | Out-Null
+    # Directly, since Windows PowerShell mangles quoted paths passed to sc.exe
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -Name ImagePath -Value $binaryPath
 }
 # Restart after a crash: 5 s, 30 s, then every 60 s
 sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null

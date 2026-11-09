@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `install-server.ps1 -Https` failed on an existing install with "Cannot convert value ... to type SwitchParameter": a variable shared the `-Https` switch's name, which PowerShell doesn't tell apart by case.
+- Upgrading the service set its path through `sc.exe`, which Windows PowerShell's quoting could break; it's now set directly.
+
 ## [2.0.2] - 2026-11-08
 
 ### Added
