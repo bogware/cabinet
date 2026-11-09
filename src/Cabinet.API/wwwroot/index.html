@@ -421,6 +421,7 @@
         }
     </style>
     <link rel="stylesheet" href="search.css">
+    <link rel="stylesheet" href="settings.css">
 </head>
 <body>
     <!-- Sidebar -->
@@ -802,79 +803,124 @@
 
             <!-- ===== SETTINGS PAGE ===== -->
             <div class="page" id="page-settings">
-                <h3 style="margin-bottom:16px">Settings</h3>
-                <div class="health-grid">
-                    <div class="health-item">
-                        <div class="hi-header"><span class="hi-name">API Connection</span></div>
-                        <div class="form-group" style="margin-top:10px">
-                            <label>API Key</label>
-                            <div style="display:flex;gap:6px">
-                                <input type="password" id="settingsApiKey" placeholder="Enter API key">
-                                <button class="btn btn-secondary btn-sm" data-click="toggleApiKeyVisibility" title="Show/hide">Show</button>
+                <div class="st-layout">
+                    <nav class="st-nav" id="settingsNav" aria-label="Settings sections"></nav>
+                    <div class="st-main">
+                        <div class="st-top">
+                            <input type="search" id="settingsSearch" placeholder="Find a setting: retention, timeout, email..." aria-label="Find a setting">
+                        </div>
+                        <div class="st-banner" id="settingsRestartBanner" role="status" hidden></div>
+                        <div class="st-notice" id="settingsAccessNotice" hidden></div>
+
+                        <section class="st-section" data-section="overview" aria-labelledby="st-h-overview">
+                            <h2 id="st-h-overview">Overview</h2>
+                            <p class="st-intro">Where Cabinet keeps your logs, how much it holds, and where the settings on these pages are saved.</p>
+                            <div class="st-cards" id="storageOverview"><div class="st-loading">Loading...</div></div>
+                        </section>
+
+                        <section class="st-section" data-section="keys" aria-labelledby="st-h-keys" hidden>
+                            <h2 id="st-h-keys">API keys</h2>
+                            <p class="st-intro">Every client and agent signs in with a key. Give each one its own, with the lowest tier it needs: <b>Ingest</b> for agents, which can send but not read. A key is shown once, when it's created.</p>
+                            <div class="st-new-key" id="newKeyResult" hidden></div>
+                            <div class="st-key-form" id="createKeyForm">
+                                <label>Name <input type="text" id="newKeyName" required maxlength="100" placeholder="l4d2-prod-agent"></label>
+                                <label>Tier
+                                    <select id="newKeyTier">
+                                        <option value="Ingest">Ingest: send events only</option>
+                                        <option value="Basic">Basic: search</option>
+                                        <option value="Professional">Professional: search, save, export</option>
+                                        <option value="Enterprise">Enterprise: plus indexes and schedules</option>
+                                        <option value="Admin">Admin: everything, including settings and keys</option>
+                                    </select>
+                                </label>
+                                <label>Expires <input type="date" id="newKeyExpires" aria-label="Expiry date (optional)"></label>
+                                <button type="button" class="btn btn-primary btn-sm" data-click="createApiKey">Create key</button>
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Server URL</label>
-                            <input type="text" id="settingsServerUrl" value="" placeholder="http://localhost:5000" readonly style="color:var(--text-muted)">
-                        </div>
-                        <button class="btn btn-primary btn-sm" data-click="saveApiSettings">Save</button>
+                            <div class="st-table-wrap"><table class="st-table" id="keysTable"><thead><tr><th>Name</th><th>Tier</th><th>Key</th><th>Created</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
+                        </section>
+
+                        <section class="st-section" data-section="updates" aria-labelledby="st-h-updates" hidden>
+                            <h2 id="st-h-updates">Install updates</h2>
+                            <p class="st-intro">New releases install from here. Cabinet restarts on the new version and goes back if it doesn't start; agents follow within the hour. How often to check, and the GitHub token, are under <a href="#settings" data-click="showSettingsSection" data-args='["group:Updates"]'>Updates settings</a>.</p>
+                            <div class="st-card">
+                                <div id="updateStatus"><div class="st-loading">Loading...</div></div>
+                                <div style="display:flex;gap:6px;margin-top:12px">
+                                    <button class="btn btn-secondary btn-sm" data-click="checkForUpdates">Check now</button>
+                                    <button class="btn btn-primary btn-sm" id="applyUpdateButton" data-click="applyUpdate" disabled>Update now</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="st-section" data-section="retention" aria-labelledby="st-h-retention" hidden>
+                            <h2 id="st-h-retention">Retention by index</h2>
+                            <p class="st-intro">How long each index keeps events, checked on the schedule in <a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Retention settings</a>. An index without a policy uses the default there.</p>
+                            <div class="st-card">
+                                <div id="retentionList"><div class="st-loading">Loading...</div></div>
+                                <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">+ Add policy</button>
+                            </div>
+                        </section>
+
+                        <section class="st-section" data-section="roles" aria-labelledby="st-h-roles" hidden>
+                            <h2 id="st-h-roles">Roles &amp; access</h2>
+                            <div class="st-card"><div id="rolesList"><div class="st-loading">Loading...</div></div></div>
+                        </section>
+
+                        <section class="st-section" data-section="browser" aria-labelledby="st-h-browser" hidden>
+                            <h2 id="st-h-browser">This browser</h2>
+                            <p class="st-intro">Saved in this browser only.</p>
+                            <div class="st-card">
+                                <div class="form-group">
+                                    <label for="settingsApiKey">Your API key</label>
+                                    <div style="display:flex;gap:6px">
+                                        <input type="password" id="settingsApiKey" placeholder="Enter API key">
+                                        <button class="btn btn-secondary btn-sm" data-click="toggleApiKeyVisibility" title="Show/hide">Show</button>
+                                        <button class="btn btn-primary btn-sm" data-click="saveApiSettings">Save</button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsServerUrl">Server</label>
+                                    <input type="text" id="settingsServerUrl" value="" readonly style="color:var(--text-muted)">
+                                </div>
+                                <div class="st-grid-2">
+                                    <div class="form-group">
+                                        <label for="settingsPageSize">Results per page</label>
+                                        <select id="settingsPageSize" data-change="saveDisplaySettings">
+                                            <option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settingsTimeRange">Default time range</label>
+                                        <select id="settingsTimeRange" data-change="saveDisplaySettings">
+                                            <option value="15m">Last 15 minutes</option><option value="1h">Last hour</option><option value="4h">Last 4 hours</option>
+                                            <option value="24h" selected>Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+                                            <option value="today">Today</option><option value="">All time</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settingsEventLimit">Events to load per search</label>
+                                        <select id="settingsEventLimit" data-change="saveDisplaySettings">
+                                            <option value="500">500</option><option value="1000" selected>1,000</option><option value="5000">5,000</option>
+                                            <option value="10000">10,000</option><option value="50000">50,000 (slower in the browser)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settingsTsFormat">Times shown as</label>
+                                        <select id="settingsTsFormat" data-change="saveDisplaySettings">
+                                            <option value="local" selected>Local time</option><option value="utc">UTC</option><option value="iso">ISO 8601</option><option value="relative">Relative (2m ago)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div id="settingsGroups"></div>
+                        <div class="st-empty" id="settingsNoMatch" hidden>No setting matches.</div>
                     </div>
-                    <div class="health-item">
-                        <div class="hi-header"><span class="hi-name">Display</span></div>
-                        <div class="form-group" style="margin-top:10px">
-                            <label>Results per page</label>
-                            <select id="settingsPageSize" data-change="saveDisplaySettings">
-                                <option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Default time range</label>
-                            <select id="settingsTimeRange" data-change="saveDisplaySettings">
-                                <option value="15m">Last 15 minutes</option><option value="1h">Last hour</option><option value="4h">Last 4 hours</option>
-                                <option value="24h" selected>Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
-                                <option value="today">Today</option><option value="">All time</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="settingsEventLimit">Events to load per search</label>
-                            <select id="settingsEventLimit" data-change="saveDisplaySettings">
-                                <option value="500">500</option><option value="1000" selected>1,000</option><option value="5000">5,000</option>
-                                <option value="10000">10,000</option><option value="50000">50,000 (slower in the browser)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Timestamp format</label>
-                            <select id="settingsTsFormat" data-change="saveDisplaySettings">
-                                <option value="relative">Relative (2m ago)</option>
-                                <option value="local" selected>Local time</option>
-                                <option value="utc">UTC</option>
-                                <option value="iso">ISO 8601</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="health-item">
-                        <div class="hi-header"><span class="hi-name">Retention Policies</span></div>
-                        <div id="retentionList" style="margin-top:10px">
-                            <div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">Loading...</div>
-                        </div>
-                        <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">+ Add Policy</button>
-                    </div>
-                    <div class="health-item">
-                        <div class="hi-header"><span class="hi-name">Updates</span></div>
-                        <div id="updateStatus" style="margin-top:10px">
-                            <div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">Loading...</div>
-                        </div>
-                        <div style="display:flex;gap:6px;margin-top:8px">
-                            <button class="btn btn-secondary btn-sm" data-click="checkForUpdates">Check now</button>
-                            <button class="btn btn-primary btn-sm" id="applyUpdateButton" data-click="applyUpdate" disabled>Update now</button>
-                        </div>
-                    </div>
-                    <div class="health-item">
-                        <div class="hi-header"><span class="hi-name">Roles &amp; Access</span></div>
-                        <div id="rolesList" style="margin-top:10px">
-                            <div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">Loading...</div>
-                        </div>
-                    </div>
+                </div>
+                <div class="st-savebar" id="settingsSaveBar" role="region" aria-label="Unsaved changes" hidden>
+                    <span id="settingsSaveText"></span>
+                    <button class="btn btn-secondary btn-sm" data-click="discardSettings">Discard</button>
+                    <button class="btn btn-primary btn-sm" id="settingsSaveButton" data-click="saveSettings">Save changes</button>
                 </div>
             </div>
 
@@ -1082,6 +1128,7 @@
     <script src="charts.js"></script>
     <script src="search.js"></script>
     <script src="search-page.js"></script>
+    <script src="settings-page.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

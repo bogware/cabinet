@@ -42,7 +42,7 @@ public sealed class DashboardTests
     public void EveryHandlerInThePage_ExistsInTheScript()
     {
         // Named in the page, and in the HTML the scripts build
-        var scripts = App + Asset("search-page.js");
+        var scripts = App + Asset("search-page.js") + Asset("settings-page.js");
         var names = Regex.Matches(Html + scripts, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
 
         names.Should().NotBeEmpty();

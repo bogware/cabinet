@@ -999,6 +999,7 @@ function loadSettings() {
     loadRetentionPolicies();
     loadRoles();
     loadUpdates();
+    loadServerSettings();
 }
 
 /* ===== Updates ===== */

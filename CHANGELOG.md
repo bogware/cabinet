@@ -6,23 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-09
+
+This release includes everything planned for 2.1.0, which was never published.
+
 ### Added
 
+- Search, rebuilt:
+  - A time picker with presets, "last N minutes, hours, days or weeks" and exact ranges.
+  - A timeline of matching events, with hover; drag across it or click a bar to zoom in, and zoom back out.
+  - A fields sidebar: each field's coverage, distinct values, top values with shares, and min, max and mean for numbers, with one-click filtering on or excluding any value.
+  - Expandable events: filter or exclude by any field, and pin fields to show on every event.
+  - Highlighting of what you searched for, and query syntax highlighting.
+  - Autocomplete for stages, functions, aggregates and your own field names.
+  - Recent searches; an index picker.
+  - A sortable table, chart and JSON views, and adjustable page size.
+  - Links that reopen a search; CSV and JSON export.
+  - Notes when a search was computed in the database, cut off by a limit, or approximate.
+- The dashboard's Settings screen:
+  - Every server setting in groups, each with its description, default, units, allowed range and where its value comes from.
+  - Editing with checks before saving, reset to default, and a restart button when a change needs one.
+  - An overview of where logs are stored, their size, the events held and free disk.
+  - API keys made, listed and revoked in the dashboard, each shown once when created.
+  - Browser preferences, including how many events a search loads.
+- The query API takes `startTime`, `endTime` and `limit`, and says when the database computed a result (`pushedDown`).
 - Every server setting described and editable at `/api/v1/settings`, for the dashboard's Settings screen: grouped, with units, limits, allowed values, the value in effect and its source. Changes are checked, saved atomically to a file outside the program folder, audited, and marked when they wait for a restart, which `/api/v1/settings/restart` does for a service.
 - Limits that were fixed in code are settings under `Limits:*`, defaulting to their old values: request sizes, search, stream and export time limits and caps, query length, regular expression time, backtest bounds, alert history size, backup spacing, and background intervals. So is the anonymous rate limit (`RateLimiting:Anonymous:MaxRequestsPerMinute`).
 - `/api/v1/settings/storage`: where events are stored, how much, and how much disk is left.
 - `/api/v1/keys`: list, make and revoke API keys. Keys and revocations persist in the metadata database and reach every instance.
-
-## [2.1.0] - 2026-11-08
-
-### Added
-
 - Updating from the dashboard (Settings > Updates), the CLI (`cabinet update`, `cabinet update apply`) and the API (`/api/v1/updates`). The server downloads the release, checks its SHA-256, and swaps itself in through a separate updater that keeps settings, backs up the old version and restores it if the new one doesn't start. Agents get the matching build from their server and restart on it.
 - `install-server.ps1 -UpdateToken`, for a private repository's releases.
 - Agent inputs take `DeleteDeliveredAfterDays`, which deletes files the server has stored in full once they've been quiet that long. `install-agent.sh --writable` lets the service delete there.
 
 ### Fixed
 
+- Event times from SQLite had no time zone in JSON, so the dashboard showed them shifted by the browser's offset from UTC (six hours in Chicago).
+- BQL now reads dotted names such as `metric.name` and `service.name` as fields. Before, they matched nothing in `where` and failed to parse after `by`, so OpenTelemetry attributes couldn't be filtered or grouped on.
 - `install-server.ps1 -Https` failed on an existing install with "Cannot convert value ... to type SwitchParameter": a variable shared the `-Https` switch's name, which PowerShell doesn't tell apart by case.
 - Upgrading the service set its path through `sc.exe`, which Windows PowerShell's quoting could break; it's now set directly.
 
