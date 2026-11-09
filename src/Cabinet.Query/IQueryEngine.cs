@@ -72,6 +72,9 @@ public class QueryStatistics
     /// A median or percentile came from a sample of its values, because there were too many to keep.
     /// </summary>
     public bool Approximate { get; set; }
+
+    /// <summary>True when the database computed the aggregate instead of the pipeline.</summary>
+    public bool PushedDown { get; set; }
 }
 
 public class QueryParseException : Exception

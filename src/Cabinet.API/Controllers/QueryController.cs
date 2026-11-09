@@ -83,7 +83,7 @@ public class QueryController : ControllerBase
             var useCache = request.UseCache;
             if (useCache && _queryCache != null)
             {
-                var cached = _queryCache.TryGet(request.Query, $"{_indexScope?.CacheKey}|{request.Index}");
+                var cached = _queryCache.TryGet(request.Query, $"{_indexScope?.CacheKey}|{request.Index}|{request.StartTime:O}|{request.EndTime:O}|{request.Limit}");
                 if (cached != null)
                 {
                     var cacheTime = DateTime.UtcNow - startTime;
@@ -97,7 +97,8 @@ public class QueryController : ControllerBase
                         Timestamp = DateTime.UtcNow,
                         EventsScanned = cached.Statistics?.EventsScanned ?? 0,
                         Truncated = cached.Statistics?.Truncated == true,
-                        Approximate = cached.Statistics?.Approximate == true
+                        Approximate = cached.Statistics?.Approximate == true,
+                        PushedDown = cached.Statistics?.PushedDown == true
                     });
                 }
             }
@@ -105,8 +106,10 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = request.Query,
-                Limit = 50_000,
-                Index = string.IsNullOrWhiteSpace(request.Index) ? null : request.Index
+                Limit = Math.Clamp(request.Limit ?? 50_000, 1, 50_000),
+                Index = string.IsNullOrWhiteSpace(request.Index) ? null : request.Index,
+                StartTime = request.StartTime?.ToUniversalTime(),
+                EndTime = request.EndTime?.ToUniversalTime(),
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var executionTime = DateTime.UtcNow - startTime;
@@ -114,7 +117,7 @@ public class QueryController : ControllerBase
             // Cache the result for future requests
             if (_queryCache != null)
             {
-                _queryCache.Set(request.Query, result, $"{_indexScope?.CacheKey}|{request.Index}");
+                _queryCache.Set(request.Query, result, $"{_indexScope?.CacheKey}|{request.Index}|{request.StartTime:O}|{request.EndTime:O}|{request.Limit}");
                 Response.Headers["X-Cache"] = "MISS";
             }
 
@@ -153,7 +156,8 @@ public class QueryController : ControllerBase
                 Timestamp = DateTime.UtcNow,
                 EventsScanned = result.Statistics?.EventsScanned ?? 0,
                 Truncated = truncated,
-                Approximate = result.Statistics?.Approximate == true
+                Approximate = result.Statistics?.Approximate == true,
+                PushedDown = result.Statistics?.PushedDown == true
             });
         }
         catch (QueryParseException ex)
@@ -833,6 +837,16 @@ public class QueryRequest
     /// Limits the query to one index, as storage reads it, which is faster than a <c>where</c>.
     /// </summary>
     public string? Index { get; set; }
+
+    /// <summary>Only events at or after this time. Overrides a time range in the query.</summary>
+    public DateTime? StartTime { get; set; }
+
+    /// <summary>Only events before this time.</summary>
+    public DateTime? EndTime { get; set; }
+
+    /// <summary>Most results to return, 1 to 50,000 (default 50,000).</summary>
+    public int? Limit { get; set; }
+
     /// <summary>
     /// When true, returns cached results if available (for dashboard refresh acceleration).
     /// Default: false. Cached results use a configurable TTL (default 30s).
@@ -862,6 +876,9 @@ public class QueryResponse
     /// True when a median or percentile came from a sample of its values.
     /// </summary>
     public bool Approximate { get; set; }
+
+    /// <summary>True when the database computed the aggregate, rather than reading every event.</summary>
+    public bool PushedDown { get; set; }
 }
 
 public class ValidationResponse

@@ -420,6 +420,7 @@
             .search-layout { flex-direction: column; }
         }
     </style>
+    <link rel="stylesheet" href="search.css">
 </head>
 <body>
     <!-- Sidebar -->
@@ -508,62 +509,93 @@
         <div class="content" id="mainContent" tabindex="-1">
             <!-- ===== SEARCH PAGE ===== -->
             <div class="page active" id="page-search">
-                <div class="search-bar" style="position:relative">
-                    <input type="text" id="queryInput" aria-label="Query" placeholder="Enter BQL query (e.g. find errors from last 24h | stats count by host)" spellcheck="false" autocomplete="off">
-                    <select id="timeRange" aria-label="Time range">
-                        <option value="">All time</option>
-                        <option value="15m">Last 15m</option>
-                        <option value="1h">Last 1h</option>
-                        <option value="4h" selected>Last 4h</option>
-                        <option value="24h">Last 24h</option>
-                        <option value="7d">Last 7d</option>
-                        <option value="30d">Last 30d</option>
+                <div class="sx-bar">
+                    <select id="searchIndex" class="sx-index" aria-label="Index">
+                        <option value="">All indexes</option>
                     </select>
-                    <button class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
-                    <button class="btn btn-secondary" data-click="saveCurrentQuery" title="Save query">Save</button>
-                    <div class="suggestions" id="querySuggestions"></div>
-                </div>
-                <div id="queryHistory" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
-                <div class="alert alert-error" id="searchError"></div>
-                <div class="cards" id="statsCards">
-                    <div class="card"><div class="label">Total Events</div><div class="value accent" id="totalEvents">-</div></div>
-                    <div class="card"><div class="label">Results</div><div class="value" id="resultCount">-</div></div>
-                    <div class="card"><div class="label">Execution Time</div><div class="value" id="execTime">-</div></div>
-                    <div class="card"><div class="label">Events Scanned</div><div class="value" id="scannedCount">-</div></div>
-                </div>
-                <div class="tabs" id="resultTabs">
-                    <div class="tab active" data-click="switchResultTab" data-args='["table", "$this"]'>Events</div>
-                    <div class="tab" data-click="switchResultTab" data-args='["json", "$this"]'>Raw JSON</div>
-                    <div class="tab" data-click="switchResultTab" data-args='["chart", "$this"]'>Chart</div>
-                </div>
-                <div class="search-layout">
-                    <div class="search-main">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <span id="resultsInfo">Enter a query to search logs</span>
-                                <div style="display:flex;gap:6px;align-items:center">
-                                    <button class="btn btn-secondary btn-sm" data-click="exportResults" id="exportBtn" style="display:none">Export CSV</button>
-                                    <button class="btn btn-secondary btn-sm" data-click="toggleFieldSidebar" title="Toggle field sidebar">Fields</button>
-                                </div>
+                    <div class="sx-editor">
+                        <pre class="sx-highlight" id="queryHighlight" aria-hidden="true"></pre>
+                        <textarea id="queryInput" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off"
+                            aria-label="Query" aria-autocomplete="list" aria-controls="querySuggestions" aria-expanded="false"
+                            placeholder="Search text or BQL: error, find Banid, find * | stats count by Map  (press / to focus, Enter to run)"></textarea>
+                        <div class="sx-suggest" id="querySuggestions" role="listbox" aria-label="Suggestions"></div>
+                    </div>
+                    <div class="sx-time">
+                        <button type="button" class="btn btn-secondary" id="timePickerButton" data-click="toggleTimePicker" aria-haspopup="dialog" aria-expanded="false" aria-controls="timePicker">Last 24 hours &#9662;</button>
+                        <div class="sx-time-panel" id="timePicker" role="dialog" aria-label="Time range" hidden>
+                            <div class="sx-time-presets" id="timePresets"></div>
+                            <div class="sx-time-section">
+                                <label for="timeLastAmount">Last</label>
+                                <input type="number" id="timeLastAmount" min="1" value="2" aria-label="Amount">
+                                <select id="timeLastUnit" aria-label="Unit">
+                                    <option value="m">minutes</option><option value="h" selected>hours</option><option value="d">days</option><option value="w">weeks</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="applyRelativeTime">Apply</button>
                             </div>
-                            <div id="resultView-table" class="scroll-y">
-                                <table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
-                            </div>
-                            <pre id="resultView-json" class="code-block hide"></pre>
-                            <div id="resultView-chart" class="hide" style="padding:24px; text-align:center; color:var(--text-secondary)">
-                                <div id="chartContainer">Run a stats/timechart query to see chart visualization</div>
-                            </div>
-                            <div class="pagination hide" id="resultsPagination">
-                                <button class="btn btn-secondary btn-sm" data-click="prevPage">&laquo; Prev</button>
-                                <span id="pageInfo">Page 1</span>
-                                <button class="btn btn-secondary btn-sm" data-click="nextPage">Next &raquo;</button>
+                            <div class="sx-time-section">
+                                <label for="timeFrom">Between</label>
+                                <input type="datetime-local" id="timeFrom" aria-label="From">
+                                <input type="datetime-local" id="timeTo" aria-label="To">
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="applyAbsoluteTime">Apply</button>
                             </div>
                         </div>
                     </div>
-                    <div class="field-sidebar" id="fieldSidebar">
-                        <div class="field-sidebar-header">Fields <span id="fieldCount"></span></div>
-                        <div id="fieldSidebarBody"></div>
+                    <button type="button" class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
+                    <div class="sx-more">
+                        <button type="button" class="btn btn-secondary" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">&#8943;</button>
+                        <div class="sx-menu" id="searchMenu" role="menu" hidden>
+                            <button type="button" role="menuitem" data-click="saveCurrentQuery">Save search <kbd>Ctrl+S</kbd></button>
+                            <button type="button" role="menuitem" data-click="copySearchLink">Copy link to this search</button>
+                            <button type="button" role="menuitem" data-click="exportResults" data-args='["csv"]'>Export CSV</button>
+                            <button type="button" role="menuitem" data-click="exportResults" data-args='["json"]'>Export JSON</button>
+                            <button type="button" role="menuitem" data-click="toggleWrap">Wrap long lines</button>
+                            <button type="button" role="menuitem" data-click="clearSearchHistory">Clear search history</button>
+                        </div>
                     </div>
+                </div>
+                <div class="sx-recent" id="queryHistory" aria-label="Recent searches"></div>
+                <div class="alert alert-error" id="searchError" role="alert"></div>
+                <div class="sx-status" id="searchStatus" aria-live="polite"></div>
+                <div class="panel sx-timeline" id="timelinePanel" hidden>
+                    <div class="sx-timeline-head">
+                        <span id="timelineTitle">Events over time</span>
+                        <span>Drag across bars, or click one, to zoom in</span>
+                        <button type="button" class="btn btn-secondary btn-sm" id="timelineZoomOut" data-click="zoomOut" hidden>Zoom out</button>
+                    </div>
+                    <div class="chart-plot" id="timelinePlot"><div class="chart-tooltip" hidden></div></div>
+                </div>
+                <div class="sx-body">
+                    <aside class="sx-fields" id="fieldSidebar" aria-label="Fields" hidden>
+                        <div class="sx-fields-head">
+                            <span id="fieldCount">Fields</span>
+                            <input type="search" id="fieldFilter" placeholder="Filter fields" aria-label="Filter fields">
+                        </div>
+                        <div id="fieldSidebarBody"></div>
+                    </aside>
+                    <section class="panel sx-results" aria-label="Results">
+                        <div class="sx-results-bar">
+                            <div class="tabs" id="resultTabs" role="tablist">
+                                <div class="tab active" role="tab" data-click="switchResultTab" data-args='["events", "$this"]'>Events</div>
+                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["table", "$this"]'>Table</div>
+                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["chart", "$this"]'>Chart</div>
+                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["json", "$this"]'>JSON</div>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" data-click="toggleFieldSidebar" aria-controls="fieldSidebar">Fields</button>
+                            <div class="sx-pager">
+                                <label for="resultPageSize">Per page</label>
+                                <select id="resultPageSize" aria-label="Results per page">
+                                    <option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="prevPage" aria-label="Previous page">&lsaquo;</button>
+                                <span id="pageInfo"></span>
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="nextPage" aria-label="Next page">&rsaquo;</button>
+                            </div>
+                        </div>
+                        <div id="resultView-events"><div class="sx-empty" id="searchEmpty"></div><ul class="sx-events" id="eventList"></ul></div>
+                        <div id="resultView-table" class="sx-table-wrap hide"><table class="sx-table"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table></div>
+                        <div id="resultView-chart" class="hide" style="padding:16px"><div id="chartContainer"></div></div>
+                        <pre id="resultView-json" class="code-block hide" style="margin:12px;max-height:70vh"></pre>
+                    </section>
                 </div>
             </div>
 
@@ -798,8 +830,16 @@
                         <div class="form-group">
                             <label>Default time range</label>
                             <select id="settingsTimeRange" data-change="saveDisplaySettings">
-                                <option value="">All time</option><option value="15m">15 minutes</option><option value="1h">1 hour</option>
-                                <option value="4h" selected>4 hours</option><option value="24h">24 hours</option><option value="7d">7 days</option>
+                                <option value="15m">Last 15 minutes</option><option value="1h">Last hour</option><option value="4h">Last 4 hours</option>
+                                <option value="24h" selected>Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+                                <option value="today">Today</option><option value="">All time</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="settingsEventLimit">Events to load per search</label>
+                            <select id="settingsEventLimit" data-change="saveDisplaySettings">
+                                <option value="500">500</option><option value="1000" selected>1,000</option><option value="5000">5,000</option>
+                                <option value="10000">10,000</option><option value="50000">50,000 (slower in the browser)</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -1040,6 +1080,8 @@
     </div>
 
     <script src="charts.js"></script>
+    <script src="search.js"></script>
+    <script src="search-page.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

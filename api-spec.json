@@ -7791,6 +7791,21 @@
             "type": "string",
             "nullable": true
           },
+          "startTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "endTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
           "useCache": {
             "type": "boolean"
           }
@@ -7829,6 +7844,9 @@
             "type": "boolean"
           },
           "approximate": {
+            "type": "boolean"
+          },
+          "pushedDown": {
             "type": "boolean"
           }
         },

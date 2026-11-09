@@ -738,7 +738,8 @@ public partial class SqliteLogStorage : ILogStorage
         var logEvent = new LogEvent
         {
             Id = reader.GetString(0),
-            Timestamp = new DateTime(reader.GetInt64(1)),
+            // Stored as UTC ticks; without the kind, JSON leaves out the zone and browsers read local time
+            Timestamp = new DateTime(reader.GetInt64(1), DateTimeKind.Utc),
             SourceType = reader.GetString(2),
             Host = reader.IsDBNull(3) ? null : reader.GetString(3),
             Severity = (LogSeverity)reader.GetInt32(4),
@@ -747,7 +748,7 @@ public partial class SqliteLogStorage : ILogStorage
             LineNumber = reader.GetInt64(7),
             ParserName = reader.IsDBNull(10) ? null : reader.GetString(10),
             IndexTime = reader.FieldCount > 12 && !reader.IsDBNull(12)
-                ? new DateTime(reader.GetInt64(12))
+                ? new DateTime(reader.GetInt64(12), DateTimeKind.Utc)
                 : DateTime.UtcNow,
             Index = reader.FieldCount > 13 && !reader.IsDBNull(13)
                 ? reader.GetString(13)

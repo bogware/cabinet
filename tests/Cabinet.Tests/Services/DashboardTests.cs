@@ -41,16 +41,19 @@ public sealed class DashboardTests
     [Fact]
     public void EveryHandlerInThePage_ExistsInTheScript()
     {
-        var names = Regex.Matches(Html, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
+        // Named in the page, and in the HTML the scripts build
+        var scripts = App + Asset("search-page.js");
+        var names = Regex.Matches(Html + scripts, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
 
         names.Should().NotBeEmpty();
-        names.Should().OnlyContain(name => Regex.IsMatch(App, $@"\bfunction {name}\("), "each handler has to be defined");
+        names.Should().OnlyContain(name => Regex.IsMatch(scripts, $@"\bfunction {name}\("), "each handler has to be defined");
     }
 
     [Fact]
     public void ThereIsNoDefaultApiKey()
     {
         App.Should().NotContain("dev-enterprise-key").And.NotContain("prompt(");
+        Asset("search-page.js").Should().NotContain("prompt(");
         Html.Should().Contain("type=\"password\" id=\"loginKey\"");
     }
 

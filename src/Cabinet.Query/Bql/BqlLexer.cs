@@ -190,7 +190,11 @@ public sealed class BqlLexer
         var start = _pos;
         var sb = new StringBuilder();
 
-        while (_pos < _input.Length && (char.IsLetterOrDigit(_input[_pos]) || _input[_pos] == '_'))
+        // A dot between name characters belongs to the name, as in metric.name or service.name,
+        // which OpenTelemetry and JSON fields use. A dot with space around it still joins text.
+        while (_pos < _input.Length
+            && (char.IsLetterOrDigit(_input[_pos]) || _input[_pos] == '_'
+                || (_input[_pos] == '.' && _pos + 1 < _input.Length && (char.IsLetter(_input[_pos + 1]) || _input[_pos + 1] == '_'))))
         {
             sb.Append(_input[_pos]);
             _pos++;

@@ -225,6 +225,7 @@ public sealed class BqlQueryEngine : IQueryEngine
                 ExecutionTime = sw.Elapsed,
                 Truncated = budget.Truncated,
                 Approximate = budget.Approximate || aggregate.Approximate,
+                PushedDown = true,
             },
         };
     }
@@ -622,7 +623,9 @@ public sealed class BqlQueryEngine : IQueryEngine
         var dict = (IDictionary<string, object?>)expando;
 
         dict["Id"] = evt.Id;
-        dict["Timestamp"] = evt.Timestamp;
+        // Every stored time is UTC; say so, so the zone is written out
+        var timestamp = evt.Timestamp.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(evt.Timestamp, DateTimeKind.Utc) : evt.Timestamp.ToUniversalTime();
+        dict["Timestamp"] = timestamp;
         dict["SourceType"] = evt.SourceType;
         dict["Host"] = evt.Host ?? "";
         dict["Index"] = evt.Index;
@@ -643,9 +646,9 @@ public sealed class BqlQueryEngine : IQueryEngine
             dict["Tags"] = evt.Tags.ToArray();
 
         // SPL field aliases for backward compatibility
-        dict["_time"] = evt.Timestamp;
+        dict["_time"] = timestamp;
         dict["_raw"] = evt.RawLine;
-        dict["_indextime"] = evt.IndexTime;
+        dict["_indextime"] = evt.IndexTime.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(evt.IndexTime, DateTimeKind.Utc) : evt.IndexTime.ToUniversalTime();
 
         return expando;
     }
