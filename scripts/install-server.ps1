@@ -159,7 +159,7 @@ function Install-LocalPostgres {
             if ($LASTEXITCODE -eq 0) { break }
             Start-Sleep -Seconds 1
         }
-        & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 -qc "CREATE ROLE cabinet LOGIN PASSWORD '$cabinetPassword'"
+        & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 -qc "CREATE ROLE cabinet LOGIN CREATEDB PASSWORD '$cabinetPassword'"
         if ($LASTEXITCODE -ne 0) { throw "Creating the cabinet user failed" }
         & $psql -h 127.0.0.1 -p $port -U postgres -d postgres -v ON_ERROR_STOP=1 -qc "CREATE DATABASE cabinet OWNER cabinet ENCODING 'UTF8'"
         if ($LASTEXITCODE -ne 0) { throw "Creating the cabinet database failed" }
@@ -430,6 +430,18 @@ if ($moveTo) {
                 }
                 $now = Invoke-RestMethod -Uri $api -Headers $headers
                 Write-Host "  Now using $($now.current.location): $('{0:N0}' -f $now.current.eventsStored) events" -ForegroundColor Green
+
+                # The settings here say the same, so Cabinet never falls back to the old database
+                # if the dashboard's settings file goes missing
+                if ($now.current.type -eq $moveTo) {
+                    $saved = Get-Content $settingsPath -Raw | ConvertFrom-Json
+                    $saved.Storage.Type = $moveTo
+                    $saved.Storage.ConnectionString = $target
+                    $saved | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+                    Protect-File $settingsPath
+                    Copy-Item $settingsPath "$InstallDir\api\appsettings.Production.json" -Force
+                    Protect-File "$InstallDir\api\appsettings.Production.json"
+                }
             }
         }
         catch {

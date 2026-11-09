@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-11-09
+
+### Fixed
+
+- `min` and `max` of a time, such as `stats max(_time) by host`, compared times as text, so 9:59 PM came after 10:16 PM, and returned them as text. They now compare times and return a time.
+- Searching for a value with a hyphen without quotes, such as `find host=l4d2-dev`, found nothing, because the search was rebuilt as `host = l4d2 - dev`. Search text now keeps the spacing as typed.
+- Running the Windows installer again without `-AllowFrom` removed the firewall rule, cutting off every agent. It now keeps the addresses already allowed.
+- The PostgreSQL user the Windows installer creates couldn't create databases, so "Create the database" in Settings, Storage failed on it.
+- After moving storage, the Windows installer now records the new database in its own settings too, so Cabinet can't fall back to the old one if the dashboard's settings file goes missing.
+
 ## [2.3.1] - 2026-11-09
 
 This release includes everything planned for 2.3.0, which was never published.

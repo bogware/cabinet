@@ -550,6 +550,8 @@ internal sealed class AggregateAccumulator
     private double _max = double.NegativeInfinity;
     private string? _minText;
     private string? _maxText;
+    private DateTime? _minTime;
+    private DateTime? _maxTime;
     private HashSet<string>? _distinct;
     private List<double>? _values;
     private Random? _sampler;
@@ -605,11 +607,17 @@ internal sealed class AggregateAccumulator
         var number = LegacyStatsOperator.GetNumericValue(row, _function.Field ?? string.Empty);
         if (number is not { } value)
         {
-            if (_kind is Kind.Min or Kind.Max
-                && row.TryGetValue(_function.Field ?? string.Empty, out var raw)
-                && raw?.ToString() is { } rawText)
+            if (_kind is Kind.Min or Kind.Max && row.TryGetValue(_function.Field ?? string.Empty, out var raw))
             {
-                AddText(rawText);
+                // Times compare as times; as text, "9:59 PM" would come after "10:16 PM"
+                if (AsTime(raw) is { } time)
+                {
+                    AddTime(time);
+                }
+                else if (raw?.ToString() is { } rawText)
+                {
+                    AddText(rawText);
+                }
             }
 
             return;
@@ -645,8 +653,8 @@ internal sealed class AggregateAccumulator
         {
             return _kind switch
             {
-                Kind.Min => _minText,
-                Kind.Max => _maxText,
+                Kind.Min => _minTime is { } earliest ? earliest : _minText,
+                Kind.Max => _maxTime is { } latest ? latest : _maxText,
                 _ => null,
             };
         }
@@ -712,6 +720,26 @@ internal sealed class AggregateAccumulator
             "varp" => Kind.PopulationVariance,
             _ => throw new QueryParseException($"Unknown aggregate function: {name}"),
         };
+    }
+
+    private static DateTime? AsTime(object? value) => value switch
+    {
+        DateTime time => time.Kind == DateTimeKind.Local ? time.ToUniversalTime() : time,
+        DateTimeOffset offset => offset.UtcDateTime,
+        _ => null,
+    };
+
+    private void AddTime(DateTime time)
+    {
+        if (_minTime is not { } min || time < min)
+        {
+            _minTime = time;
+        }
+
+        if (_maxTime is not { } max || time > max)
+        {
+            _maxTime = time;
+        }
     }
 
     private void AddText(string text)

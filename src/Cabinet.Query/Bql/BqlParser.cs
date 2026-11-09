@@ -13,6 +13,7 @@ namespace Cabinet.Query.Bql;
 public sealed class BqlParser : IQueryParser
 {
     private List<BqlToken> _tokens = new();
+    private string _source = string.Empty;
     private int _pos;
     private int _recursionDepth;
     private const int MaxRecursionDepth = 100;
@@ -52,6 +53,7 @@ public sealed class BqlParser : IQueryParser
 
         var lexer = new BqlLexer(query);
         _tokens = lexer.Tokenize();
+        _source = query;
         _pos = 0;
         _recursionDepth = 0;
 
@@ -132,9 +134,7 @@ public sealed class BqlParser : IQueryParser
                 continue;
             }
 
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-            Advance();
+            AppendSearchToken(sb);
         }
 
         var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
@@ -160,13 +160,21 @@ public sealed class BqlParser : IQueryParser
                 continue;
             }
 
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-            Advance();
+            AppendSearchToken(sb);
         }
 
         var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
         return new SearchStage(searchText);
+    }
+
+    // Spaced as typed, so host=l4d2-dev stays one comparison rather than becoming host = l4d2 - dev
+    private void AppendSearchToken(StringBuilder sb)
+    {
+        var position = Current.Position;
+        var spaced = position <= 0 || position > _source.Length || char.IsWhiteSpace(_source[position - 1]);
+        if (sb.Length > 0 && spaced) sb.Append(' ');
+        sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
+        Advance();
     }
 
     private void ParseFromLast(BqlQuery query)
@@ -1064,9 +1072,7 @@ public sealed class BqlParser : IQueryParser
         var sb = new StringBuilder();
         while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
         {
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-            Advance();
+            AppendSearchToken(sb);
         }
         return new SearchStage(sb.Length > 0 ? sb.ToString() : "*");
     }

@@ -149,7 +149,7 @@ The same is in the dashboard under **Settings, Storage**: where the database is 
 
 Behind a home router, forward TCP 8443 to this machine, and use your public address in the agents. If your ISP changes it, agents keep their events on disk and deliver them once their `ServerUrl` is updated.
 
-Run it again from a newer release to upgrade; settings and keys are kept. To change settings, edit the file in `C:\ProgramData\Cabinet\` and run the installer again. Logs are in `C:\Program Files\Cabinet\api\logs\`.
+Run it again from a newer release to upgrade; settings, keys and the firewall's allowed addresses are kept unless you give new ones. To change settings, edit the file in `C:\ProgramData\Cabinet\` and run the installer again. Logs are in `C:\Program Files\Cabinet\api\logs\`.
 
 ### macOS
 
