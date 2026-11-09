@@ -65,7 +65,7 @@ public static class RateLimitingExtensions
             partitionKey,
             _ => new SlidingWindowRateLimiterOptions
             {
-                PermitLimit = 100,
+                PermitLimit = Math.Max(1, _configuration?.GetValue("RateLimiting:Anonymous:MaxRequestsPerMinute", 100) ?? 100),
                 Window = TimeSpan.FromMinutes(1),
                 SegmentsPerWindow = 6,
                 QueueLimit = 0

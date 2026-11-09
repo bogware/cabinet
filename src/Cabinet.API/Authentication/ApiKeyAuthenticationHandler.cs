@@ -149,6 +149,12 @@ public class ApiKeyInfo
     public DateTime? LastUsedAt { get; set; }
     public DateTime? RevokedAt { get; set; }
     public bool IsActive { get; set; } = true;
+
+    /// <summary>settings for keys in configuration, dashboard for keys made in the dashboard.</summary>
+    public string Source { get; set; } = "settings";
+
+    /// <summary>The key's first characters, to tell keys apart. Never enough to use.</summary>
+    public string? Prefix { get; set; }
     internal long _requestCount;
     public long RequestCount => Interlocked.Read(ref _requestCount);
 }

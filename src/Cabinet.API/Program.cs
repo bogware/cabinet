@@ -47,6 +47,21 @@ try
 {
     var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = contentRoot });
 
+    // Settings saved from the dashboard: after the appsettings files, before environment variables
+    var overridesPath = Cabinet.API.Services.Settings.SettingsOverrideStore.ResolvePath(builder.Configuration);
+    Cabinet.API.Services.Settings.SettingsOverrideStore settingsOverrides;
+    try
+    {
+        settingsOverrides = Cabinet.API.Services.Settings.SettingsOverrideStore.AddTo(builder.Configuration, overridesPath);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Log.Warning(ex, "Settings saved from the dashboard can't be read or kept at {Path}", overridesPath);
+        settingsOverrides = new Cabinet.API.Services.Settings.SettingsOverrideStore(overridesPath);
+    }
+
+    builder.Services.AddSingleton(settingsOverrides);
+
     // A one-off command rather than running the server
     if (args.Length > 0 && args[0] == "--restore")
     {
@@ -74,9 +89,13 @@ try
         // Use camelCase for JSON properties
         options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
     });
+    var serverLimits = builder.Configuration.GetSection("Limits").Get<ServerLimits>() ?? new ServerLimits();
+    builder.Services.AddSingleton(serverLimits);
+    Cabinet.Query.Bql.BqlEventMatcher.RegexTimeout = TimeSpan.FromMilliseconds(serverLimits.DetectionRegexTimeoutMs);
+    Cabinet.Query.Bql.QueryRegex.PerEventTimeout = TimeSpan.FromMilliseconds(serverLimits.QueryRegexTimeoutMs);
     builder.WebHost.ConfigureKestrel(options =>
     {
-        options.Limits.MaxRequestBodySize = 50 * 1024 * 1024; // 50 MB
+        options.Limits.MaxRequestBodySize = serverLimits.MaxRequestBodyMB * ServerLimits.Megabyte;
     });
     builder.Services.AddEndpointsApiExplorer();
 
@@ -267,6 +286,9 @@ try
     builder.Services.AddResponseCompression();
 
     var app = builder.Build();
+
+    // Notes settings as they are now, so the dashboard can tell which changes wait for a restart
+    app.Services.GetRequiredService<Cabinet.API.Services.Settings.SettingsService>();
 
     // Configure the HTTP request pipeline
     if (app.Environment.IsDevelopment())
@@ -474,6 +496,14 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddSingleton<Cabinet.API.Services.Updates.UpdateService>();
     services.AddHostedService<Cabinet.API.Services.Updates.UpdateCheckService>();
 
+    // The settings screen
+    services.AddSingleton<Cabinet.API.Services.Settings.ServiceRestarter>();
+    services.AddSingleton(sp => new Cabinet.API.Services.Settings.SettingsService(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<Cabinet.API.Services.Settings.SettingsOverrideStore>(),
+        sp.GetRequiredService<Cabinet.API.Services.Settings.ServiceRestarter>(),
+        sp.GetService<IAuditLogger>()));
+
     // Dashboards, knowledge objects, saved queries, schedules, search jobs, data models
     services.AddCabinetMetadataStorage(configuration);
 
@@ -493,7 +523,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             sp.GetRequiredService<Cabinet.API.Services.SerilogAuditLogger>(),
             sp.GetRequiredService<IDocumentStore>(),
             sp.GetRequiredService<ILogger<Cabinet.API.Services.TamperEvidentAuditLogger>>(),
-            configuration["Audit:HmacKey"] ?? Environment.GetEnvironmentVariable("CABINET_AUDIT_HMAC_KEY")));
+            configuration["Audit:HmacKey"] ?? Environment.GetEnvironmentVariable("CABINET_AUDIT_HMAC_KEY"),
+            sp.GetRequiredService<ServerLimits>().AuditHeadLogInterval));
     services.AddSingleton<IAuditLogger>(sp => sp.GetRequiredService<Cabinet.API.Services.TamperEvidentAuditLogger>());
 
     // Field masking and encryption services
@@ -657,7 +688,11 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<RetentionService>();
     services.AddHostedService<RetentionBackgroundService>();
 
-    services.AddSingleton<Cabinet.API.Authentication.IApiKeyService, Cabinet.API.Services.ApiKeyService>();
+    services.AddSingleton(sp => new Cabinet.API.Services.ApiKeyService(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.ApiKeyService>>(),
+        sp.GetService<IDocumentStore>()));
+    services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp => sp.GetRequiredService<Cabinet.API.Services.ApiKeyService>());
 }
 
 // cabinet-api --restore <backup.db.gz> [--force]

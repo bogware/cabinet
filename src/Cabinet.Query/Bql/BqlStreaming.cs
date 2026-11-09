@@ -823,6 +823,16 @@ internal sealed class BqlValueComparer : IComparer<object?>
     };
 }
 
+/// <summary>Settings for regular expressions in searches.</summary>
+public static class QueryRegex
+{
+    /// <summary>
+    /// How long a search's pattern (<c>rex</c>, <c>regex</c>) can spend on one event. Set once at
+    /// startup from <c>Limits:QueryRegexTimeoutMs</c>.
+    /// </summary>
+    public static TimeSpan PerEventTimeout { get; set; } = TimeSpan.FromMilliseconds(250);
+}
+
 /// <summary>
 /// Stops a slow regular expression from using a query's whole time limit: each event gets a short
 /// allowance, and a pattern that keeps running out fails the query.
@@ -830,7 +840,7 @@ internal sealed class BqlValueComparer : IComparer<object?>
 internal sealed class RegexTimeoutTracker
 {
     /// <summary>How long a pattern can spend on one event.</summary>
-    public static readonly TimeSpan PerEvent = TimeSpan.FromMilliseconds(250);
+    public static TimeSpan PerEvent => QueryRegex.PerEventTimeout;
 
     private const int MaxTimeouts = 8;
 

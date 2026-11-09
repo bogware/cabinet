@@ -17,10 +17,12 @@ namespace Cabinet.API.Controllers;
 public class BackupController : ControllerBase
 {
     private readonly LocalBackupService? _backups;
+    private readonly TimeSpan _minimumInterval;
 
-    public BackupController(LocalBackupService? backups = null)
+    public BackupController(LocalBackupService? backups = null, Cabinet.API.Infrastructure.ServerLimits? limits = null)
     {
         _backups = backups;
+        _minimumInterval = TimeSpan.FromMinutes((limits ?? new Cabinet.API.Infrastructure.ServerLimits()).BackupMinimumIntervalMinutes);
     }
 
     private ObjectResult NotAvailable() => Problem(
@@ -53,15 +55,13 @@ public class BackupController : ControllerBase
 
         // Each is a full copy of the database, so repeated requests could fill the disk
         var last = await _backups.GetLastBackupTimeAsync(cancellationToken);
-        if (last is { } at && DateTime.UtcNow - at < MinimumInterval)
+        if (last is { } at && DateTime.UtcNow - at < _minimumInterval)
         {
-            return Problem(detail: $"A backup was taken at {at:u}. Wait {MinimumInterval.TotalMinutes:N0} minutes between them.", statusCode: 429);
+            return Problem(detail: $"A backup was taken at {at:u}. Wait {_minimumInterval.TotalMinutes:N0} minutes between them.", statusCode: 429);
         }
 
         return Ok(await _backups.CreateBackupAsync("manual", cancellationToken));
     }
-
-    private static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Check that a backup is intact and holds a healthy database

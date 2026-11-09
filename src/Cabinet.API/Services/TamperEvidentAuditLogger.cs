@@ -62,7 +62,7 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
     public const string Genesis = "genesis";
 
     private const string ChainsCollection = "audit-chains";
-    private const int HeadLogInterval = 1000;
+    private readonly int HeadLogInterval;
 
     private static readonly JsonSerializerOptions HashOptions = new() { WriteIndented = false };
 
@@ -79,8 +79,9 @@ public sealed class TamperEvidentAuditLogger : IAuditLogger, IAsyncDisposable
     private readonly byte[]? _key;
     private readonly string? _keyId;
 
-    public TamperEvidentAuditLogger(IAuditLogger inner, IDocumentStore documents, ILogger<TamperEvidentAuditLogger> logger, string? hmacKey = null)
+    public TamperEvidentAuditLogger(IAuditLogger inner, IDocumentStore documents, ILogger<TamperEvidentAuditLogger> logger, string? hmacKey = null, int headLogInterval = 1000)
     {
+        HeadLogInterval = Math.Max(1, headLogInterval);
         _inner = inner;
         _documents = documents;
         _logger = logger;

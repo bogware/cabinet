@@ -78,7 +78,7 @@ public static class StorageRegistration
         });
 
         services.AddSingleton<IClusterCoordinator>(sp => backend == StorageBackend.Postgres
-            ? new PostgresClusterCoordinator(connectionString, Logger<PostgresClusterCoordinator>(sp))
+            ? new PostgresClusterCoordinator(connectionString, Logger<PostgresClusterCoordinator>(sp), TimeSpan.FromSeconds(Limits(sp).ClusterInstanceTimeoutSeconds))
             : new InMemoryClusterCoordinator());
 
         // Only a shared database can have more than one instance to choose from
@@ -116,7 +116,7 @@ public static class StorageRegistration
 
         services.AddSingleton<ISearchJobStorage>(sp => new DocumentSearchJobStorage(sp.GetRequiredService<IDocumentStore>()));
         services.AddSingleton<IDataModelStorage>(sp => new DocumentDataModelStorage(sp.GetRequiredService<IDocumentStore>()));
-        services.AddSingleton<IAlertHistoryStorage>(sp => new DocumentAlertHistoryStorage(sp.GetRequiredService<IDocumentStore>()));
+        services.AddSingleton<IAlertHistoryStorage>(sp => new DocumentAlertHistoryStorage(sp.GetRequiredService<IDocumentStore>(), Limits(sp).AlertHistoryMax));
         services.AddSingleton<IFieldExtractionStorage>(sp => new DocumentFieldExtractionStorage(sp.GetRequiredService<IDocumentStore>()));
 
         return services;
@@ -129,6 +129,9 @@ public static class StorageRegistration
     /// SQLite stores read <c>Storage:ConnectionString</c>. That points at the primary backend
     /// when it isn't SQLite, so give them the metadata database instead.
     /// </summary>
+    /// <summary>The server's limits, or the defaults where none are registered, as in tests.</summary>
+    private static ServerLimits Limits(IServiceProvider services) => services.GetService<ServerLimits>() ?? new ServerLimits();
+
     private static IOptions<CabinetConfiguration> SqliteOptions(
         IServiceProvider services,
         IConfiguration configuration,

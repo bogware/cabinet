@@ -19,7 +19,7 @@ public sealed class ScheduledSearchService : BackgroundService
     private readonly IScheduledSearchStorage _storage;
     private readonly ILogger<ScheduledSearchService> _logger;
     private readonly ILeaderLease _lease;
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(15);
+    private readonly TimeSpan CheckInterval;
     private const int MaxConcurrentSearches = 4;
     private const int MaxResults = QueryContext.MaxLimit;
     private DateTime _lastCheckedMinute = DateTime.MinValue;
@@ -28,8 +28,10 @@ public sealed class ScheduledSearchService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IScheduledSearchStorage storage,
         ILogger<ScheduledSearchService> logger,
-        ILeaderLease? lease = null)
+        ILeaderLease? lease = null,
+        Infrastructure.ServerLimits? limits = null)
     {
+        CheckInterval = TimeSpan.FromSeconds(Math.Max(1, (limits ?? new Infrastructure.ServerLimits()).ScheduledSearchCheckSeconds));
         _lease = lease ?? new SingleInstanceLease();
         _scopeFactory = scopeFactory;
         _storage = storage;

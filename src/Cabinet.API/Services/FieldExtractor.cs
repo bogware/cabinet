@@ -12,8 +12,8 @@ namespace Cabinet.API.Services;
 /// </summary>
 public sealed class FieldExtractor
 {
-    private static readonly TimeSpan ReloadInterval = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+    private readonly TimeSpan ReloadInterval;
+    private readonly TimeSpan RegexTimeout;
 
     private readonly IFieldExtractionStorage _storage;
     private readonly ILogger<FieldExtractor> _logger;
@@ -21,10 +21,13 @@ public sealed class FieldExtractor
     private volatile IReadOnlyList<Compiled> _compiled = [];
     private DateTime _loadedAt = DateTime.MinValue;
 
-    public FieldExtractor(IFieldExtractionStorage storage, ILogger<FieldExtractor> logger)
+    public FieldExtractor(IFieldExtractionStorage storage, ILogger<FieldExtractor> logger, Infrastructure.ServerLimits? limits = null)
     {
         _storage = storage;
         _logger = logger;
+        limits ??= new Infrastructure.ServerLimits();
+        ReloadInterval = TimeSpan.FromSeconds(limits.FieldExtractionReloadSeconds);
+        RegexTimeout = TimeSpan.FromMilliseconds(limits.FieldExtractionRegexTimeoutMs);
     }
 
     /// <summary>Makes changes take effect on the next read, rather than within seconds.</summary>

@@ -376,6 +376,101 @@ public sealed class ApiStartupTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task Api_SettingsAndKeys_WorkEndToEnd()
+    {
+        var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+        var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+        var overrides = Path.Combine(_workingDirectory, "settings", "cabinet.settings.json");
+        startInfo.Environment["Storage__Type"] = "Memory";
+        startInfo.Environment["Settings__OverridesFile"] = overrides;
+        startInfo.Environment["ApiKeys__Keys__0__Key"] = "settings-admin-key";
+        startInfo.Environment["ApiKeys__Keys__0__Tier"] = "Admin";
+        startInfo.Environment["ApiKeys__Keys__0__Name"] = "Admin";
+        startInfo.Environment["Email__Password"] = "never-shown-password";
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            using var admin = new HttpClient { BaseAddress = baseAddress };
+            await WaitUntilReadyAsync(admin, process);
+            admin.DefaultRequestHeaders.Add("X-API-Key", "settings-admin-key");
+
+            var settingsText = await admin.GetStringAsync("/api/v1/settings");
+            settingsText.Should().NotContain("never-shown-password");
+            using (var settings = JsonDocument.Parse(settingsText))
+            {
+                var all = settings.RootElement.GetProperty("groups").EnumerateArray().SelectMany(group => group.GetProperty("settings").EnumerateArray()).ToList();
+                all.Should().HaveCountGreaterThan(80);
+                var password = all.Single(setting => setting.GetProperty("key").GetString() == "Email:Password");
+                password.GetProperty("isSet").GetBoolean().Should().BeTrue();
+                password.GetProperty("source").GetString().Should().Be("environment");
+                password.GetProperty("editable").GetBoolean().Should().BeFalse();
+                settings.RootElement.GetProperty("canRestart").GetBoolean().Should().BeFalse();
+            }
+
+            using (var saved = await admin.PutAsJsonAsync("/api/v1/settings", new { values = new Dictionary<string, object> { ["Storage:RetentionDays"] = 7 } }))
+            {
+                saved.StatusCode.Should().Be(HttpStatusCode.OK);
+                var retention = JsonDocument.Parse(await saved.Content.ReadAsStringAsync()).RootElement
+                    .GetProperty("groups").EnumerateArray().SelectMany(group => group.GetProperty("settings").EnumerateArray())
+                    .Single(setting => setting.GetProperty("key").GetString() == "Storage:RetentionDays");
+                retention.GetProperty("value").GetInt32().Should().Be(7);
+                retention.GetProperty("source").GetString().Should().Be("settings-file");
+                retention.GetProperty("pendingRestart").GetBoolean().Should().BeTrue();
+            }
+
+            File.ReadAllText(overrides).Should().Contain("RetentionDays");
+
+            using (var invalid = await admin.PutAsJsonAsync("/api/v1/settings", new { values = new Dictionary<string, object> { ["Storage:RetentionDays"] = -5 } }))
+            {
+                invalid.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+                (await invalid.Content.ReadAsStringAsync()).Should().Contain("Storage:RetentionDays");
+            }
+
+            using (var restart = await admin.PostAsync("/api/v1/settings/restart", null))
+            {
+                restart.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            }
+
+            using (var storage = await admin.GetAsync("/api/v1/settings/storage"))
+            {
+                storage.StatusCode.Should().Be(HttpStatusCode.OK);
+                JsonDocument.Parse(await storage.Content.ReadAsStringAsync()).RootElement.GetProperty("type").GetString().Should().Be("Memory");
+            }
+
+            string key;
+            string id;
+            using (var created = await admin.PostAsJsonAsync("/api/v1/keys", new { name = "game server", tier = "Ingest" }))
+            {
+                created.StatusCode.Should().Be(HttpStatusCode.Created);
+                var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync()).RootElement;
+                key = body.GetProperty("key").GetString()!;
+                id = body.GetProperty("id").GetString()!;
+            }
+
+            (await admin.GetStringAsync("/api/v1/keys")).Should().Contain("game server").And.NotContain(key);
+
+            using var sender = new HttpClient { BaseAddress = baseAddress };
+            sender.DefaultRequestHeaders.Add("X-API-Key", key);
+            (await sender.PostAsJsonAsync("/services/collector/event", new { @event = "hello from a new key" })).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await sender.PostAsJsonAsync("/api/v1/query/execute", new { query = "find *" })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            (await sender.GetAsync("/api/v1/settings")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+            (await admin.DeleteAsync($"/api/v1/keys/{id}")).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await sender.PostAsJsonAsync("/services/collector/event", new { @event = "after revoking" })).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+        }
+    }
+
     private static async Task WaitUntilReadyAsync(HttpClient client, Process process)
     {
         var deadline = DateTime.UtcNow.AddSeconds(60);

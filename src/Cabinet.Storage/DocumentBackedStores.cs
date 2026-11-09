@@ -140,15 +140,17 @@ public sealed class DocumentAlertHistoryStorage : IAlertHistoryStorage
 {
     private const string Alerts = "alerts";
 
-    /// <summary>Alerts kept. A noisy rule shouldn't grow this without limit.</summary>
+    /// <summary>Alerts kept by default. A noisy rule shouldn't grow this without limit.</summary>
     public const int MaxAlerts = 10_000;
 
     private readonly IDocumentStore _documents;
+    private readonly int _maxAlerts;
     private int _savedSincePrune;
 
-    public DocumentAlertHistoryStorage(IDocumentStore documents)
+    public DocumentAlertHistoryStorage(IDocumentStore documents, int maxAlerts = MaxAlerts)
     {
         _documents = documents;
+        _maxAlerts = Math.Max(1, maxAlerts);
     }
 
     /// <inheritdoc />
@@ -164,7 +166,7 @@ public sealed class DocumentAlertHistoryStorage : IAlertHistoryStorage
         {
             Interlocked.Exchange(ref _savedSincePrune, 0);
             var all = await _documents.ListAsync<AlertRecord>(Alerts);
-            foreach (var old in all.OrderByDescending(a => a.FiredAt).Skip(MaxAlerts))
+            foreach (var old in all.OrderByDescending(a => a.FiredAt).Skip(_maxAlerts))
             {
                 await _documents.DeleteAsync(Alerts, old.Id);
             }

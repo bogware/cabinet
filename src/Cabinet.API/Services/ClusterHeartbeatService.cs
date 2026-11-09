@@ -8,13 +8,14 @@ namespace Cabinet.API.Services;
 /// </summary>
 public sealed class ClusterHeartbeatService : BackgroundService
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan Interval;
 
     private readonly IClusterCoordinator _coordinator;
     private readonly ILogger<ClusterHeartbeatService> _logger;
 
-    public ClusterHeartbeatService(IClusterCoordinator coordinator, ILogger<ClusterHeartbeatService> logger)
+    public ClusterHeartbeatService(IClusterCoordinator coordinator, ILogger<ClusterHeartbeatService> logger, Infrastructure.ServerLimits? limits = null)
     {
+        Interval = TimeSpan.FromSeconds(Math.Max(1, (limits ?? new Infrastructure.ServerLimits()).ClusterHeartbeatSeconds));
         _coordinator = coordinator;
         _logger = logger;
     }

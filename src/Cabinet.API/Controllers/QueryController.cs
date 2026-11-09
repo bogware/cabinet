@@ -31,6 +31,7 @@ public class QueryController : ControllerBase
     private readonly Services.QueryCacheService? _queryCache;
     private readonly Cabinet.API.Authentication.IndexAccessScope? _indexScope;
     private readonly ILogger<QueryController> _logger;
+    private readonly Infrastructure.ServerLimits _limits;
 
     public QueryController(
         IQueryEngine queryEngine,
@@ -40,8 +41,10 @@ public class QueryController : ControllerBase
         ILogger<QueryController> logger,
         INaturalLanguageTranslator? nlTranslator = null,
         Services.QueryCacheService? queryCache = null,
-        Cabinet.API.Authentication.IndexAccessScope? indexScope = null)
+        Cabinet.API.Authentication.IndexAccessScope? indexScope = null,
+        Infrastructure.ServerLimits? limits = null)
     {
+        _limits = limits ?? new Infrastructure.ServerLimits();
         _indexScope = indexScope;
         _queryEngine = queryEngine;
         _queryParser = queryParser;
@@ -66,16 +69,16 @@ public class QueryController : ControllerBase
             return Problem(detail: "Query is required", statusCode: 400);
         }
 
-        if (request.Query.Length > 10_000)
+        if (request.Query.Length > _limits.MaxQueryLength)
         {
-            return Problem(detail: "Query too long. Maximum length is 10,000 characters.", statusCode: 400);
+            return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
         }
 
         try
         {
-            // Enforce a 60-second query timeout
+            // Enforce the search time limit
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_limits.QueryTimeoutSeconds));
 
             var startTime = DateTime.UtcNow;
 
@@ -105,7 +108,7 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = request.Query,
-                Limit = 50_000,
+                Limit = _limits.QueryMaxResults,
                 Index = string.IsNullOrWhiteSpace(request.Index) ? null : request.Index
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
@@ -123,7 +126,7 @@ public class QueryController : ControllerBase
             // to QueryContext.Limit via BqlOptimizer, which clamps to max 100K. The storage layer
             // (ILogStorage) enforces this limit natively, so result.Events is already bounded.
             // This secondary cap is defense-in-depth in case the optimizer or storage bypasses the limit.
-            const int MaxResultCount = 50_000;
+            var MaxResultCount = _limits.QueryMaxResults;
             var wasTruncated = result.Events.Count > MaxResultCount;
             var resultList = wasTruncated
                 ? result.Events.Take(MaxResultCount).Cast<object>().ToList()
@@ -193,11 +196,11 @@ public class QueryController : ControllerBase
             return;
         }
 
-        if (request.Query.Length > 10_000)
+        if (request.Query.Length > _limits.MaxQueryLength)
         {
             Response.StatusCode = StatusCodes.Status400BadRequest;
             await Response.WriteAsJsonAsync(
-                new ProblemDetails { Detail = "Query too long. Maximum length is 10,000 characters.", Status = 400, Title = "Bad Request" },
+                new ProblemDetails { Detail = $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", Status = 400, Title = "Bad Request" },
                 cancellationToken);
             return;
         }
@@ -221,15 +224,15 @@ public class QueryController : ControllerBase
         Response.ContentType = "application/x-ndjson";
         Response.Headers.CacheControl = "no-cache";
 
-        // Enforce a 5-minute timeout on streaming queries to prevent resource exhaustion
+        // Streams have their own time limit, so one can't hold the server indefinitely
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+        timeoutCts.CancelAfter(TimeSpan.FromMinutes(_limits.StreamTimeoutMinutes));
 
         var context = new QueryExecutionContext
         {
             Query = request.Query,
-            Limit = 100_000,
-            Timeout = TimeSpan.FromMinutes(5)
+            Limit = _limits.StreamMaxResults,
+            Timeout = TimeSpan.FromMinutes(_limits.StreamTimeoutMinutes)
         };
 
         var jsonOptions = new JsonSerializerOptions
@@ -275,8 +278,8 @@ public class QueryController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Query))
             return Problem(detail: "Query is required", statusCode: 400);
 
-        if (request.Query.Length > 10_000)
-            return Problem(detail: "Query too long. Maximum length is 10,000 characters.", statusCode: 400);
+        if (request.Query.Length > _limits.MaxQueryLength)
+            return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
 
         try
         {
@@ -429,8 +432,8 @@ public class QueryController : ControllerBase
 
         if (!string.IsNullOrWhiteSpace(request.Query))
         {
-            if (request.Query.Length > 10_000)
-                return Problem(detail: "Query too long. Maximum length is 10,000 characters.", statusCode: 400);
+            if (request.Query.Length > _limits.MaxQueryLength)
+                return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
 
             // Validate BQL syntax before updating
             try
@@ -626,16 +629,16 @@ public class QueryController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Query))
             return Problem(detail: "Query is required", statusCode: 400);
 
-        if (request.Query.Length > 10_000)
-            return Problem(detail: "Query too long. Maximum length is 10,000 characters.", statusCode: 400);
+        if (request.Query.Length > _limits.MaxQueryLength)
+            return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
 
         // Clamp MaxRows to prevent OOM from unbounded export requests
-        request.MaxRows = Math.Clamp(request.MaxRows, 1, 100_000);
+        request.MaxRows = Math.Clamp(request.MaxRows, 1, _limits.ExportMaxRows);
 
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(120)); // 2 min for exports
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_limits.ExportTimeoutSeconds));
 
             // Use QueryExecutionContext to preserve aggregation data (ExpandoObjects).
             // The string-based extension method converts to LogEvent, which loses stats columns.
@@ -643,7 +646,7 @@ public class QueryController : ControllerBase
             {
                 Query = request.Query,
                 Limit = request.MaxRows,
-                Timeout = TimeSpan.FromSeconds(120)
+                Timeout = TimeSpan.FromSeconds(_limits.ExportTimeoutSeconds)
             };
             var queryResult = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var resultList = queryResult.Events.Take(request.MaxRows).ToList();
@@ -702,7 +705,7 @@ public class QueryController : ControllerBase
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_limits.QueryTimeoutSeconds));
 
             var startTime = DateTime.UtcNow;
 
@@ -712,11 +715,11 @@ public class QueryController : ControllerBase
             var context = new QueryExecutionContext
             {
                 Query = bqlQuery,
-                Limit = 10_000
+                Limit = _limits.FieldSummaryMaxEvents
             };
             var result = await _queryEngine.ExecuteAsync(context, timeoutCts.Token);
             var executionTime = DateTime.UtcNow - startTime;
-            var resultList = result.Events.Take(10_000).Cast<object>().ToList();
+            var resultList = result.Events.Take(_limits.FieldSummaryMaxEvents).Cast<object>().ToList();
 
             return Ok(new QueryResponse
             {

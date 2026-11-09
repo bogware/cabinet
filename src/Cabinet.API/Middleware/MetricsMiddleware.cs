@@ -14,7 +14,7 @@ namespace Cabinet.API.Middleware;
 public sealed class MetricsMiddleware
 {
     // Prometheus scrapes every few seconds, and these stats scan the whole table
-    private static readonly TimeSpan StatsCacheDuration = TimeSpan.FromSeconds(60);
+    private readonly TimeSpan StatsCacheDuration;
     private readonly SemaphoreSlim _statsLock = new(1, 1);
     private StorageStats? _cachedStats;
     private DateTime _cachedStatsAt;
@@ -40,9 +40,10 @@ public sealed class MetricsMiddleware
 
     private readonly RequestDelegate _next;
 
-    public MetricsMiddleware(RequestDelegate next)
+    public MetricsMiddleware(RequestDelegate next, Cabinet.API.Infrastructure.ServerLimits? limits = null)
     {
         _next = next;
+        StatsCacheDuration = TimeSpan.FromSeconds((limits ?? new Cabinet.API.Infrastructure.ServerLimits()).MetricsCacheSeconds);
     }
 
     public async Task InvokeAsync(HttpContext context)

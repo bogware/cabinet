@@ -20,7 +20,7 @@ public sealed class DataModelAccelerationService : BackgroundService
     private readonly ILeaderLease _lease;
     private readonly IDataModelStorage _storage;
     private readonly ILogger<DataModelAccelerationService> _logger;
-    private static readonly TimeSpan RebuildInterval = TimeSpan.FromMinutes(15);
+    private readonly TimeSpan RebuildInterval;
     private static readonly TimeSpan PersistInterval = TimeSpan.FromMinutes(5);
     private DateTime _lastPersistTime = DateTime.MinValue;
 
@@ -28,8 +28,10 @@ public sealed class DataModelAccelerationService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IDataModelStorage storage,
         ILogger<DataModelAccelerationService> logger,
-        ILeaderLease? lease = null)
+        ILeaderLease? lease = null,
+        Infrastructure.ServerLimits? limits = null)
     {
+        RebuildInterval = TimeSpan.FromMinutes(Math.Max(1, (limits ?? new Infrastructure.ServerLimits()).DataModelRebuildMinutes));
         _lease = lease ?? new SingleInstanceLease();
         _scopeFactory = scopeFactory;
         _storage = storage;
