@@ -25,10 +25,12 @@ public class HecController : ControllerBase
     private readonly IAuditLogger _auditLogger;
     private readonly Services.QueryCacheService? _queryCache;
     private readonly ILogger<HecController> _logger;
+    private readonly long _maxBodyBytes;
 
     public HecController(ILogStorage storage, LogLineParser lineParser, IAuditLogger auditLogger, ILogger<HecController> logger,
-        Services.QueryCacheService? queryCache = null, IndexAccessScope? indexScope = null)
+        Services.QueryCacheService? queryCache = null, IndexAccessScope? indexScope = null, Infrastructure.ServerLimits? limits = null)
     {
+        _maxBodyBytes = ConfiguredRequestSizeLimitAttribute.BytesFor(limits ?? new Infrastructure.ServerLimits(), RequestSizeLimitKind.Hec);
         _indexScope = indexScope;
         _storage = storage;
         _lineParser = lineParser;
@@ -44,7 +46,7 @@ public class HecController : ControllerBase
     [HttpPost("event")]
     [Consumes("application/json")]
     [RequireCapability(Capability.Ingest)]
-    [RequestSizeLimit(5 * 1024 * 1024)] // 5 MB max per HEC request
+    [ConfiguredRequestSizeLimit(RequestSizeLimitKind.Hec)]
     [ProducesResponseType(typeof(HecResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(HecResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ReceiveEvent(CancellationToken cancellationToken)
@@ -53,8 +55,7 @@ public class HecController : ControllerBase
         // the [RequestSizeLimit] attribute which operates at the Kestrel/middleware layer.
         // This guards against memory exhaustion from oversized payloads even if the
         // framework-level limit is misconfigured or bypassed by a reverse proxy.
-        const int MaxBodySize = 10 * 1024 * 1024; // 10 MB
-        if (Request.ContentLength > MaxBodySize)
+        if (Request.ContentLength > _maxBodyBytes)
         {
             return BadRequest(new HecResponse { Text = "Payload too large", Code = 5 });
         }
@@ -66,7 +67,7 @@ public class HecController : ControllerBase
         }
 
         // Post-read size check for chunked transfers where Content-Length is absent
-        if (body.Length > MaxBodySize)
+        if (body.Length > _maxBodyBytes)
         {
             return BadRequest(new HecResponse { Text = "Payload too large", Code = 5 });
         }
@@ -158,7 +159,7 @@ public class HecController : ControllerBase
     /// </summary>
     [HttpPost("raw")]
     [RequireCapability(Capability.Ingest)]
-    [RequestSizeLimit(5 * 1024 * 1024)] // 5 MB max per HEC request
+    [ConfiguredRequestSizeLimit(RequestSizeLimitKind.Hec)]
     [ProducesResponseType(typeof(HecResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(HecResponse), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ReceiveRaw(
@@ -176,8 +177,7 @@ public class HecController : ControllerBase
 
         // Defense-in-depth: enforce max body size at application level in addition to
         // the [RequestSizeLimit] attribute which operates at the Kestrel/middleware layer.
-        const int MaxBodySize = 10 * 1024 * 1024; // 10 MB
-        if (Request.ContentLength > MaxBodySize)
+        if (Request.ContentLength > _maxBodyBytes)
         {
             return BadRequest(new HecResponse { Text = "Payload too large", Code = 5 });
         }
@@ -189,7 +189,7 @@ public class HecController : ControllerBase
         }
 
         // Post-read size check for chunked transfers where Content-Length is absent
-        if (body.Length > MaxBodySize)
+        if (body.Length > _maxBodyBytes)
         {
             return BadRequest(new HecResponse { Text = "Payload too large", Code = 5 });
         }

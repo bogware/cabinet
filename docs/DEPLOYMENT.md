@@ -243,6 +243,22 @@ Delivery is at-least-once, and the server stores each event once.
 - If the registry file is lost, files are read again from the start under new event IDs, which creates duplicates.
 - A replacement file with the same first line, and the same text at the checkpoint offset, can't be told from the original.
 
+## Settings in the dashboard
+
+Every setting the server reads is on the dashboard's Settings screen, grouped by area, with what it does, its unit and limits, the value in effect and where that comes from. The same is at `GET /api/v1/settings`, and changes go to `PUT /api/v1/settings` with `{"values": {"Storage:RetentionDays": 30}}`. Reading and changing settings needs `UserManagement`.
+
+- **Where changes go.** A JSON file outside the program folder, so reinstalling or updating never replaces it: `Settings:OverridesFile`, else `CABINET_SETTINGS_FILE`, else `settings\cabinet.settings.json` beside the program folder (on Windows, `C:\Program Files\Cabinet\settings\`). Writes go to a temporary file first and are moved into place, and every change is audited, without secret values.
+- **Precedence.** Defaults, then `appsettings.json` and `appsettings.Production.json`, then the dashboard's file, then environment variables. A setting an environment variable sets is shown but can't be changed in the dashboard. A list or structured setting saved in the dashboard replaces the one in the appsettings files entirely.
+- **Checking.** Every value is checked against its type, range and allowed values before anything is saved; if one is wrong, none are saved, and the response says which and why. `DELETE /api/v1/settings/{key}` returns a setting to its file value or default.
+- **Secrets.** Passwords, tokens, connection strings and webhook URLs are never returned, only whether they're set. They can be replaced.
+- **Restarting.** Most settings are read at startup. The screen marks those waiting for a restart, and `POST /api/v1/settings/restart` restarts a server running as a Windows or systemd service. Elsewhere, restart it the way it was started.
+- **Limits.** Limits and intervals that used to be fixed in code are under `Limits:*`, with their old values as defaults: request sizes, search and export time limits, result caps, regular expression time per event, backtest bounds, alert history size, and background intervals.
+- **Storage.** `GET /api/v1/settings/storage` shows the backend, where the database is (never credentials), its size, events stored, the oldest and newest event, free disk space and retention.
+
+### API keys
+
+`/api/v1/keys` lists keys, makes them and revokes them, with `UserManagement`. A new key is shown once, in the response that makes it; only its first characters are listed after that. Keys made here, and revocations of keys from the settings files, are kept in the metadata database as SHA-256 hashes, so they survive restarts and every instance picks them up within `ApiKeys:RefreshSeconds` (default 30). Tiers are Ingest, Basic, Professional, Enterprise and Admin. You can't revoke the key you're signed in with.
+
 ## Updating
 
 Updates come from the GitHub releases. The server looks for a new one every `Updates:CheckIntervalHours` (default 6) and never installs one by itself: start it from **Settings > Updates** on the dashboard, `cabinet update apply`, or `POST /api/v1/updates/apply`, which need the `UserManagement` capability. `cabinet update` and `GET /api/v1/updates` show the running and newest versions and each agent's version.

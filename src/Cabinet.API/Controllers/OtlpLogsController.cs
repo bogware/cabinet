@@ -24,14 +24,15 @@ namespace Cabinet.API.Controllers;
 public class OtlpLogsController : ControllerBase
 {
     // A compressed body can expand a lot. Real exports are a few megabytes.
-    private const long MaxDecompressedBytes = 64 * 1024 * 1024;
+    private readonly long _maxDecompressedBytes;
 
     private readonly ILogStorage _storage;
     private readonly LogLineParser _lineParser;
     private readonly IndexAccessScope? _indexScope;
 
-    public OtlpLogsController(ILogStorage storage, LogLineParser lineParser, IndexAccessScope? indexScope = null)
+    public OtlpLogsController(ILogStorage storage, LogLineParser lineParser, IndexAccessScope? indexScope = null, Infrastructure.ServerLimits? limits = null)
     {
+        _maxDecompressedBytes = (limits ?? new Infrastructure.ServerLimits()).OtlpMaxDecompressedMB * Infrastructure.ServerLimits.Megabyte;
         _storage = storage;
         _lineParser = lineParser;
         _indexScope = indexScope;
@@ -43,7 +44,7 @@ public class OtlpLogsController : ControllerBase
     /// </summary>
     [HttpPost("logs")]
     [RequireCapability(Capability.Ingest)]
-    [RequestSizeLimit(50 * 1024 * 1024)]
+    [ConfiguredRequestSizeLimit(RequestSizeLimitKind.Otlp)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -56,7 +57,7 @@ public class OtlpLogsController : ControllerBase
     /// </summary>
     [HttpPost("traces")]
     [RequireCapability(Capability.Ingest)]
-    [RequestSizeLimit(50 * 1024 * 1024)]
+    [ConfiguredRequestSizeLimit(RequestSizeLimitKind.Otlp)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -69,7 +70,7 @@ public class OtlpLogsController : ControllerBase
     /// </summary>
     [HttpPost("metrics")]
     [RequireCapability(Capability.Ingest)]
-    [RequestSizeLimit(50 * 1024 * 1024)]
+    [ConfiguredRequestSizeLimit(RequestSizeLimitKind.Otlp)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -148,7 +149,7 @@ public class OtlpLogsController : ControllerBase
         while ((read = await source.ReadAsync(chunk, cancellationToken)) > 0)
         {
             buffer.Write(chunk, 0, read);
-            if (buffer.Length > MaxDecompressedBytes)
+            if (buffer.Length > _maxDecompressedBytes)
             {
                 return null;
             }

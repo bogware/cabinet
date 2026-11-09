@@ -324,7 +324,8 @@ async function executeQuery() {
     if (range.start !== null) body.startTime = new Date(range.start).toISOString();
     if (range.end !== null) body.endTime = new Date(range.end).toISOString();
     const isEvents = CabinetSearch.returnsEvents(query);
-    body.limit = isEvents ? eventLimit() : 50000;
+    // Events: as many as the page shows. Anything computed: the server's own maximum.
+    if (isEvents) body.limit = eventLimit();
 
     // The timeline counts every match, so it also says how many there are in all
     const timelineStart = range.start ?? null;
@@ -336,7 +337,8 @@ async function executeQuery() {
         spanMs = span.ms;
         const timelineQuery = CabinetSearch.timelineQuery(query, span.span);
         if (timelineQuery) {
-            const timelineBody = { ...body, query: timelineQuery, limit: 50000 };
+            const timelineBody = { ...body, query: timelineQuery };
+            delete timelineBody.limit;
             timelinePromise = api('POST', '/api/v1/query/execute', timelineBody).catch(() => null);
         }
     }

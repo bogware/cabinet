@@ -8,7 +8,7 @@ namespace Cabinet.Database.Providers;
 /// <summary>Keeps cluster state in PostgreSQL, which every instance shares.</summary>
 public sealed class PostgresClusterCoordinator : IClusterCoordinator, IDisposable
 {
-    private static readonly TimeSpan InstanceTimeout = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan InstanceTimeout;
     private static readonly TimeSpan MatchRetention = TimeSpan.FromDays(1);
 
     private readonly NpgsqlDataSource _dataSource;
@@ -19,8 +19,9 @@ public sealed class PostgresClusterCoordinator : IClusterCoordinator, IDisposabl
     private volatile int _liveInstances = 1;
     private DateTime _lastCleanup = DateTime.MinValue;
 
-    public PostgresClusterCoordinator(string connectionString, ILogger<PostgresClusterCoordinator> logger)
+    public PostgresClusterCoordinator(string connectionString, ILogger<PostgresClusterCoordinator> logger, TimeSpan? instanceTimeout = null)
     {
+        InstanceTimeout = instanceTimeout ?? TimeSpan.FromSeconds(30);
         _dataSource = new NpgsqlDataSourceBuilder(connectionString).Build();
         _logger = logger;
     }

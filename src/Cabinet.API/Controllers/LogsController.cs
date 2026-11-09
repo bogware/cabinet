@@ -29,6 +29,7 @@ public class LogsController : ControllerBase
     private readonly MultiLineLogMerger _multiLineMerger;
     private readonly QueryCacheService? _queryCache;
     private readonly ILogger<LogsController> _logger;
+    private readonly Infrastructure.ServerLimits _limits;
 
     public LogsController(
         ILogStorage storage,
@@ -37,8 +38,10 @@ public class LogsController : ControllerBase
         MultiLineLogMerger multiLineMerger,
         ILogger<LogsController> logger,
         QueryCacheService? queryCache = null,
-        IndexAccessScope? indexScope = null)
+        IndexAccessScope? indexScope = null,
+        Infrastructure.ServerLimits? limits = null)
     {
+        _limits = limits ?? new Infrastructure.ServerLimits();
         _indexScope = indexScope;
         _storage = indexScope?.Restrict(storage) ?? storage;
         _lineParser = lineParser;
@@ -146,11 +149,11 @@ public class LogsController : ControllerBase
             yield break;
         }
 
-        // Enforce a 5-minute timeout on streaming to prevent resource exhaustion.
+        // Streams have a time limit, so one can't hold the server indefinitely.
         // Explicitly link HttpContext.RequestAborted so client disconnection cancels the
         // operation even if the framework doesn't propagate it through the enumerator token.
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, HttpContext.RequestAborted);
-        timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+        timeoutCts.CancelAfter(TimeSpan.FromMinutes(_limits.StreamTimeoutMinutes));
 
         var filter = BuildFilter(since, source, severity);
 
@@ -205,9 +208,9 @@ public class LogsController : ControllerBase
         Response.Headers.CacheControl = "no-cache";
         Response.Headers.Append("X-Accel-Buffering", "no"); // Disable proxy buffering (nginx)
 
-        // Max 60-minute duration, linked to client disconnect
+        // Longest live tail, linked to client disconnect
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted);
-        cts.CancelAfter(TimeSpan.FromMinutes(60));
+        cts.CancelAfter(TimeSpan.FromMinutes(_limits.LiveTailMaxMinutes));
         var token = cts.Token;
 
         var jsonOptions = new JsonSerializerOptions

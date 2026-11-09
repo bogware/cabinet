@@ -9,7 +9,11 @@ namespace Cabinet.Query.Bql;
 /// </summary>
 public sealed class BqlEventMatcher
 {
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
+    /// <summary>
+    /// How long a rule's regular expression may spend on one event. Set once at startup from
+    /// <c>Limits:DetectionRegexTimeoutMs</c>; matchers made afterwards use it.
+    /// </summary>
+    public static TimeSpan RegexTimeout { get; set; } = TimeSpan.FromMilliseconds(250);
 
     private readonly Regex? _pattern;
     private readonly Regex? _extract;

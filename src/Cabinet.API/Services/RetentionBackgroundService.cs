@@ -10,11 +10,14 @@ public class RetentionBackgroundService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<RetentionBackgroundService> _logger;
+    private readonly TimeSpan _interval;
 
     public RetentionBackgroundService(
         IServiceProvider serviceProvider,
-        ILogger<RetentionBackgroundService> logger)
+        ILogger<RetentionBackgroundService> logger,
+        Infrastructure.ServerLimits? limits = null)
     {
+        _interval = TimeSpan.FromMinutes(Math.Max(1, (limits ?? new Infrastructure.ServerLimits()).RetentionCheckMinutes));
         _serviceProvider = serviceProvider;
         _logger = logger;
     }
@@ -46,8 +49,7 @@ public class RetentionBackgroundService : BackgroundService
 
             try
             {
-                // Run every hour
-                await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+                await Task.Delay(_interval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

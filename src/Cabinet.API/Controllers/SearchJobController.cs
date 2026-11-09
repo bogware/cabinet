@@ -23,16 +23,17 @@ public class SearchJobController : ControllerBase
     private readonly IAuditLogger _auditLogger;
     private readonly ILogger<SearchJobController> _logger;
 
-    /// <summary>Jobs one owner can have waiting or running.</summary>
-    internal const int MaxActiveJobsPerOwner = 10;
+    private readonly Infrastructure.ServerLimits _limits;
 
     public SearchJobController(
         ISearchJobStorage jobStorage,
         IQueryParser queryParser,
         IAuditLogger auditLogger,
         ILogger<SearchJobController> logger,
-        IndexAccessScope? indexScope = null)
+        IndexAccessScope? indexScope = null,
+        Infrastructure.ServerLimits? limits = null)
     {
+        _limits = limits ?? new Infrastructure.ServerLimits();
         _indexScope = indexScope;
         _jobStorage = jobStorage;
         _queryParser = queryParser;
@@ -67,8 +68,8 @@ public class SearchJobController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Query))
             return Problem(detail: "Query is required", statusCode: 400);
 
-        if (request.Query.Length > 10_000)
-            return Problem(detail: "Query too long. Maximum length is 10,000 characters.", statusCode: 400);
+        if (request.Query.Length > _limits.MaxQueryLength)
+            return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
 
         // Validate BQL syntax before queuing
         try
@@ -82,9 +83,9 @@ public class SearchJobController : ControllerBase
 
         var owner = User.FindFirst("ClientId")?.Value ?? "unknown";
         var ownJobs = await _jobStorage.GetAllAsync(owner, cancellationToken);
-        if (ownJobs.Count(existing => existing.Status is SearchJobStatus.Queued or SearchJobStatus.Running) >= MaxActiveJobsPerOwner)
+        if (ownJobs.Count(existing => existing.Status is SearchJobStatus.Queued or SearchJobStatus.Running) >= _limits.MaxActiveSearchJobsPerUser)
         {
-            return Problem(detail: $"You already have {MaxActiveJobsPerOwner} search jobs waiting or running", statusCode: 429);
+            return Problem(detail: $"You already have {_limits.MaxActiveSearchJobsPerUser} search jobs waiting or running", statusCode: 429);
         }
 
         var job = new SearchJob

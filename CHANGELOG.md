@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Every server setting described and editable at `/api/v1/settings`, for the dashboard's Settings screen: grouped, with units, limits, allowed values, the value in effect and its source. Changes are checked, saved atomically to a file outside the program folder, audited, and marked when they wait for a restart, which `/api/v1/settings/restart` does for a service.
+- Limits that were fixed in code are settings under `Limits:*`, defaulting to their old values: request sizes, search, stream and export time limits and caps, query length, regular expression time, backtest bounds, alert history size, backup spacing, and background intervals. So is the anonymous rate limit (`RateLimiting:Anonymous:MaxRequestsPerMinute`).
+- `/api/v1/settings/storage`: where events are stored, how much, and how much disk is left.
+- `/api/v1/keys`: list, make and revoke API keys. Keys and revocations persist in the metadata database and reach every instance.
+
 ## [2.1.0] - 2026-11-08
 
 ### Added

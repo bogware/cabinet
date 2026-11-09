@@ -142,9 +142,9 @@ public sealed class DetectionRuleStore
 public sealed class DetectionEngine : BackgroundService
 {
     private const int MaxRecentEventIds = 200_000;
-    private const int MaxRegexTimeouts = 100;
+    private readonly int MaxRegexTimeouts;
 
-    private static readonly TimeSpan RuleReloadInterval = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan RuleReloadInterval;
 
     private readonly DetectionRuleStore _rules;
     private readonly AlertDispatcher _dispatcher;
@@ -159,8 +159,11 @@ public sealed class DetectionEngine : BackgroundService
     private long _pendingBatches;
     private long _processedBatches;
 
-    public DetectionEngine(DetectionRuleStore rules, AlertDispatcher dispatcher, ILogger<DetectionEngine> logger, IClusterCoordinator? coordinator = null)
+    public DetectionEngine(DetectionRuleStore rules, AlertDispatcher dispatcher, ILogger<DetectionEngine> logger, IClusterCoordinator? coordinator = null, Infrastructure.ServerLimits? limits = null)
     {
+        limits ??= new Infrastructure.ServerLimits();
+        MaxRegexTimeouts = limits.DetectionMaxRegexTimeouts;
+        RuleReloadInterval = TimeSpan.FromSeconds(limits.DetectionRuleReloadSeconds);
         _rules = rules;
         _dispatcher = dispatcher;
         _logger = logger;

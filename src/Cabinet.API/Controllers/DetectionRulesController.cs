@@ -18,10 +18,12 @@ namespace Cabinet.API.Controllers;
 public class DetectionRulesController : ControllerBase
 {
     private readonly DetectionRuleStore _rules;
+    private readonly Infrastructure.ServerLimits _limits;
 
-    public DetectionRulesController(DetectionRuleStore rules)
+    public DetectionRulesController(DetectionRuleStore rules, Infrastructure.ServerLimits? limits = null)
     {
         _rules = rules;
+        _limits = limits ?? new Infrastructure.ServerLimits();
     }
 
     /// <summary>
@@ -200,11 +202,11 @@ public class DetectionRulesController : ControllerBase
             return problem;
         }
 
-        var hours = Math.Clamp(request.Hours, 1, 24 * 90);
+        var hours = Math.Clamp(request.Hours, 1, _limits.BacktestMaxHours);
         var end = DateTime.UtcNow;
 
         // The caller's own view: only indexes they can read, with masking applied
-        var result = await RuleBacktester.RunAsync(rule, scope.Restrict(storage), end.AddHours(-hours), end, Math.Clamp(request.MaxEvents, 1, 10_000_000), cancellationToken);
+        var result = await RuleBacktester.RunAsync(rule, scope.Restrict(storage), end.AddHours(-hours), end, Math.Clamp(request.MaxEvents, 1, _limits.BacktestMaxEvents), cancellationToken);
         return Ok(result);
     }
 
