@@ -29,7 +29,8 @@
 
 .PARAMETER AllowFrom
     Addresses or ranges allowed through the firewall, such as your game servers' IPs or a
-    Tailscale range (100.64.0.0/10). Without it, only this machine can connect.
+    Tailscale range (100.64.0.0/10). Without it, a new install answers only this machine, and a
+    re-run keeps the addresses already allowed.
 
 .PARAMETER IngestKeys
     Names for ingest-only keys to create on first install, one per sender, such as l4d2-dev.
@@ -331,8 +332,15 @@ Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -N
 
 # --- Firewall---------
 Write-Host "[5/6] Firewall" -ForegroundColor Green
-# Remove rules from earlier installs, then open only the port agents use
-Get-NetFirewallRule -DisplayName "Cabinet API (TCP *" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+# Replace rules from earlier installs, then open only the port agents use. Without -AllowFrom, the
+# addresses already allowed stay allowed, so running this again to upgrade or move storage doesn't
+# cut off agents.
+$earlierRules = @(Get-NetFirewallRule -DisplayName "Cabinet API (TCP *" -ErrorAction SilentlyContinue)
+if ($AllowFrom.Count -eq 0 -and $earlierRules.Count -gt 0) {
+    $AllowFrom = @($earlierRules | Get-NetFirewallAddressFilter | ForEach-Object { $_.RemoteAddress } |
+        Where-Object { $_ -and $_ -ne "Any" } | Select-Object -Unique)
+}
+$earlierRules | Remove-NetFirewallRule
 $openPort = if ($useKestrel) { $HttpsPort } else { $Port }
 $ruleName = "Cabinet API (TCP $openPort)"
 if ($AllowFrom.Count -gt 0) {
