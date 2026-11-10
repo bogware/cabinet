@@ -243,6 +243,16 @@ Delivery is at-least-once, and the server stores each event once.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
 
+### Importing existing logs
+
+`cabinet-agent import` sends files that already exist, once, and exits.
+
+- **History on a machine with the agent.** `sudo -u cabinet-agent /opt/cabinet-agent/cabinet-agent import` reads every input's files that `IgnoreOlderThanHours` leaves out, with that input's index and source type, oldest first. Files the running agent reads are left out, so the two never send the same line.
+- **A folder from anywhere.** `cabinet-agent import D:\old-logs --sourcetype L4D2 --index l4d2 --host l4d2-prod --tz America/Chicago --server https://cabinet:8443 --certificate-sha256 <fingerprint>`, with the key in the `CABINET_API_KEY` environment variable. It takes a folder (with subfolders, unless `--top-only`), a file, or a glob. The agent build for Windows, Linux and macOS is in each release.
+- **Safe to repeat.** Event IDs come from the host, the file's name and first line, and the line's position, so the server keeps one copy whether a file is imported again, from another folder, or after it grew. The same file under another `--host` counts as different.
+- **Gentle.** Files are read one at a time, at most `--rate` events a second (default 2000). `--dry-run` shows what it would send.
+- An interrupted import, or one that couldn't deliver everything, exits non-zero and says so. Run it again to finish.
+
 ### Agent limits
 
 - A file deleted before it's fully read loses its unread lines.

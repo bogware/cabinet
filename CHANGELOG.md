@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-11-10
+
+### Added
+
+- `cabinet-agent import` sends logs that already exist, once: the history an agent leaves out (older than `IgnoreOlderThanHours`), or any folder, file or glob from any machine. Each event's ID comes from the host, the file's name and first line, and the line's position, so importing again stores nothing twice, and files the running agent reads are left out. It reads one file at a time at a set rate (`--rate`, default 2000 events a second), and `--dry-run` shows what it would send.
+
 ## [2.3.5] - 2026-11-10
 
 ### Fixed

@@ -654,7 +654,7 @@ public sealed class FileMonitorService : BackgroundService
         return new Regex(regex.ToString(), options, TimeSpan.FromSeconds(1));
     }
 
-    private static bool IsExcluded(string filePath, List<string> excludePatterns)
+    internal static bool IsExcluded(string filePath, IReadOnlyList<string> excludePatterns)
     {
         if (excludePatterns.Count == 0) return false;
 

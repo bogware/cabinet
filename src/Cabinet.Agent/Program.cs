@@ -15,6 +15,11 @@ public static class Program
             return 0;
         }
 
+        if (args.Length > 0 && args[0] is "import")
+        {
+            return await Importing.ImportCommand.RunAsync(args[1..]);
+        }
+
         // Handle --validate flag (check config and exit)
         var validate = args.Length > 0 && args[0] is "--validate";
 
