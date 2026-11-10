@@ -10,6 +10,13 @@ All jobs run on `[self-hosted, Linux, X64]` while this repository is private. On
 
 Release, package and image jobs run only on tags or `main`.
 
+When the self-hosted runners can't be used, for example while one is out of disk, set the repository
+variable `CABINET_RUNNER` to `github` (`gh variable set CABINET_RUNNER --body github`) and every job
+runs on GitHub-hosted `ubuntu-latest`. Delete the variable (`gh variable delete CABINET_RUNNER`) to go
+back. It applies to runs started after it changes; a re-run uses the workflow from the original
+commit. It's an organization-level decision, not one a pull request can make, since pull requests
+can't set repository variables.
+
 Pull requests from forks don't run at all: `build-and-test` runs for a pull request only when its
 branch is in this repository, and every other job needs it. Self-hosted runners keep state between
 jobs and can reach Docker, so code from a fork must never reach them.

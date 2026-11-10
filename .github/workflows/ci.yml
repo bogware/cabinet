@@ -28,7 +28,7 @@ jobs:
     # A pull request from a fork runs code anyone wrote, and self-hosted runners keep state
     # between jobs and can reach Docker. Those wait for GitHub-hosted runners (docs/CI.md).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -124,7 +124,7 @@ jobs:
     name: Build ${{ matrix.artifact_name }}
     needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -226,7 +226,7 @@ jobs:
     name: Build .deb packages
     needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -477,7 +477,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [release, build-deb]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     permissions:
       contents: write
     steps:
@@ -537,7 +537,7 @@ jobs:
     name: Docker Build & Push
     needs: build-and-test
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     permissions:
       contents: read
       packages: write
