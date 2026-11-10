@@ -248,6 +248,36 @@ public sealed class FileMonitorDeliveryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FileEmptyForAWhile_IsReadOnceWritten()
+    {
+        // A game server with buffered logging creates its daily file at once but writes nothing
+        // to it for hours. Found live: none of that file ever reached the server.
+        await File.WriteAllTextAsync(LogFile, string.Empty);
+        await StartAgent(input => input.CloseInactiveSeconds = 1);
+
+        // Longer than the inactivity limit, with scans seeing it unchanged
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        await File.AppendAllTextAsync(LogFile, "first\nsecond\n");
+        await WaitForStored(2);
+        await Settle();
+        StoredShouldBe("first", "second");
+    }
+
+    [Fact]
+    public async Task FileWithNoCompleteLineForAWhile_IsReadOnceWritten()
+    {
+        await File.WriteAllTextAsync(LogFile, "L 11/09/2026 - 07:12:05: Log file sta");
+        await StartAgent(input => input.CloseInactiveSeconds = 1);
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        await File.AppendAllTextAsync(LogFile, "rted\nRound_Start\n");
+        await WaitForStored(2);
+        await Settle();
+        StoredShouldBe("L 11/09/2026 - 07:12:05: Log file started", "Round_Start");
+    }
+
+    [Fact]
     public async Task PartialLine_IsSentOnceComplete()
     {
         await File.WriteAllTextAsync(LogFile, "first\npart");

@@ -14,4 +14,12 @@
     <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- On Linux, .NET takes an advisory shared lock on every file it opens. Programs that hold an
+         exclusive lock on the log they're writing, such as Source game servers, then keep the
+         agent out until they close the file, which for a daily log is a day. The agent only
+         reads, so it doesn't need the lock. -->
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
+  </ItemGroup>
+
 </Project>

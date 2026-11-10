@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-11-09
+
+### Fixed
+
+- On Linux, the agent couldn't read a log file while the program writing it held a lock on it, as Source game servers do, so lines arrived only once that program closed the file: a map late on a busy server, and up to a day late for a daily log. The agent no longer takes file locks, since it only reads. Found on the L4D2 servers, where two of three game servers' logs were arriving the next morning.
+- The agent now warns when a file stays unopenable for a minute, instead of retrying silently.
+
 ## [2.3.2] - 2026-11-09
 
 ### Fixed

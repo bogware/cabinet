@@ -35,6 +35,9 @@ public sealed class FileMonitorService : BackgroundService
     private readonly ConcurrentDictionary<string, (long Length, DateTime Written)> _closed = new(FileStateRegistry.PathComparer);
     private readonly TimeSpan _pollInterval;
 
+    // How long a file can refuse to open before it's worth a warning
+    private static readonly TimeSpan UnopenableWarningAfter = TimeSpan.FromMinutes(1);
+
     public FileMonitorService(
         AgentConfiguration config,
         FileStateRegistry registry,
@@ -432,12 +435,20 @@ public sealed class FileMonitorService : BackgroundService
 
     private async Task<FileStream?> OpenWhenReadableAsync(string filePath, CancellationToken cancellationToken)
     {
+        var since = DateTime.UtcNow;
+        var warned = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (warned)
+                {
+                    _logger.LogInformation("Opened {Path} after {Seconds:N0} s", filePath, (DateTime.UtcNow - since).TotalSeconds);
+                }
+
+                return stream;
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -445,7 +456,17 @@ public sealed class FileMonitorService : BackgroundService
             }
             catch (IOException ex)
             {
-                _logger.LogDebug(ex, "IO error opening {Path}, will retry", filePath);
+                // Retrying silently hid a file that stayed unreadable all day
+                if (!warned && DateTime.UtcNow - since >= UnopenableWarningAfter)
+                {
+                    _logger.LogWarning("Can't open {Path} for {Seconds:N0} s, still trying: {Message}", filePath, (DateTime.UtcNow - since).TotalSeconds, ex.Message);
+                    warned = true;
+                }
+                else
+                {
+                    _logger.LogDebug(ex, "IO error opening {Path}, will retry", filePath);
+                }
+
                 await Task.Delay(_pollInterval, cancellationToken);
             }
         }
