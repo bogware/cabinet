@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.5] - 2026-11-10
+
+### Fixed
+
+- `replace` wrote `\1` literally instead of the first captured group, the form Splunk users write; only .NET's `$1` worked. Both work now, and `\\` is a backslash.
+
 ## [2.3.4] - 2026-11-09
 
 This release includes everything planned for 2.3.3, which was never published.

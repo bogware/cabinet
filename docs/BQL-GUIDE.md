@@ -337,7 +337,7 @@ An unknown function or an invalid regular expression makes the query fail with a
 | `trim(s)` | Trim whitespace | `eval t = trim(name)` |
 | `ltrim(s)` / `rtrim(s)` | Left/right trim | `eval t = ltrim(name)` |
 | `substr(s, start, len)` | Substring | `eval prefix = substr(id, 0, 4)` |
-| `replace(s, regex, repl)` | Regex replace | `eval clean = replace(msg, "\d+", "N")` |
+| `replace(s, regex, repl)` | Regex replace. In `repl`, `\1` (or `$1`) is the first group and `\\` a backslash | `eval user = replace(path, "^/home/([^/]+)/.*", "\1")` |
 | `split(s, delim)` | Split to array | `eval parts = split(path, "/")` |
 | `startswith(s, prefix)` | Starts with check | `eval is_web = startswith(host, "web")` |
 | `endswith(s, suffix)` | Ends with check | `eval is_log = endswith(file, ".log")` |

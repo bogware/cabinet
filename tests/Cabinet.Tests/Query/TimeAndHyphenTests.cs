@@ -60,3 +60,25 @@ public sealed class TimeAndHyphenTests
         (await RunAsync(query)).Should().HaveCount(2);
     }
 }
+
+public sealed class ReplaceBackreferenceTests
+{
+    [Theory]
+    [InlineData(@"^/home/([^/]+)/.*", @"\1", "campaign")]
+    [InlineData(@"^/home/([^/]+)/.*", "$1", "campaign")]
+    [InlineData(@"^/home/([^/]+)/(\w+).*", @"\2-\1", "Steam-campaign")]
+    [InlineData("home", @"\\", @"/\/campaign/Steam/x.log")]
+    [InlineData(@"x\.log", "costs $5", "/home/campaign/Steam/costs $5")]
+    public void Replace_SupportsSplunkStyleBackreferences(string pattern, string replacement, string expected)
+    {
+        var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["path"] = "/home/campaign/Steam/x.log" };
+        var expression = new FunctionExpression("replace",
+        [
+            new FieldExpression("path"),
+            new LiteralExpression(pattern),
+            new LiteralExpression(replacement),
+        ]);
+
+        BqlExpressionEvaluator.Evaluate(expression, row).Should().Be(expected);
+    }
+}

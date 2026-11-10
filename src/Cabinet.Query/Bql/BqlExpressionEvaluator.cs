@@ -361,6 +361,46 @@ public static class BqlExpressionEvaluator
         return null;
     }
 
+    /// <summary>
+    /// Replacements as in SPL: <c>\1</c> is the first group and <c>\\</c> a backslash. .NET's own
+    /// <c>$1</c> works too.
+    /// </summary>
+    private static string SplunkReplacement(string replacement)
+    {
+        const char Backslash = '\\';
+        if (!replacement.Contains(Backslash))
+        {
+            return replacement;
+        }
+
+        var result = new StringBuilder(replacement.Length + 8);
+        for (var i = 0; i < replacement.Length; i++)
+        {
+            var c = replacement[i];
+            if (c == Backslash && i + 1 < replacement.Length)
+            {
+                var next = replacement[i + 1];
+                if (char.IsAsciiDigit(next))
+                {
+                    result.Append("${").Append(next).Append('}');
+                    i++;
+                    continue;
+                }
+
+                if (next == Backslash)
+                {
+                    result.Append(Backslash);
+                    i++;
+                    continue;
+                }
+            }
+
+            result.Append(c);
+        }
+
+        return result.ToString();
+    }
+
     private static object? EvalReplace(List<object?> args)
     {
         var str = args.ElementAtOrDefault(0)?.ToString();
@@ -370,7 +410,7 @@ public static class BqlExpressionEvaluator
 
         try
         {
-            return Regex.Replace(str, pattern, replacement, RegexOptions.None, RegexTimeout);
+            return Regex.Replace(str, pattern, SplunkReplacement(replacement), RegexOptions.None, RegexTimeout);
         }
         catch (ArgumentException ex)
         {
