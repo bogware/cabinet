@@ -73,7 +73,7 @@ public static partial class QueryCompletions
 
         void Add(string candidate, string kind, string description)
         {
-            if (results.Count < Most && candidate.StartsWith(word, StringComparison.OrdinalIgnoreCase)
+            if (results.Count < Most && candidate.Trim('"').StartsWith(word.Trim('"'), StringComparison.OrdinalIgnoreCase)
                 && !(candidate.Equals(word, StringComparison.OrdinalIgnoreCase) && kind != "value")
                 && !results.Any(r => r.Text.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
             {
@@ -84,9 +84,12 @@ public static partial class QueryCompletions
         // Values of the field just named: "host=" or "user is "
         if (AfterFieldEquals().Match(context) is { Success: true } equals && catalog.Field(equals.Groups["field"].Value) is { } valued)
         {
+            // In a stage, text is quoted, or "web-01" would read as web minus 01
+            var quote = context.Contains('|');
             foreach (var value in catalog.Values(valued).OrderBy(v => v, StringComparer.OrdinalIgnoreCase))
             {
-                Add(value, "value", $"A {valued} in your data");
+                var numeric = double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
+                Add(quote && !numeric ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"" : value, "value", $"A {valued} in your data");
             }
 
             return results;

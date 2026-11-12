@@ -122,8 +122,9 @@ public sealed class NaturalQueryControllerTests
     }
 
     [Theory]
-    [InlineData("find * | where host=", "web-01", "value")]
-    [InlineData("find * | where user is a", "alice", "value")]
+    [InlineData("find * | where host=", "\"web-01\"", "value")]
+    [InlineData("find * | where user is a", "\"alice\"", "value")]
+    [InlineData("host=", "web-01", "value")]
     [InlineData("find * | ", "stats", "command")]
     [InlineData("find * | stats count by st", "status", "field")]
     [InlineData("find * | stats ", "avg(", "function")]

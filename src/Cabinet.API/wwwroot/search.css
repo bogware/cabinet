@@ -174,3 +174,42 @@ body.light .q-field { color: #116329; }
     .sx-event-detail td:first-child { width: auto; }
     .sx-index { max-width: none; flex: 1 1 100%; }
 }
+
+/* Problems in the query, underlined in an overlay that lines up with the text */
+.sx-problems { background: transparent; color: transparent; z-index: 2; }
+.sx-problems mark.sx-problem { background: transparent; color: transparent; text-decoration: underline wavy var(--error, #f85149); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+
+/* What a search was understood as */
+.sx-understood { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--bg-secondary); font-size: 13px; }
+.sx-understood.unclear { border-left-color: var(--warning, #d29922); }
+.sx-understood.preview { border-style: dashed; border-left-style: solid; opacity: .92; }
+.sx-understood-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.sx-understood-head strong { color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+.sx-understood code { font: 12.5px/18px 'SF Mono', 'Fira Code', Consolas, monospace; color: var(--text-primary); word-break: break-word; }
+.sx-understood-say { color: var(--text-secondary); }
+.sx-understood-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.sx-chip { font-size: 12px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); cursor: pointer; }
+.sx-chip:hover, .sx-chip:focus-visible { border-color: var(--accent); }
+.sx-chip.fix { border-color: var(--accent); color: var(--accent); }
+.sx-chip .sx-chip-note { color: var(--text-secondary); margin-left: 4px; }
+.sx-correction { font-size: 12px; color: var(--text-secondary); }
+.sx-correction s { color: var(--text-muted); }
+
+/* Building a search by picking */
+.sx-builder { padding: 14px; margin-bottom: 10px; }
+.sx-builder-grid { display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px; align-items: center; font-size: 13px; }
+.sx-builder-grid > label, .sx-builder-label { color: var(--text-secondary); }
+.sx-builder input, .sx-builder select { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font-size: 13px; max-width: 100%; }
+.sx-builder-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-start; }
+.sx-builder-cond { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.sx-builder-out { display: flex; gap: 10px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.sx-builder-out code { flex: 1; font: 12.5px 'SF Mono', 'Fira Code', Consolas, monospace; word-break: break-word; }
+@media (max-width: 640px) { .sx-builder-grid { grid-template-columns: 1fr; } }
+
+/* Starter questions */
+.sx-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; text-align: left; }
+.sx-gallery-group h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.sx-gallery-group button { display: block; width: 100%; text-align: left; margin-bottom: 6px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; font-size: 13px; }
+.sx-gallery-group button:hover, .sx-gallery-group button:focus-visible { border-color: var(--accent); }
+.sx-gallery-group button code { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-understood[hidden], .sx-builder[hidden] { display: none; }

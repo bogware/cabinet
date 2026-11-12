@@ -548,9 +548,10 @@
                     </select>
                     <div class="sx-editor">
                         <pre class="sx-highlight" id="queryHighlight" aria-hidden="true"></pre>
+                        <pre class="sx-highlight sx-problems" id="queryProblems" aria-hidden="true"></pre>
                         <textarea id="queryInput" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off"
-                            aria-label="Query" aria-autocomplete="list" aria-controls="querySuggestions" aria-expanded="false"
-                            placeholder="Search text or BQL: error, find Banid, find * | stats count by Map  (press / to focus, Enter to run)"></textarea>
+                            aria-label="Query" aria-autocomplete="list" aria-controls="querySuggestions" aria-expanded="false" aria-describedby="searchUnderstood"
+                            placeholder="Ask in plain words or write BQL: errors by host since yesterday, find * | stats count by host  (press / to focus, Enter to run)"></textarea>
                         <div class="sx-suggest" id="querySuggestions" role="listbox" aria-label="Suggestions"></div>
                     </div>
                     <div class="sx-time">
@@ -574,6 +575,7 @@
                         </div>
                     </div>
                     <button type="button" class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
+                    <button type="button" class="btn btn-secondary" id="builderButton" data-click="toggleBuilder" aria-expanded="false" aria-controls="queryBuilder" title="Build a search by picking fields">Build</button>
                     <div class="sx-more">
                         <button type="button" class="btn btn-secondary" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">&#8943;</button>
                         <div class="sx-menu" id="searchMenu" role="menu" hidden>
@@ -586,6 +588,43 @@
                         </div>
                     </div>
                 </div>
+                <div class="sx-understood" id="searchUnderstood" aria-live="polite" hidden></div>
+                <section class="panel sx-builder" id="queryBuilder" aria-label="Build a search" hidden>
+                    <div class="sx-builder-grid">
+                        <label for="builderWords">Containing the words</label>
+                        <input type="text" id="builderWords" placeholder="Any words, or leave empty for every event">
+                        <label for="builderTime">When</label>
+                        <select id="builderTime">
+                            <option value="">Whatever the time picker says</option><option value="15m">Last 15 minutes</option><option value="1h">Last hour</option>
+                            <option value="4h">Last 4 hours</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+                            <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option>
+                        </select>
+                        <span class="sx-builder-label">Where</span>
+                        <div><div id="builderConditions"></div><button type="button" class="btn btn-secondary btn-sm" data-click="addBuilderCondition">+ Condition</button></div>
+                        <label for="builderShow">Show</label>
+                        <div class="sx-builder-row">
+                            <select id="builderShow">
+                                <option value="events">The events</option><option value="count">How many</option><option value="measure">A measure</option>
+                                <option value="top">Most common values</option><option value="rare">Least common values</option><option value="overtime">A chart over time</option>
+                                <option value="table">Chosen columns</option>
+                            </select>
+                            <select id="builderFn" aria-label="Measure">
+                                <option value="avg">average</option><option value="sum">total</option><option value="max">highest</option><option value="min">lowest</option>
+                                <option value="median">median</option><option value="perc95">95th percentile</option><option value="perc99">99th percentile</option><option value="dc">distinct count</option>
+                            </select>
+                            <select id="builderField" aria-label="Field"></select>
+                            <select id="builderColumns" aria-label="Columns" multiple size="3"></select>
+                        </div>
+                        <label for="builderBy">For each</label>
+                        <select id="builderBy" aria-label="Group by"><option value="">(nothing)</option></select>
+                        <label for="builderLimit">At most</label>
+                        <input type="number" id="builderLimit" min="1" placeholder="All">
+                    </div>
+                    <div class="sx-builder-out">
+                        <code id="builderQuery"></code>
+                        <button type="button" class="btn btn-primary btn-sm" data-click="useBuilderQuery">Search</button>
+                    </div>
+                </section>
                 <div class="sx-recent" id="queryHistory" aria-label="Recent searches"></div>
                 <div class="alert alert-error" id="searchError" role="alert"></div>
                 <div class="sx-status" id="searchStatus" aria-live="polite"></div>

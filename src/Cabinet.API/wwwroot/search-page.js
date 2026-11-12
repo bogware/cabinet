@@ -26,6 +26,10 @@ const searchState = {
     running: 0,
     ranQuery: '',
     suggestion: { items: [], active: -1, from: 0, to: 0 },
+    understood: null,
+    examples: [],
+    catalog: null,
+    builder: { conditions: [] },
 };
 
 const SEARCH_EXAMPLES = [
@@ -64,9 +68,12 @@ function initSearchPage() {
     loadSearchIndexes();
 
     const input = document.getElementById('queryInput');
-    input.addEventListener('input', () => { syncEditor(); updateSuggestions(); });
+    input.addEventListener('input', () => { syncEditor(); updateSuggestions(); schedulePreview(); });
     input.addEventListener('keydown', onEditorKey);
-    input.addEventListener('scroll', () => { document.getElementById('queryHighlight').scrollTop = input.scrollTop; });
+    input.addEventListener('scroll', () => {
+        document.getElementById('queryHighlight').scrollTop = input.scrollTop;
+        document.getElementById('queryProblems').scrollTop = input.scrollTop;
+    });
     input.addEventListener('focus', updateSuggestions);
     input.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
     input.addEventListener('click', updateSuggestions);
@@ -88,7 +95,14 @@ function initSearchPage() {
     window.addEventListener('hashchange', () => restoreSearchFromHash(false));
     window.addEventListener('resize', () => { if (searchState.buckets.length && !document.getElementById('timelinePanel').hidden) renderTimeline(); });
 
+    ['builderWords', 'builderTime', 'builderShow', 'builderFn', 'builderField', 'builderColumns', 'builderBy', 'builderLimit'].forEach(id => {
+        const el = document.getElementById(id);
+        el.addEventListener('input', renderBuilderQuery);
+        el.addEventListener('change', renderBuilderQuery);
+    });
+
     syncEditor();
+    loadExamples();
     restoreSearchFromHash(true);
 }
 
@@ -132,6 +146,8 @@ function setQuery(text) {
 
 function syncEditor() {
     const input = document.getElementById('queryInput');
+    // Marks belong to the text they were made for
+    document.getElementById('queryProblems').innerHTML = '';
     // A trailing newline keeps the overlay's last line as tall as the textarea's
     document.getElementById('queryHighlight').innerHTML = CabinetSearch.highlightQuery(input.value) + '\n';
     input.style.height = 'auto';
@@ -155,14 +171,37 @@ function updateSuggestions() {
     if (input.value.trim() === '') {
         const history = storedJson('cabinet_query_history', []);
         items = [...history.slice(0, 6).map(q => ({ label: q, kind: 'recent', insert: q })),
-            ...SEARCH_EXAMPLES.filter(q => !history.includes(q)).map(q => ({ label: q, kind: 'example', insert: q }))];
+            ...(searchState.examples.length ? searchState.examples.map(e => e.text) : SEARCH_EXAMPLES)
+                .filter(q => !history.includes(q)).slice(0, 8).map(q => ({ label: q, kind: 'example', insert: q }))];
     } else {
         const result = CabinetSearch.complete(input.value, input.selectionStart, knownFields());
         items = result.items;
         from = result.from;
         to = result.to;
+        requestServerCompletions(input.value, input.selectionStart, items, from, to);
     }
 
+    showSuggestions(items, from, to);
+}
+
+let completionRequest = 0;
+
+/** Adds values from the data and question starters to the page's own suggestions, when they arrive. */
+async function requestServerCompletions(text, caret, local, from, to) {
+    const ask = ++completionRequest;
+    try {
+        const server = await api('GET', `/api/v1/query/complete?text=${encodeURIComponent(text)}&cursor=${caret}`);
+        const input = document.getElementById('queryInput');
+        if (ask !== completionRequest || input.value !== text || document.activeElement !== input) return;
+        showSuggestions(CabinetSearch.mergeCompletions(local, server, from, to), from, to);
+    } catch (e) {
+        // The page's own suggestions are enough without these
+    }
+}
+
+function showSuggestions(items, from, to) {
+    const box = document.getElementById('querySuggestions');
+    const input = document.getElementById('queryInput');
     searchState.suggestion = { items, active: items.length ? 0 : -1, from, to };
     if (items.length === 0) { hideSuggestions(); return; }
     box.innerHTML = items.map((item, i) =>
@@ -175,6 +214,8 @@ function updateSuggestions() {
 }
 
 function hideSuggestions() {
+    // Suggestions still on their way are for text that's no longer being typed
+    completionRequest++;
     document.getElementById('querySuggestions').classList.remove('show');
     const input = document.getElementById('queryInput');
     input.setAttribute('aria-expanded', 'false');
@@ -200,8 +241,8 @@ function acceptSuggestion(index) {
     if (item.kind === 'recent' || item.kind === 'example') {
         input.value = item.insert;
     } else {
-        const before = input.value.slice(0, s.from);
-        const after = input.value.slice(s.to);
+        const before = input.value.slice(0, item.from ?? s.from);
+        const after = input.value.slice(item.to ?? s.to);
         const insert = item.insert + (item.insert.endsWith('(') || item.insert.endsWith(' ') || item.insert.endsWith('=') ? '' : ' ');
         input.value = before + insert + after;
         const caret = before.length + insert.length;
@@ -306,12 +347,13 @@ function zoomOut() {
 
 /* ===== Running ===== */
 
-async function executeQuery() {
+async function executeQuery(exactQuery) {
     const input = document.getElementById('queryInput');
-    const query = input.value.trim() || 'find *';
+    const typed = input.value.trim() || 'find *';
     const errorBox = document.getElementById('searchError');
     const button = document.getElementById('searchBtn');
     hideSuggestions();
+    clearTimeout(previewTimer);
     errorBox.style.display = 'none';
     renderTimeButton();
 
@@ -319,8 +361,37 @@ async function executeQuery() {
     button.disabled = true;
     renderStatus({ loading: true });
 
+    // Plain words become BQL first, so the timeline, fields and charts work from the real query
+    let query = typeof exactQuery === 'string' ? exactQuery : typed;
+    if (typeof exactQuery !== 'string') {
+        try {
+            const understood = await api('POST', '/api/v1/query/understand', { query: typed });
+            if (run !== searchState.running) return;
+            renderUnderstood(understood, false);
+            renderProblems(understood.problems);
+            if (!understood.willRun) {
+                // Results of the last search would read as an answer to this one
+                searchState.results = null;
+                searchState.rows = [];
+                searchState.buckets = [];
+                renderSearch();
+                renderStatus({ error: true });
+                button.disabled = false;
+                return;
+            }
+
+            query = understood.query;
+        } catch (e) {
+            // Without understanding, the server runs what was typed and says if it's wrong
+            renderUnderstood(null);
+        }
+    } else {
+        renderUnderstood(null);
+        renderProblems([]);
+    }
+
     const range = queryHasOwnTime(query) ? { start: null, end: null } : CabinetSearch.resolveRange(searchState.range);
-    const body = { query, index: searchState.index || undefined };
+    const body = { query, exact: true, index: searchState.index || undefined };
     if (range.start !== null) body.startTime = new Date(range.start).toISOString();
     if (range.end !== null) body.endTime = new Date(range.end).toISOString();
     const isEvents = CabinetSearch.returnsEvents(query);
@@ -365,7 +436,7 @@ async function executeQuery() {
             searchState.total = null;
         }
 
-        addToHistory(searchState.ranQuery || query);
+        addToHistory(typed);
         history.replaceState({ page: 'search' }, '', '/' + CabinetSearch.encodeState({ query: searchState.ranQuery, range: searchState.range, index: searchState.index }));
         // Events open on Events (or the table, if chosen); a computed result opens as a chart when it can be drawn
         if (isEvents && searchState.view === 'chart') searchState.view = 'events';
@@ -681,9 +752,217 @@ function renderResultsView() {
 }
 
 function renderEmptyState() {
-    const list = SEARCH_EXAMPLES.map(q => `<li><button type="button" data-click="runExample" data-args="${esc(JSON.stringify([q]))}">${esc(q)}</button></li>`).join('');
     const stored = typeof storedEventCount === 'number' ? `<p>${fmt(storedEventCount)} events stored.</p>` : '';
-    document.getElementById('searchEmpty').innerHTML = `${stored}Type a search above, or start with one of these:<ul>${list}</ul>`;
+    const examples = searchState.examples.length
+        ? searchState.examples
+        : SEARCH_EXAMPLES.map(q => ({ category: 'Examples', text: q, query: q }));
+    const groups = {};
+    examples.forEach(e => (groups[e.category] = groups[e.category] || []).push(e));
+    const gallery = Object.entries(groups).map(([category, items]) =>
+        `<div class="sx-gallery-group"><h4>${esc(category)}</h4>` +
+        items.map(e => `<button type="button" data-click="runExample" data-args="${esc(JSON.stringify([e.text]))}">${esc(e.text)}` +
+            `${e.query && e.query !== e.text ? `<code>${esc(e.query)}</code>` : ''}</button>`).join('') + '</div>').join('');
+    document.getElementById('searchEmpty').innerHTML =
+        `${stored}<p>Ask in plain words or write BQL. Start with one of these, or press <kbd>Build</kbd> to pick fields:</p><div class="sx-gallery">${gallery}</div>`;
+}
+
+/** Starter questions that fit the data the caller can read. */
+async function loadExamples() {
+    try {
+        const examples = await api('GET', '/api/v1/query/examples');
+        if (Array.isArray(examples)) {
+            searchState.examples = examples;
+            if (!searchState.results) renderEmptyState();
+        }
+    } catch (e) {
+        // The built-in examples stay
+    }
+}
+
+/* ===== Understanding ===== */
+
+let previewTimer = null;
+let previewRequest = 0;
+
+/** After a pause in typing, says what the search would run as, and marks problems. */
+function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(previewUnderstanding, 450);
+}
+
+async function previewUnderstanding() {
+    const text = document.getElementById('queryInput').value.trim();
+    const ask = ++previewRequest;
+    if (!text) { renderUnderstood(null); renderProblems([]); return; }
+    try {
+        const understood = await api('POST', '/api/v1/query/understand', { query: text });
+        if (ask !== previewRequest || document.getElementById('queryInput').value.trim() !== text) return;
+        // Half-typed queries are often unclear; underline them, and say more only when searching
+        renderUnderstood(understood.willRun ? understood : null, true);
+        renderProblems(understood.problems);
+    } catch (e) {
+        // Previews are a nicety; searching still says what's wrong
+    }
+}
+
+function renderProblems(problems) {
+    const input = document.getElementById('queryInput');
+    document.getElementById('queryProblems').innerHTML = CabinetSearch.markProblems(input.value, problems || []) + '\n';
+}
+
+/** Shows what a search was (or would be) understood as. Hidden for a query run exactly as typed. */
+function renderUnderstood(u, preview) {
+    const box = document.getElementById('searchUnderstood');
+    searchState.understood = u;
+    if (!u || (u.kind === 'exact' && !(u.problems || []).length)) { box.hidden = true; box.innerHTML = ''; return; }
+
+    const chips = [];
+    (u.problems || []).forEach((p, i) => {
+        if (p.fix) chips.push(`<button type="button" class="sx-chip fix" data-click="applyProblemFix" data-args="[${i}]">Fix: <code>${esc(p.fix)}</code></button>`);
+    });
+    (u.alternatives || []).forEach((a, i) => {
+        chips.push(`<button type="button" class="sx-chip" data-click="runAlternative" data-args="[${i}]">${esc(a.description)}<span class="sx-chip-note">${esc(a.query)}</span></button>`);
+    });
+    if (u.suggestAssistant) chips.push('<button type="button" class="sx-chip" data-click="askAssistant">Ask the assistant</button>');
+
+    const corrections = (u.corrections || []).map(c => `<span class="sx-correction"><s>${esc(c.from)}</s> &rarr; ${esc(c.to)}</span>`).join(' ');
+    let head;
+    if (!u.willRun) {
+        const message = (u.problems || [])[0]?.message || "Couldn't tell what this asks for.";
+        head = `<div class="sx-understood-head"><strong>Not sure what you mean.</strong><span>${esc(message)}</span></div>`;
+    } else {
+        const label = preview ? 'Will search' : (u.kind === 'corrected' ? 'Corrected to' : 'Understood as');
+        head = `<div class="sx-understood-head"><strong>${label}</strong><code>${CabinetSearch.highlightQuery(u.query || '')}</code>` +
+            `<button type="button" class="sx-chip" data-click="editUnderstood">Edit</button></div>` +
+            (u.explanation ? `<div class="sx-understood-say">${esc(u.explanation)}</div>` : '');
+    }
+
+    box.className = 'sx-understood' + (u.willRun ? '' : ' unclear') + (preview ? ' preview' : '');
+    box.innerHTML = head + (corrections ? `<div>Read ${corrections}</div>` : '') + (chips.length ? `<div class="sx-understood-actions">${chips.join('')}</div>` : '');
+    box.hidden = false;
+}
+
+/** Puts the understood BQL in the box to change it by hand. */
+function editUnderstood() {
+    const u = searchState.understood;
+    if (!u || !u.query) return;
+    setQuery(u.query);
+    renderUnderstood(null);
+    renderProblems([]);
+    document.getElementById('queryInput').focus();
+}
+
+/** Runs one of the other readings, exactly. */
+function runAlternative(index) {
+    const u = searchState.understood;
+    const choice = u && (u.alternatives || [])[index];
+    if (!choice) return;
+    setQuery(choice.query);
+    executeQuery(choice.query);
+}
+
+function applyProblemFix(index) {
+    const u = searchState.understood;
+    const problem = u && (u.problems || [])[index];
+    if (!problem || !problem.fix) return;
+    setQuery(problem.fix);
+    executeQuery();
+}
+
+/** Hands the question to the AI investigator, which runs searches with the same access. */
+function askAssistant() {
+    const question = document.getElementById('queryInput').value.trim();
+    if (typeof navigate === 'function') navigate('investigate');
+    const box = document.getElementById('investigateQuestion');
+    if (box) { box.value = question; box.focus(); }
+}
+
+/* ===== Building a search by picking ===== */
+
+async function toggleBuilder() {
+    const panel = document.getElementById('queryBuilder');
+    const button = document.getElementById('builderButton');
+    panel.hidden = !panel.hidden;
+    button.setAttribute('aria-expanded', String(!panel.hidden));
+    if (panel.hidden) return;
+    if (!searchState.catalog) {
+        try { searchState.catalog = await api('GET', '/api/v1/query/catalog'); }
+        catch (e) { searchState.catalog = { fields: Object.keys(CabinetSearch.BUILTIN_FIELDS), values: {} }; }
+        const options = searchState.catalog.fields.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+        document.getElementById('builderField').innerHTML = options;
+        document.getElementById('builderColumns').innerHTML = options;
+        document.getElementById('builderBy').innerHTML = '<option value="">(nothing)</option>' + options;
+        if (!searchState.builder.conditions.length) addBuilderCondition();
+    }
+
+    renderBuilderQuery();
+    document.getElementById('builderWords').focus();
+}
+
+function addBuilderCondition() {
+    searchState.builder.conditions.push({ field: '', op: '=', value: '' });
+    renderBuilderConditions();
+}
+
+function removeBuilderCondition(index) {
+    searchState.builder.conditions.splice(index, 1);
+    renderBuilderConditions();
+}
+
+function renderBuilderConditions() {
+    const fields = (searchState.catalog && searchState.catalog.fields) || [];
+    const ops = [['=', 'is'], ['!=', 'is not'], ['>', 'over'], ['>=', 'at least'], ['<', 'under'], ['<=', 'at most'], ['contains', 'contains'], ['starts', 'starts with'], ['exists', 'exists'], ['missing', 'is missing']];
+    document.getElementById('builderConditions').innerHTML = searchState.builder.conditions.map((c, i) => {
+        const values = ((searchState.catalog && searchState.catalog.values) || {})[c.field] || [];
+        return `<div class="sx-builder-cond">` +
+            `<select data-cond="${i}" data-part="field" aria-label="Field"><option value="">Field...</option>${fields.map(f => `<option${f === c.field ? ' selected' : ''}>${esc(f)}</option>`).join('')}</select>` +
+            `<select data-cond="${i}" data-part="op" aria-label="Comparison">${ops.map(([v, l]) => `<option value="${esc(v)}"${v === c.op ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>` +
+            `<input data-cond="${i}" data-part="value" aria-label="Value" list="builderValues${i}" value="${esc(c.value)}" placeholder="Value">` +
+            `<datalist id="builderValues${i}">${values.map(v => `<option value="${esc(v)}">`).join('')}</datalist>` +
+            `<button type="button" class="btn btn-secondary btn-sm" data-click="removeBuilderCondition" data-args="[${i}]" aria-label="Remove condition">&times;</button></div>`;
+    }).join('');
+    document.querySelectorAll('#builderConditions [data-cond]').forEach(el => {
+        const update = () => {
+            const c = searchState.builder.conditions[+el.dataset.cond];
+            const changedField = el.dataset.part === 'field' && c.field !== el.value;
+            c[el.dataset.part] = el.value;
+            if (changedField) renderBuilderConditions(); else renderBuilderQuery();
+        };
+        el.addEventListener('input', update);
+        el.addEventListener('change', update);
+    });
+    renderBuilderQuery();
+}
+
+function builderSpec() {
+    const show = document.getElementById('builderShow').value;
+    const field = document.getElementById('builderField').value;
+    const by = document.getElementById('builderBy').value;
+    document.getElementById('builderFn').hidden = !(show === 'measure' || show === 'overtime');
+    document.getElementById('builderField').hidden = !(show === 'measure' || show === 'overtime' || show === 'top' || show === 'rare');
+    document.getElementById('builderColumns').hidden = show !== 'table';
+    return {
+        words: document.getElementById('builderWords').value,
+        time: document.getElementById('builderTime').value,
+        conditions: searchState.builder.conditions,
+        show,
+        field,
+        measure: show === 'measure' || (show === 'overtime' && field) ? { fn: document.getElementById('builderFn').value, field } : null,
+        by: by ? [by] : [],
+        columns: [...document.getElementById('builderColumns').selectedOptions].map(o => o.value),
+        limit: document.getElementById('builderLimit').value,
+    };
+}
+
+function renderBuilderQuery() {
+    if (document.getElementById('queryBuilder').hidden) return;
+    document.getElementById('builderQuery').innerHTML = CabinetSearch.highlightQuery(CabinetSearch.buildQuery(builderSpec()));
+}
+
+function useBuilderQuery() {
+    const query = CabinetSearch.buildQuery(builderSpec());
+    setQuery(query);
+    executeQuery(query);
 }
 
 function runExample(query) {

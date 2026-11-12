@@ -649,6 +649,26 @@ public class QueryController : ControllerBase
         return Ok(QueryCompletions.For(text, Math.Clamp(cursor ?? text.Length, 0, text.Length), catalog));
     }
 
+    /// <summary>
+    /// The fields in recent events you can read, with common values of those that have few, for
+    /// building a search by picking rather than typing.
+    /// </summary>
+    [HttpGet("catalog")]
+    [RequireCapability(Capability.Search)]
+    [ProducesResponseType(typeof(CatalogResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Catalog(CancellationToken cancellationToken)
+    {
+        var catalog = await CatalogAsync(cancellationToken);
+        var fields = catalog.Fields.Where(f => !f.StartsWith('_')).OrderBy(f => FieldCatalog.Builtin.Contains(f) ? 0 : 1).ThenBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+        return Ok(new CatalogResponse
+        {
+            Fields = fields,
+            Values = fields.Select(f => (Field: f, Values: catalog.Values(f).OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList()))
+                .Where(pair => pair.Values.Count > 0)
+                .ToDictionary(pair => pair.Field, pair => pair.Values),
+        });
+    }
+
     /// <summary>Starter questions, filled in with fields and hosts from your own data.</summary>
     [HttpGet("examples")]
     [RequireCapability(Capability.Search)]
@@ -1050,6 +1070,13 @@ public class QuerySuggestion
     public string Text { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
+}
+
+/// <summary>Fields and their common values.</summary>
+public class CatalogResponse
+{
+    public List<string> Fields { get; set; } = new();
+    public Dictionary<string, List<string>> Values { get; set; } = new();
 }
 
 public class UnderstandRequest
