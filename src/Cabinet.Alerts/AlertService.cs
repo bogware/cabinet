@@ -9,12 +9,15 @@ namespace Cabinet.Alerts;
 public class AlertService : IAlertService
 {
     private readonly ILogger<AlertService> _logger;
-    private readonly List<IAlertChannel> _channels = new();
+    private readonly object _channelsLock = new();
+
+    // Replaced, never changed, so a send can go through it while a channel is registered
+    private IAlertChannel[] _channels;
 
     public AlertService(ILogger<AlertService> logger, IEnumerable<IAlertChannel> channels)
     {
         _logger = logger;
-        _channels.AddRange(channels);
+        _channels = channels.ToArray();
     }
 
     public async Task SendAlertAsync(Alert alert, CancellationToken cancellationToken = default)
@@ -27,11 +30,17 @@ public class AlertService : IAlertService
 
     public void RegisterChannel(IAlertChannel channel)
     {
-        if (!_channels.Any(c => c.Name == channel.Name))
+        lock (_channelsLock)
         {
-            _channels.Add(channel);
-            _logger.LogInformation("Registered alert channel: {Channel}", channel.Name);
+            if (_channels.Any(c => c.Name == channel.Name))
+            {
+                return;
+            }
+
+            _channels = [.. _channels, channel];
         }
+
+        _logger.LogInformation("Registered alert channel: {Channel}", channel.Name);
     }
 
     public IEnumerable<IAlertChannel> GetChannels()

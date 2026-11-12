@@ -37,7 +37,7 @@ public class CloudWatchParser : BaseLogParser
         var timestampMatch = Regex.Match(line, @"^\[([^\]]+)\]\s*(.*)");
         if (timestampMatch.Success)
         {
-            if (DateTime.TryParse(timestampMatch.Groups[1].Value, out var timestamp))
+            if (DateTime.TryParse(timestampMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var timestamp))
             {
                 logEvent.Timestamp = timestamp.ToUniversalTime();
             }
@@ -71,13 +71,13 @@ public class CloudWatchParser : BaseLogParser
                 line = line.Substring(jsonStart);
             }
 
-            var doc = JsonDocument.Parse(line);
+            using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
 
             // Extract common JSON log fields
             if (root.TryGetProperty("timestamp", out var timestamp))
             {
-                if (DateTime.TryParse(timestamp.GetString(), out var dt))
+                if (DateTime.TryParse(timestamp.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
                 {
                     logEvent.Timestamp = dt.ToUniversalTime();
                 }
