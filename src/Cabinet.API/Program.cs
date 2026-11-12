@@ -93,6 +93,20 @@ try
     builder.Services.AddSingleton(serverLimits);
     Cabinet.Query.Bql.BqlEventMatcher.RegexTimeout = TimeSpan.FromMilliseconds(serverLimits.DetectionRegexTimeoutMs);
     Cabinet.Query.Bql.QueryRegex.PerEventTimeout = TimeSpan.FromMilliseconds(serverLimits.QueryRegexTimeoutMs);
+
+    // iplocation reads a MaxMind GeoLite2 or GeoIP2 City database, which people download themselves
+    if (builder.Configuration["GeoIp:DatabasePath"] is { Length: > 0 } geoIpPath)
+    {
+        try
+        {
+            Cabinet.Query.Bql.BqlGeoIp.Lookup = new Cabinet.Query.Bql.MaxMindGeoIpLookup(geoIpPath);
+            Log.Information("GeoIP database loaded from {Path}", geoIpPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or MaxMind.Db.InvalidDatabaseException)
+        {
+            Log.Error(ex, "Couldn't open the GeoIP database {Path}; iplocation won't work until it's fixed", geoIpPath);
+        }
+    }
     builder.WebHost.ConfigureKestrel(options =>
     {
         options.Limits.MaxRequestBodySize = serverLimits.MaxRequestBodyMB * ServerLimits.Megabyte;
@@ -105,7 +119,8 @@ try
     {
         builder.Services.AddControllers().ConfigureApplicationPartManager(manager =>
             manager.FeatureProviders.Add(new ExcludeControllersFeatureProvider(
-                typeof(Cabinet.API.Controllers.DetectionController))));
+                typeof(Cabinet.API.Controllers.DetectionController),
+                typeof(Cabinet.API.Controllers.ModerationController))));
     }
 
     builder.Services.AddSwaggerGen(options =>
@@ -165,16 +180,19 @@ try
         options.DefaultChallengeScheme = "MultiAuth";
     })
     .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>("ApiKey", null)
-    .AddPolicyScheme("MultiAuth", "API Key or Bearer", options =>
+    .AddPolicyScheme("MultiAuth", "API Key, Bearer or dashboard session", options =>
     {
         options.ForwardDefaultSelector = context =>
         {
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
                 return "Bearer";
+            if (Cabinet.API.Authentication.BrowserSession.UsesSession(context.Request))
+                return Cabinet.API.Authentication.BrowserSession.Scheme;
             return "ApiKey";
         };
-    });
+    })
+    .AddCabinetBrowserSession(ssoConfig);
 
     if (ssoConfig?.Enabled == true && ssoConfig.Oidc != null)
     {
@@ -479,19 +497,47 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         return backend;
     });
 
+    // The ingest pipeline runs first: what it drops is never stored or seen by detection, and
+    // what it redacts is redacted before either
+    services.AddSingleton<Cabinet.API.Services.IngestPipeline>();
     services.AddSingleton<ILogStorage>(sp =>
-        // Outermost, so that rules see what arrived rather than what was encrypted
-        new Cabinet.API.Services.DetectingLogStorage(
-            sp.GetRequiredKeyedService<ILogStorage>("base"),
-            sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>()));
+        new Cabinet.API.Services.PipelineLogStorage(
+            // Detection sees what arrived rather than what was encrypted
+            new Cabinet.API.Services.DetectingLogStorage(
+                sp.GetRequiredKeyedService<ILogStorage>("base"),
+                sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>(),
+                sp.GetService<Cabinet.API.Services.QueryCacheService>()),
+            sp.GetRequiredService<Cabinet.API.Services.IngestPipeline>()));
 
     services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
+
+    // Outbound calls people configure (webhook actions, connectors) can't reach private addresses
+    // unless allowed, and never follow redirects.
+    var outboundOptions = configuration.GetSection("Outbound").Get<Cabinet.API.Services.OutboundUrlOptions>() ?? new();
+    services.AddSingleton(outboundOptions);
+    services.AddSingleton<Cabinet.API.Services.OutboundUrlGuard>();
+    services.AddKeyedSingleton("outbound", (sp, _) =>
+        new HttpClient(sp.GetRequiredService<Cabinet.API.Services.OutboundUrlGuard>().CreateHandler()) { Timeout = TimeSpan.FromSeconds(15) });
+    services.AddSingleton<Cabinet.API.Services.ConnectorStore>();
+    services.AddSingleton(sp => new Cabinet.API.Services.ConnectorRunner(
+        sp.GetRequiredService<Cabinet.API.Services.ConnectorStore>(),
+        sp.GetRequiredKeyedService<HttpClient>("outbound"),
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.ConnectorRunner>>()));
+    services.AddSingleton<Cabinet.API.Services.IActionConnectorRunner>(sp => sp.GetRequiredService<Cabinet.API.Services.ConnectorRunner>());
+
     services.AddSingleton<Cabinet.API.Services.DetectionActionExecutor>(sp => new Cabinet.API.Services.DetectionActionExecutor(
         sp.GetRequiredService<IAlertHistoryStorage>(),
         sp.GetRequiredService<Cabinet.Alerts.IAlertService>(),
         sp.GetRequiredKeyedService<ILogStorage>("base"),
-        new HttpClient { Timeout = TimeSpan.FromSeconds(10) },
-        sp.GetRequiredService<ILogger<Cabinet.API.Services.DetectionActionExecutor>>()));
+        sp.GetRequiredKeyedService<HttpClient>("outbound"),
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.DetectionActionExecutor>>(),
+        masking: sp.GetRequiredService<FieldMaskingService>(),
+        background: true,
+        actionTimeout: TimeSpan.FromSeconds(configuration.GetValue("Detection:ActionTimeoutSeconds", 15)),
+        queueCapacity: configuration.GetValue("Detection:ActionQueueSize", 1000),
+        connectors: sp.GetRequiredService<Cabinet.API.Services.IActionConnectorRunner>()));
+    services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionActionExecutor>());
     services.AddSingleton<Cabinet.API.Services.DetectionRuleStore>();
     services.AddSingleton<Cabinet.API.Services.DetectionEngine>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
@@ -644,8 +690,68 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             sp.GetRequiredService<ILogger<Cabinet.API.Services.QueryCacheService>>(),
             TimeSpan.FromSeconds(queryResultTtl)));
 
+    // AI investigator: off unless turned on, and a local OpenAI-compatible server unless Claude is chosen
+    var investigatorOptions = configuration.GetSection("Ai").Get<Cabinet.API.Services.Investigator.InvestigatorOptions>() ?? new();
+    if (investigatorOptions.Enabled)
+    {
+        services.AddSingleton(investigatorOptions);
+        if (investigatorOptions.Provider.Equals("anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<Cabinet.API.Services.Investigator.IInvestigatorModel>(new Cabinet.API.Services.Investigator.ClaudeInvestigatorModel(investigatorOptions));
+        }
+        else
+        {
+            // Not the outbound client: the server is usually on this machine or network, which that one refuses
+            services.AddHttpClient("investigator", client => client.Timeout = TimeSpan.FromSeconds(Math.Clamp(investigatorOptions.TimeoutSeconds, 10, 900)));
+            services.AddSingleton<Cabinet.API.Services.Investigator.IInvestigatorModel>(sp => new Cabinet.API.Services.Investigator.OpenAiCompatibleModel(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("investigator"), investigatorOptions,
+                sp.GetRequiredService<ILogger<Cabinet.API.Services.Investigator.OpenAiCompatibleModel>>()));
+        }
+
+        services.AddScoped(sp => new Cabinet.API.Services.Investigator.InvestigatorService(
+            investigatorOptions,
+            sp.GetRequiredService<Cabinet.API.Services.Investigator.IInvestigatorModel>(),
+            sp.GetRequiredService<ILogStorage>(),
+            sp.GetRequiredService<FieldMaskingService>(),
+            sp.GetRequiredService<Cabinet.Query.Bql.QueryLimits>(),
+            sp.GetRequiredService<IAuditLogger>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetService<Cabinet.API.Services.FieldExtractor>(),
+            sp.GetService<IKnowledgeStorage>()));
+    }
+
     // Async search jobs — background execution for long-running queries
     services.AddHostedService<Cabinet.API.Services.SearchJobService>();
+
+    // Anomaly rules: baselines instead of thresholds, checked by the leader as each window ends
+    services.AddSingleton<Cabinet.API.Services.AnomalyRuleStore>();
+    services.AddSingleton<Cabinet.API.Services.CaseStore>();
+    services.AddSingleton<Cabinet.API.Services.ReportStore>();
+    services.AddSingleton<Cabinet.API.Services.ReportService>();
+    services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.ReportService>());
+
+    // Cold storage for events retention removes: a directory, or an S3 bucket
+    var archiveType = configuration["Archive:Type"];
+    if (string.Equals(archiveType, "Directory", StringComparison.OrdinalIgnoreCase))
+    {
+        var archivePath = configuration["Archive:Path"] ?? "archive";
+        services.AddSingleton<Cabinet.API.Services.Archive.IEventArchive>(_ => new Cabinet.API.Services.Archive.DirectoryEventArchive(archivePath));
+    }
+    else if (string.Equals(archiveType, "S3", StringComparison.OrdinalIgnoreCase) && configuration["Archive:S3Bucket"] is { Length: > 0 } archiveBucket)
+    {
+        services.AddSingleton<Cabinet.API.Services.Archive.IEventArchive>(sp => new Cabinet.API.Services.Archive.S3EventArchive(
+            new Cabinet.AWS.Services.S3ArchiveService(
+                sp.GetService<Amazon.S3.IAmazonS3>() ?? new Amazon.S3.AmazonS3Client(),
+                sp.GetRequiredService<ILogger<Cabinet.AWS.Services.S3ArchiveService>>(),
+                archiveBucket),
+            configuration["Archive:S3Prefix"] ?? "cabinet-events"));
+    }
+
+    if (services.Any(service => service.ServiceType == typeof(Cabinet.API.Services.Archive.IEventArchive)))
+    {
+        services.AddSingleton<Cabinet.API.Services.Archive.EventArchiver>();
+    }
+    services.AddHostedService<Cabinet.API.Services.AnomalyDetector>();
 
     // Data model acceleration — pre-aggregated summaries for tstats queries
     services.AddSingleton<Cabinet.API.Services.DataModelAccelerationService>();
@@ -696,6 +802,18 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     {
         services.AddSingleton(ssoConfig);
         services.AddSingleton<ClaimRoleMapper>();
+
+        // Dashboard sign-in through the directory or a SAML identity provider
+        if (ssoConfig.Ldap is { } ldap)
+        {
+            services.AddSingleton(sp => new Cabinet.API.Authentication.LdapAuthenticator(ldap, sp.GetRequiredService<ILogger<Cabinet.API.Authentication.LdapAuthenticator>>()));
+        }
+
+        if (ssoConfig.Saml is { } saml)
+        {
+            services.AddSingleton(sp => new Cabinet.API.Authentication.SamlSignIn(
+                saml, sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILogger<Cabinet.API.Authentication.SamlSignIn>>()));
+        }
     }
 
     // Deletes nothing unless Storage:RetentionDays is set to a positive value

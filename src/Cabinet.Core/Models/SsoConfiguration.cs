@@ -15,33 +15,31 @@ public sealed class SsoConfiguration
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// SSO provider type. Only <see cref="SsoProviderType.Oidc"/> is currently implemented.
-    /// Selecting <see cref="SsoProviderType.Saml"/> or <see cref="SsoProviderType.Ldap"/>
-    /// will log a warning and fall through without configuring authentication.
+    /// The main provider. Each configured section is available whatever this says: OIDC bearer
+    /// tokens for API clients and OIDC, SAML and LDAP sign-in for the dashboard.
     /// </summary>
     public SsoProviderType Provider { get; set; } = SsoProviderType.Oidc;
 
     /// <summary>
-    /// OpenID Connect settings. This is the recommended and only implemented SSO path.
+    /// OpenID Connect settings: bearer tokens for API clients, and, with a client secret, the
+    /// dashboard's sign-in (authorization code flow with PKCE).
     /// </summary>
     public OidcSettings? Oidc { get; set; }
 
     /// <summary>
-    /// SAML 2.0 settings. Configuration foundation only — not yet implemented.
-    /// OIDC is the recommended SSO path. SAML 2.0 support requires the Sustainsys.Saml2
-    /// package and is planned for a future release.
+    /// SAML 2.0 settings for the dashboard's sign-in. Cabinet is the service provider; the
+    /// identity provider's metadata gives its sign-in URL and signing certificates.
     /// </summary>
     public SamlSettings? Saml { get; set; }
 
     /// <summary>
-    /// LDAP/Active Directory settings. Configuration foundation only — not yet implemented.
-    /// OIDC is the recommended SSO path. LDAP support requires the
-    /// Novell.Directory.Ldap.NETStandard package and is planned for a future release.
+    /// LDAP or Active Directory settings for the dashboard's sign-in with a user name and
+    /// password, checked by binding to the directory. Groups come from memberOf.
     /// </summary>
     public LdapSettings? Ldap { get; set; }
 
     /// <summary>
-    /// Maps external identity claims (from OIDC tokens or future SAML assertions)
+    /// Maps external identity claims (OIDC tokens, SAML assertions, LDAP groups)
     /// to Cabinet <see cref="SystemRole"/> assignments and index permissions.
     /// </summary>
     public List<ClaimRoleMapping> RoleMappings { get; set; } = new();
@@ -51,6 +49,9 @@ public sealed class SsoConfiguration
     /// with <see cref="DefaultRole"/> if no <see cref="RoleMappings"/> match.
     /// </summary>
     public bool AutoProvision { get; set; } = true;
+
+    /// <summary>How long a dashboard sign-in lasts while it's used, in hours.</summary>
+    public int SessionHours { get; set; } = 8;
 
     /// <summary>
     /// Default role assigned to SSO-authenticated users when no claim mapping matches.

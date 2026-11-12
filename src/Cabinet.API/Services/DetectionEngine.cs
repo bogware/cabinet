@@ -348,17 +348,36 @@ public sealed class DetectingLogStorage : ILogStorage, IAggregatingLogStorage
 {
     private readonly ILogStorage _inner;
     private readonly DetectionEngine _engine;
+    private readonly QueryCacheService? _cache;
 
-    public DetectingLogStorage(ILogStorage inner, DetectionEngine engine)
+    /// <param name="inner">The storage below.</param>
+    /// <param name="engine">Gets every stored event.</param>
+    /// <param name="cache">Told about every write, since every route to storage passes here.</param>
+    public DetectingLogStorage(ILogStorage inner, DetectionEngine engine, QueryCacheService? cache = null)
     {
         _inner = inner;
         _engine = engine;
+        _cache = cache;
+    }
+
+    private void Written(IEnumerable<string> indexes)
+    {
+        if (_cache == null)
+        {
+            return;
+        }
+
+        foreach (var index in indexes.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            _cache.InvalidateIndex(index);
+        }
     }
 
     /// <inheritdoc />
     public async Task<bool> StoreAsync(LogEvent logEvent, CancellationToken cancellationToken = default)
     {
         var stored = await _inner.StoreAsync(logEvent, cancellationToken);
+        Written([logEvent.Index]);
         await _engine.EnqueueAsync([logEvent], cancellationToken);
         return stored;
     }
@@ -368,6 +387,7 @@ public sealed class DetectingLogStorage : ILogStorage, IAggregatingLogStorage
     {
         var batch = events as IReadOnlyList<LogEvent> ?? events.ToList();
         var stored = await _inner.StoreBatchAsync(batch, cancellationToken);
+        Written(batch.Select(e => e.Index));
         await _engine.EnqueueAsync(batch, cancellationToken);
         return stored;
     }
@@ -385,13 +405,32 @@ public sealed class DetectingLogStorage : ILogStorage, IAggregatingLogStorage
     public Task<long> GetCountAsync(QueryContext? context = null, CancellationToken cancellationToken = default) => _inner.GetCountAsync(context, cancellationToken);
 
     /// <inheritdoc />
-    public Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default) => _inner.PurgeOldEventsAsync(before, cancellationToken);
+    public async Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default)
+    {
+        var purged = await _inner.PurgeOldEventsAsync(before, cancellationToken);
+        if (purged > 0)
+        {
+            _cache?.Clear();
+        }
+
+        return purged;
+    }
 
     /// <inheritdoc />
-    public Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default) => _inner.PurgeIndexEventsAsync(indexName, before, cancellationToken);
+    public async Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
+    {
+        var purged = await _inner.PurgeIndexEventsAsync(indexName, before, cancellationToken);
+        Written([indexName]);
+        return purged;
+    }
 
     /// <inheritdoc />
-    public Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default) => _inner.DeleteByIndexAsync(indexName, cancellationToken);
+    public async Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default)
+    {
+        var deleted = await _inner.DeleteByIndexAsync(indexName, cancellationToken);
+        Written([indexName]);
+        return deleted;
+    }
 
     /// <inheritdoc />
     public Task<StorageStats> GetStatsAsync(CancellationToken cancellationToken = default) => _inner.GetStatsAsync(cancellationToken);

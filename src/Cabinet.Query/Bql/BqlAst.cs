@@ -274,6 +274,9 @@ public sealed class AggregateFunction
     public string? Field { get; }
     public string? Alias { get; set; }
 
+    /// <summary>For <c>count(eval(status >= 500))</c>: what to aggregate instead of a field.</summary>
+    public BqlExpression? Expression { get; init; }
+
     /// <summary>
     /// Column name in the output: the alias, else <c>count</c> or <c>avg(duration)</c>.
     /// </summary>
@@ -291,6 +294,7 @@ public sealed class AggregateFunction
     private static bool IsKnown(string name) =>
         name is "count" or "sum" or "avg" or "mean" or "min" or "max" or "median" or "dc" or "distinct_count"
             or "stdev" or "stdevp" or "variance" or "varp" or "percentile"
+            or "values" or "list" or "first" or "last" or "earliest" or "latest" or "range" or "mode"
         || (name.Length > 1 && name[0] == 'p' && name.Skip(name.StartsWith("perc", StringComparison.Ordinal) ? 4 : 1).All(char.IsDigit)
             && (name.StartsWith("perc", StringComparison.Ordinal) ? name.Length > 4 : true));
 }

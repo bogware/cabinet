@@ -233,12 +233,33 @@ public class BqlMacroSubsearchTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Macro_NotFound_ReturnsEmpty()
+    public async Task ExecuteAsync_Macro_NotFound_IsAnError()
     {
-        var result = await _engine.ExecuteAsync(
+        // An unknown macro used to return no rows, which reads as "nothing matched"
+        var act = () => _engine.ExecuteAsync(
             new QueryExecutionContext { Query = "find * | macro nonexistent_macro", Limit = 100 });
 
-        result.Events.Should().BeEmpty();
+        (await act.Should().ThrowAsync<QueryExecutionException>()).Which.Message.Should().Contain("nonexistent_macro");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MissingLookup_IsAnError()
+    {
+        var act = () => _engine.ExecuteAsync(
+            new QueryExecutionContext { Query = "find * | lookup no_such_table user OUTPUT name", Limit = 100 });
+
+        (await act.Should().ThrowAsync<QueryExecutionException>()).Which.Message.Should().Contain("no_such_table");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Macro_CanUseJoinAndOtherFullStages()
+    {
+        await _knowledgeStorage.SaveMacroAsync(new QueryMacro { Name = "joined", Definition = "join type=left Host [find * | stats count by Host]" });
+
+        var result = await _engine.ExecuteAsync(
+            new QueryExecutionContext { Query = "find * | macro joined | head 1", Limit = 100 });
+
+        ((IDictionary<string, object?>)result.Events[0]).Should().ContainKey("count", "the macro's join ran instead of being skipped");
     }
 
     [Fact]
@@ -363,7 +384,7 @@ public class BqlMacroSubsearchTests
     // ─── Engine without knowledge storage ───────────────────────
 
     [Fact]
-    public async Task ExecuteAsync_Macro_WithoutKnowledgeStorage_PassesThrough()
+    public async Task ExecuteAsync_Macro_WithoutKnowledgeStorage_IsAnError()
     {
         // Engine without knowledge storage configured
         var engineNoKnowledge = new BqlQueryEngine(
@@ -372,10 +393,10 @@ public class BqlMacroSubsearchTests
             _optimizer,
             NullLogger<BqlQueryEngine>.Instance);
 
-        var result = await engineNoKnowledge.ExecuteAsync(
+        var act = () => engineNoKnowledge.ExecuteAsync(
             new QueryExecutionContext { Query = "find * | macro some_macro", Limit = 100 });
 
-        // Should passthrough (return all events) since there's no knowledge storage
-        result.Events.Should().HaveCount(10);
+        // Passing rows through unchanged would look like the macro matched everything
+        await act.Should().ThrowAsync<QueryExecutionException>();
     }
 }

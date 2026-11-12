@@ -20,7 +20,7 @@ public class CloudTrailParser : BaseLogParser
         {
             try
             {
-                var doc = JsonDocument.Parse(line);
+                using var doc = JsonDocument.Parse(line);
                 var root = doc.RootElement;
                 return root.TryGetProperty("eventTime", out _) &&
                        root.TryGetProperty("eventName", out _);
@@ -55,13 +55,13 @@ public class CloudTrailParser : BaseLogParser
     {
         try
         {
-            var doc = JsonDocument.Parse(line);
+            using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
 
             // Core event fields
             if (root.TryGetProperty("eventTime", out var eventTime))
             {
-                if (DateTime.TryParse(eventTime.GetString(), out var dt))
+                if (DateTime.TryParse(eventTime.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
                 {
                     logEvent.Timestamp = dt.ToUniversalTime();
                 }

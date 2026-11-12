@@ -26,7 +26,10 @@ public sealed class ClaimRoleMapper
     /// <summary>
     /// Add Cabinet-specific claims based on OIDC claims and configured role mappings.
     /// </summary>
-    public void MapClaims(ClaimsIdentity identity, SsoConfiguration ssoConfig)
+    /// <param name="identity">The identity to add Cabinet's claims to.</param>
+    /// <param name="ssoConfig">The role mappings.</param>
+    /// <param name="provider">Prefixes the user's ID, so an LDAP and an OIDC user with the same name stay apart.</param>
+    public void MapClaims(ClaimsIdentity identity, SsoConfiguration ssoConfig, string provider = "oidc")
     {
         // These decide who someone is and what they may do. Anything in the token by these
         // names came from the identity provider, or from whoever controls a user attribute there.
@@ -59,7 +62,7 @@ public sealed class ClaimRoleMapper
         var sub = identity.FindFirst(ClaimTypes.NameIdentifier) ?? identity.FindFirst("sub");
         if (sub != null)
         {
-            identity.AddClaim(new Claim("ClientId", $"oidc-{sub.Value}"));
+            identity.AddClaim(new Claim("ClientId", $"{provider}-{sub.Value}"));
         }
 
         if (mappedRole is not { } role)

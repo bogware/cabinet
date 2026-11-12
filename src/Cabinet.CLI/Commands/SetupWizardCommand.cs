@@ -789,7 +789,10 @@ internal sealed class SetupWizard
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             try { File.SetUnixFileMode(envPath, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-            catch { /* Best effort */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Couldn't restrict the file's permissions:[/] {Markup.Escape(ex.Message)}");
+            }
         }
         paths["Environment secrets (.env)"] = envPath;
 
@@ -836,7 +839,10 @@ internal sealed class SetupWizard
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             try { File.SetUnixFileMode(envPath, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-            catch { /* Best effort */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Couldn't restrict the file's permissions:[/] {Markup.Escape(ex.Message)}");
+            }
         }
         paths["Docker environment (.env)"] = envPath;
 
@@ -941,7 +947,10 @@ internal sealed class SetupWizard
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             try { File.SetUnixFileMode(envPath, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-            catch { /* Best effort */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Couldn't restrict the file's permissions:[/] {Markup.Escape(ex.Message)}");
+            }
         }
         paths["Agent environment secrets"] = envPath;
 
@@ -1133,7 +1142,10 @@ internal sealed class SetupWizard
                 """;
             File.WriteAllText(scriptPath, script);
             try { File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute); }
-            catch { /* Best effort */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Couldn't restrict the file's permissions:[/] {Markup.Escape(ex.Message)}");
+            }
             return scriptPath;
         }
     }
@@ -1445,7 +1457,10 @@ internal sealed class SetupWizard
             var script = sb.ToString();
             File.WriteAllText(scriptPath, script);
             try { File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute); }
-            catch { /* Best effort */ }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Couldn't restrict the file's permissions:[/] {Markup.Escape(ex.Message)}");
+            }
         }
     }
 

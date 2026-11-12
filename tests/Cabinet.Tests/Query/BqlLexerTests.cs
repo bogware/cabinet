@@ -138,11 +138,23 @@ public class BqlLexerTests
     }
 
     [Fact]
-    public void Tokenize_UnexpectedCharacter_ThrowsParseException()
+    public void Tokenize_ControlCharacter_ThrowsParseException()
     {
-        var lexer = new BqlLexer("find @invalid");
+        var lexer = new BqlLexer("find invalid");
         var act = () => lexer.Tokenize();
         act.Should().Throw<QueryParseException>().WithMessage("*Unexpected character*");
+    }
+
+    [Fact]
+    public async Task Search_ForAnEmailOrPath_Works()
+    {
+        var storage = new Cabinet.Storage.InMemoryStorage();
+        await storage.StoreBatchAsync([new Cabinet.Core.Models.LogEvent { RawLine = "login from alice@example.com" }]);
+        var engine = new BqlQueryEngine(storage, new BqlParser(), new BqlOptimizer(), Microsoft.Extensions.Logging.Abstractions.NullLogger<BqlQueryEngine>.Instance);
+
+        var result = await engine.ExecuteAsync(new QueryExecutionContext { Query = "find alice@example.com" });
+
+        result.Events.Should().ContainSingle();
     }
 
     [Fact]

@@ -58,6 +58,27 @@ public sealed class AgentConfiguration
 public sealed class InputConfiguration
 {
     /// <summary>
+    /// What to read: <c>file</c> (the default), <c>kubernetes</c> (container log files, with pod
+    /// details), <c>journald</c> (the systemd journal) or <c>wineventlog</c> (Windows event logs).
+    /// </summary>
+    public string Type { get; set; } = "file";
+
+    /// <summary>For journald: only these units, such as sshd.service. Empty reads every unit.</summary>
+    public List<string> Units { get; set; } = [];
+
+    /// <summary>For wineventlog: the channels to read.</summary>
+    public List<string> Channels { get; set; } = ["Application", "System", "Security"];
+
+    /// <summary>For journald and wineventlog: the first time, read what's already there instead of only what's new.</summary>
+    public bool FromBeginning { get; set; }
+
+    /// <summary>Whether this input reads files.</summary>
+    public bool IsFileInput => Type.Equals("file", StringComparison.OrdinalIgnoreCase) || IsKubernetes;
+
+    /// <summary>Whether this input reads Kubernetes container logs.</summary>
+    public bool IsKubernetes => Type.Equals("kubernetes", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// File paths or glob patterns to monitor (e.g., "/var/log/*.log", "C:\Logs\app.log").
     /// </summary>
     public List<string> Paths { get; set; } = [];

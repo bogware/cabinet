@@ -92,7 +92,7 @@ public class HecController : ControllerBase
                 }
 
                 var converted = await ConvertHecEventAsync(hecEvent, cancellationToken);
-                if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, converted.Index))
+                if (_indexScope != null && !_indexScope.Can(Capability.Ingest, converted.Index))
                 {
                     return StatusCode(StatusCodes.Status403Forbidden, new HecResponse { Text = $"Not allowed to ingest into index '{converted.Index}'", Code = 6 });
                 }
@@ -129,8 +129,10 @@ public class HecController : ControllerBase
             _logger.LogDebug("HEC ingested {Count} events ({Errors} parse errors)", events.Count, parseErrors);
 
             // Invalidate cached query results so dashboards get fresh data
-            var hecIndex = events.FirstOrDefault()?.Index ?? "main";
-            _queryCache?.InvalidateIndex(hecIndex);
+            foreach (var written in events.Select(e => e.Index).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                _queryCache?.InvalidateIndex(written);
+            }
 
             await _auditLogger.LogAsync(new AuditEvent
             {
@@ -208,7 +210,7 @@ public class HecController : ControllerBase
             logEvent.Host = host ?? logEvent.Host;
             logEvent.Index = index ?? "main";
             logEvent.SourceFile = source;
-            if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, logEvent.Index))
+            if (_indexScope != null && !_indexScope.Can(Capability.Ingest, logEvent.Index))
             {
                 return StatusCode(StatusCodes.Status403Forbidden, new HecResponse { Text = $"Not allowed to ingest into index '{logEvent.Index}'", Code = 6 });
             }
@@ -232,8 +234,10 @@ public class HecController : ControllerBase
             _logger.LogDebug("HEC raw ingested {Count} events", events.Count);
 
             // Invalidate cached query results so dashboards get fresh data
-            var rawIndex = events.FirstOrDefault()?.Index ?? "main";
-            _queryCache?.InvalidateIndex(rawIndex);
+            foreach (var written in events.Select(e => e.Index).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                _queryCache?.InvalidateIndex(written);
+            }
 
             await _auditLogger.LogAsync(new AuditEvent
             {
@@ -287,7 +291,7 @@ public class HecController : ControllerBase
 
         if (IsValidEventId(hecEvent.Id))
         {
-            logEvent.Id = hecEvent.Id!;
+            logEvent.Id = SenderEventId.For(User, hecEvent.Id!);
         }
 
         logEvent.Host = hecEvent.Host ?? logEvent.Host;

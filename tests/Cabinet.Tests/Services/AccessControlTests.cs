@@ -295,6 +295,50 @@ public sealed class PostgresLeaderLeaseTests
         }
     }
 
+    [SkippableFact]
+    public async Task Leader_WhoseConnectionIsKilled_StepsDown_AndLeadsAgain()
+    {
+        Skip.If(string.IsNullOrEmpty(ConnectionString), "Set CABINET_TEST_POSTGRES_CONNSTR to enable.");
+
+        var database = $"cabinet_lease_{Guid.NewGuid():N}";
+        await using (var admin = new NpgsqlConnection(ConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var create = new NpgsqlCommand($"CREATE DATABASE {database}", admin);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        var isolated = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = database }.ConnectionString;
+        var lease = new PostgresLeaderLease(isolated, NullLogger<PostgresLeaderLease>.Instance);
+        try
+        {
+            await WaitUntilAsync(() => lease.IsLeader);
+            lease.IsLeader.Should().BeTrue();
+
+            await using (var admin = new NpgsqlConnection(ConnectionString))
+            {
+                await admin.OpenAsync();
+                await using var kill = new NpgsqlCommand($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}'", admin);
+                await kill.ExecuteNonQueryAsync();
+            }
+
+            await WaitUntilAsync(() => !lease.IsLeader);
+            lease.IsLeader.Should().BeFalse("its lock went with the connection");
+
+            await WaitUntilAsync(() => lease.IsLeader);
+            lease.IsLeader.Should().BeTrue("the loop keeps trying after losing the connection");
+        }
+        finally
+        {
+            await lease.DisposeAsync();
+            NpgsqlConnection.ClearAllPools();
+            await using var admin = new NpgsqlConnection(ConnectionString);
+            await admin.OpenAsync();
+            await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS {database} WITH (FORCE)", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -603,6 +647,72 @@ public sealed class AccessControlApiTests : IDisposable
         (await QueryWithAsync("not.a.token")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Fact]
+    public async Task DashboardSignIn_WithOidc_RedirectsToTheProvider_WithPkce()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var provider = await OidcTestProvider.StartAsync(new RsaSecurityKey(rsa) { KeyId = "test-key" });
+        await using var api = StartApi(new Dictionary<string, string>
+        {
+            ["Sso__Enabled"] = "true",
+            ["Sso__Oidc__Authority"] = provider.Authority,
+            ["Sso__Oidc__ClientId"] = "cabinet",
+            ["Sso__Oidc__ClientSecret"] = "test-secret",
+        });
+        await api.WaitUntilReadyAsync();
+        using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = api.Client.BaseAddress };
+
+        var providers = await (await noRedirects.GetAsync("/auth/providers")).Content.ReadAsStringAsync();
+        providers.Should().Contain("\"oidc\":true").And.Contain("\"signedIn\":false");
+
+        using var login = await noRedirects.GetAsync("/auth/login/oidc?returnUrl=https://evil.example/");
+        login.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var location = login.Headers.Location!.ToString();
+        location.Should().StartWith($"{provider.Authority}/authorize").And.Contain("code_challenge=").And.Contain("response_type=code");
+
+        // A session cookie someone made up doesn't sign anyone in
+        using var forged = new HttpRequestMessage(HttpMethod.Get, "/api/v1/roles/me");
+        forged.Headers.Add("Cookie", "cabinet_session=forged");
+        (await noRedirects.SendAsync(forged)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task RulesAsCode_SigmaAndCoverage_WorkThroughTheApi()
+    {
+        await using var api = StartApi();
+        await api.WaitUntilReadyAsync();
+        var client = api.Client;
+
+        // What cabinet rules push does: a new ID adds the rule
+        var put = await client.SendAsync(Request(HttpMethod.Put, "/api/v1/rules/repo-ssh", AdminKey, new { name = "SSH guessing", pattern = "Failed password", severity = "Error", technique = "T1110.001" }));
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await JsonAsync(client, HttpMethod.Get, "/api/v1/rules/repo-ssh", AdminKey)).GetProperty("name").GetString().Should().Be("SSH guessing");
+
+        using var sigma = new HttpRequestMessage(HttpMethod.Post, "/api/v1/rules/sigma?save=true")
+        {
+            Content = new StringContent("title: Whoami\ntags: [attack.t1033]\ndetection:\n  selection:\n    CommandLine|contains: whoami\n  condition: selection\nlevel: low\n", Encoding.UTF8, "text/plain"),
+        };
+        sigma.Headers.Add("X-API-Key", AdminKey);
+        var imported = await client.SendAsync(sigma);
+        (await imported.Content.ReadAsStringAsync()).Should().Contain("\"saved\":true");
+
+        var coverage = await JsonAsync(client, HttpMethod.Get, "/api/v1/rules/coverage", AdminKey);
+        coverage.ToString().Should().Contain("repo-ssh").And.Contain("T1033");
+    }
+
+    [Fact]
+    public async Task DashboardSignIn_WithoutSso_OffersOnlyApiKeys()
+    {
+        await using var api = StartApi();
+        await api.WaitUntilReadyAsync();
+
+        var providers = await api.Client.GetStringAsync("/auth/providers");
+
+        providers.Should().Contain("\"oidc\":false").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
+        (await api.Client.GetAsync("/auth/login/oidc")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await api.Client.PostAsJsonAsync("/auth/login/ldap", new { username = "a", password = "b" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     /// <summary>A running API process.</summary>
     private sealed class ApiProcess : IAsyncDisposable
     {
@@ -762,7 +872,16 @@ public sealed class AccessControlApiTests : IDisposable
                             },
                         },
                     })
-                    : JsonSerializer.Serialize(new { issuer = Authority, jwks_uri = $"{Authority}/jwks" });
+                    : JsonSerializer.Serialize(new
+                    {
+                        issuer = Authority,
+                        jwks_uri = $"{Authority}/jwks",
+                        authorization_endpoint = $"{Authority}/authorize",
+                        token_endpoint = $"{Authority}/token",
+                        response_types_supported = new[] { "code" },
+                        subject_types_supported = new[] { "public" },
+                        id_token_signing_alg_values_supported = new[] { "RS256" },
+                    });
                 var response = $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\nConnection: close\r\n\r\n{body}";
                 await stream.WriteAsync(Encoding.UTF8.GetBytes(response), cancellationToken);
             }

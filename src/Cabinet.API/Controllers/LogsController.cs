@@ -75,7 +75,7 @@ public class LogsController : ControllerBase
 
         const string targetIndex = "main";
 
-        if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, targetIndex))
+        if (_indexScope != null && !_indexScope.Can(Capability.Ingest, targetIndex))
         {
             return Problem(detail: $"Not allowed to ingest into index '{targetIndex}'", statusCode: 403);
         }

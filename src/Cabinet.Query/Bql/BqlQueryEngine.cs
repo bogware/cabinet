@@ -23,6 +23,9 @@ public sealed class BqlQueryEngine : IQueryEngine
     private readonly ILogger<BqlQueryEngine> _logger;
     private readonly QueryLimits _limits;
 
+    /// <summary>The limits this engine applies, which sub-queries it starts inherit.</summary>
+    internal QueryLimits Limits => _limits;
+
     /// <summary>Events read from storage at a time.</summary>
     private const int PageSize = 10_000;
 
@@ -188,8 +191,12 @@ public sealed class BqlQueryEngine : IQueryEngine
             return null;
         }
 
-        budget.CheckGroupCount(aggregate.Rows.Count);
-        IEnumerable<dynamic> result = aggregate.Rows.Select(values =>
+        // As in the pipeline, stats by leaves out events without a by-field
+        var rows = optimized.RemainingStages[0] is StatsStage { GroupByFields.Count: > 0 } grouped
+            ? aggregate.Rows.Where(values => grouped.GroupByFields.All(f => values.TryGetValue(f, out var v) && v != null)).ToList()
+            : aggregate.Rows;
+        budget.CheckGroupCount(rows.Count);
+        IEnumerable<dynamic> result = rows.Select(values =>
         {
             var row = new BqlRow();
             foreach (var (key, value) in values)
@@ -262,6 +269,11 @@ public sealed class BqlQueryEngine : IQueryEngine
     /// <summary>The storage form of an aggregate, or null for one storage isn't asked to do.</summary>
     internal static AggregateSpec? ToAggregateSpec(AggregateFunction function)
     {
+        if (function.Expression != null)
+        {
+            return null;
+        }
+
         var name = function.Name.ToLowerInvariant();
         double percentile = 0;
         AggregateKind? kind = name switch
@@ -383,7 +395,7 @@ public sealed class BqlQueryEngine : IQueryEngine
 
     /// <summary>Stages that handle each row on its own, so they can run a batch at a time.</summary>
     private static bool IsRowStage(BqlStage stage) => stage is
-        SearchStage or WhereStage or EvalStage or RexStage or RenameStage or RegexStage
+        SearchStage or WhereStage or EvalStage or RexStage or RenameStage or RegexStage or IplocationStage
         or FieldAliasStage or FillNullStage or BucketStage or TableStage;
 
     private async Task<long> FeedAsync(
@@ -653,7 +665,18 @@ public sealed class BqlQueryEngine : IQueryEngine
         return expando;
     }
 
-    private QueryOperator? ConvertStageToOperator(BqlStage stage, QueryBudget budget) => stage switch
+    internal QueryOperator? ConvertStageToOperator(BqlStage stage, QueryBudget budget)
+    {
+        var op = CreateOperator(stage, budget);
+        if (op != null)
+        {
+            op.Budget = budget;
+        }
+
+        return op;
+    }
+
+    private QueryOperator? CreateOperator(BqlStage stage, QueryBudget budget) => stage switch
     {
         SearchStage s => new LegacySearchOperator(s.SearchText),
         WhereStage w => new LegacyWhereOperator(w.Condition),
@@ -674,6 +697,8 @@ public sealed class BqlQueryEngine : IQueryEngine
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
+        IplocationStage ip => new LegacyIplocationOperator(ip),
+        ClusterStage cl => new LegacyClusterOperator(cl),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),
@@ -686,18 +711,18 @@ public sealed class BqlQueryEngine : IQueryEngine
         UntableStage ut => new LegacyUntableOperator(ut.RowField, ut.ColumnField, ut.ValueField),
         InputLookupStage il => _knowledgeStorage != null
             ? new LegacyInputLookupOperator(il.LookupName, _knowledgeStorage)
-            : new LegacyPassthroughOperator("inputlookup"),
+            : throw new QueryExecutionException("inputlookup needs knowledge objects, which aren't available here"),
         LookupStage lk => _knowledgeStorage != null
             ? new LegacyLookupOperator(lk.LookupSource, lk.KeyField, lk.OutputFields, _knowledgeStorage)
-            : new LegacyPassthroughOperator("lookup"),
+            : throw new QueryExecutionException("lookup needs knowledge objects, which aren't available here"),
         AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
         JoinStage j => new LegacyJoinOperator(j.JoinField, j.JoinType, j.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
         MacroStage m => _knowledgeStorage != null
             ? new LegacyMacroOperator(m.MacroName, m.Arguments, _storage, _parser, _optimizer, _knowledgeStorage, _logger)
-            : new LegacyPassthroughOperator("macro"),
+            : throw new QueryExecutionException("macros need knowledge objects, which aren't available here"),
         SubsearchStage ss => new LegacySubsearchOperator(ss.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
         MultisearchStage ms => new LegacyMultisearchOperator(ms.SearchQueries, _storage, _parser, _optimizer, _knowledgeStorage, _logger, budget),
-        _ => new LegacyPassthroughOperator(stage.GetType().Name)
+        _ => throw new QueryExecutionException($"The {stage.GetType().Name} stage isn't supported here")
     };
 
 }
@@ -854,8 +879,8 @@ internal sealed class LegacyMultisearchOperator : QueryOperator
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
             {
-                _logger.LogWarning(ex, "Multisearch sub-query failed: {Query}", query);
-                // On individual sub-query failure, skip it and continue with the rest (Splunk behavior)
+                // A missing leg would quietly leave its results out of the answer
+                throw new QueryExecutionException($"A multisearch search failed ({query}): {ex.Message}");
             }
         }
 
@@ -1005,8 +1030,7 @@ internal sealed class LegacyJoinOperator : QueryOperator
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
         {
-            _logger.LogWarning(ex, "Join subsearch failed: {Query}", _subsearchQuery);
-            return mainResults;
+            throw new QueryExecutionException($"The join's search failed: {ex.Message}");
         }
     }
 
@@ -1092,16 +1116,13 @@ internal sealed class LegacyMacroOperator : QueryOperator
     {
         if (depth >= MaxMacroExpansionDepth)
         {
-            _logger.LogWarning("Macro expansion depth limit ({Limit}) reached for macro '{Name}'. Possible circular reference.",
-                MaxMacroExpansionDepth, macroName);
-            return Enumerable.Empty<dynamic>();
+            throw new QueryExecutionException($"Macro '{macroName}' expands more than {MaxMacroExpansionDepth} levels deep; it probably refers to itself");
         }
 
         var macro = await _knowledgeStorage.GetMacroByNameAsync(macroName, ct);
         if (macro == null)
         {
-            _logger.LogWarning("Macro '{Name}' not found in knowledge storage", macroName);
-            return Enumerable.Empty<dynamic>();
+            throw new QueryExecutionException($"There's no macro named '{macroName}'");
         }
 
         // Substitute parameters: replace $param_name$ with argument values
@@ -1144,8 +1165,7 @@ internal sealed class LegacyMacroOperator : QueryOperator
         }
         catch (QueryParseException ex)
         {
-            _logger.LogWarning(ex, "Failed to parse macro '{Name}' definition: {Definition}", macroName, definition);
-            return Enumerable.Empty<dynamic>();
+            throw new QueryExecutionException($"Macro '{macroName}' doesn't parse: {ex.Message}");
         }
     }
 
@@ -1170,47 +1190,9 @@ internal sealed class LegacyMacroOperator : QueryOperator
     /// Creates a QueryOperator for a stage within a macro expansion.
     /// Uses the engine instance's ConvertStageToOperator via a helper engine.
     /// </summary>
-    private QueryOperator? ConvertStageForMacro(BqlStage stage, BqlQueryEngine engine)
-    {
-        // Use reflection-free approach: create operator directly using the same patterns as ConvertStageToOperator
-        return stage switch
-        {
-            SearchStage s => new LegacySearchOperator(s.SearchText),
-            WhereStage w => new LegacyWhereOperator(w.Condition),
-            StatsStage st => new LegacyStatsOperator(st.Aggregations, st.GroupByFields),
-            SortStage so => new LegacySortOperator(so.Fields),
-            LimitStage l => new LegacyLimitOperator(l.Count),
-            TailStage t => new LegacyTailOperator(t.Count),
-            DedupStage d => new LegacyDedupOperator(d.Fields),
-            TopStage tp => new LegacyTopOperator(tp.Count, tp.Field, tp.ByField),
-            TableStage tb => new LegacyTableOperator(tb.Fields),
-            EvalStage e => new LegacyEvalOperator(e.Assignments),
-            RexStage r => new LegacyRexOperator(r.Pattern, r.SourceField),
-            RenameStage rn => new LegacyRenameOperator(rn.Mappings),
-            TimechartStage tc => new LegacyTimechartOperator(tc.Span, tc.Aggregation, tc.ByField, tc.AggregationField),
-            FieldAliasStage fa => new LegacyFieldAliasOperator(fa.Aliases),
-            TransactionStage tx => new LegacyTransactionOperator(tx.Fields, tx.MaxSpan, tx.MaxEvents, tx.StartsWith, tx.EndsWith),
-            EventStatsStage es => new LegacyEventStatsOperator(es.Aggregations, es.GroupByFields),
-            StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
-            FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
-            BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
-            MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
-            MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
-            ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),
-            FillDownStage fd => new LegacyFillDownOperator(fd.Fields),
-            AddColTotalsStage ac => new LegacyAddColTotalsOperator(ac.LabelField, ac.Fields),
-            RareStage ra => new LegacyRareOperator(ra.Count, ra.Field),
-            RegexStage rx => new LegacyRegexOperator(rx.Field, rx.Pattern, rx.Negate),
-            FieldSummaryStage fs => new LegacyFieldSummaryOperator(fs.MaxValues),
-            XyseriesStage xy => new LegacyXyseriesOperator(xy.RowField, xy.ColumnField, xy.ValueField),
-            UntableStage ut => new LegacyUntableOperator(ut.RowField, ut.ColumnField, ut.ValueField),
-            InputLookupStage il => new LegacyInputLookupOperator(il.LookupName, _knowledgeStorage),
-            LookupStage lk => new LegacyLookupOperator(lk.LookupSource, lk.KeyField, lk.OutputFields, _knowledgeStorage),
-            AppendStage a => new LegacyAppendOperator(a.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger, new QueryBudget(new QueryLimits())),
-            SubsearchStage sub => new LegacySubsearchOperator(sub.SubsearchQuery, _storage, _parser, _optimizer, _knowledgeStorage, _logger),
-            _ => new LegacyPassthroughOperator(stage.GetType().Name)
-        };
-    }
+    private static QueryOperator? ConvertStageForMacro(BqlStage stage, BqlQueryEngine engine) =>
+        // The engine's own map, so a macro supports every stage a query does (join, multisearch, lookups...)
+        engine.ConvertStageToOperator(stage, new QueryBudget(engine.Limits));
 }
 
 /// <summary>
@@ -1284,61 +1266,34 @@ internal sealed class LegacySubsearchOperator : QueryOperator
 
             if (filterFields.Count == 0)
             {
-                _logger.LogWarning("Subsearch returned no filterable fields");
-                return mainResults;
+                throw new QueryExecutionException("The subsearch returned no fields to filter by; end it with | fields name or | table name");
             }
 
-            // Build a set of allowed values for each filter field
-            var allowedValues = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var field in filterFields)
-            {
-                allowedValues[field] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            }
+            // Each subsearch row means "all of these fields have these values"; rows are alternatives
+            static string Key(IDictionary<string, object?> row, List<string> fields) =>
+                string.Join('\u001f', fields.Select(f => row.TryGetValue(f, out var v) && v != null ? v.ToString()?.ToLowerInvariant() ?? string.Empty : "\u0000"));
 
+            var allowed = new HashSet<string>(StringComparer.Ordinal);
             foreach (var subEvt in subResult.Events)
             {
                 if (subEvt is IDictionary<string, object?> subDict)
                 {
-                    foreach (var field in filterFields)
-                    {
-                        if (subDict.TryGetValue(field, out var val) && val != null)
-                        {
-                            allowedValues[field].Add(val.ToString() ?? "");
-                        }
-                    }
+                    allowed.Add(Key(subDict, filterFields));
                 }
             }
 
-            // Filter main results: keep events where at least one filter field matches
-            var filtered = mainResults.Where(evt =>
-            {
-                if (evt is IDictionary<string, object?> dict)
-                {
-                    foreach (var field in filterFields)
-                    {
-                        if (dict.TryGetValue(field, out var val) && val != null &&
-                            allowedValues.TryGetValue(field, out var allowed) &&
-                            allowed.Contains(val.ToString() ?? ""))
-                        {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            });
+            var filtered = mainResults.Where(evt => evt is IDictionary<string, object?> dict && allowed.Contains(Key(dict, filterFields)));
 
             return filtered;
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or QueryLimitExceededException))
         {
-            _logger.LogWarning(ex, "Subsearch failed: {Query}", _subsearchQuery);
-            // On failure, return original results unchanged
-            return mainResults;
+            throw new QueryExecutionException($"The subsearch failed: {ex.Message}");
         }
     }
 
     private static bool IsInternalField(string field) =>
         field is "Id" or "Timestamp" or "SourceFile" or "LineNumber" or "Index"
-            or "SourceType" or "Severity" or "RawLine" or "_time" or "_raw" or "_indextime"
+            or "SourceType" or "Severity" or "RawLine" or "Message" or "_time" or "_raw" or "_indextime"
             or "Tags";
 }

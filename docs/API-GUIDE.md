@@ -580,7 +580,8 @@ Every firing is saved to alert history. A rule's `actions` say what else happens
 
 - `notify` — send through the configured channels (email, webhook, console, file).
 - `event` — write a new event into an index (`target`, default `detections`), searchable like any log and able to feed dashboards and even other detections. `fields` adds fields to it.
-- `webhook` — POST the firing as JSON to `target` (an http/https URL).
+- `webhook` — POST the firing as JSON to `target` (an http/https URL). Private and loopback addresses are refused unless `Outbound:AllowPrivateTargets` or `Outbound:AllowedHosts` allow them, and redirects aren't followed.
+- `connector` — send to a named connector (`target`), set up under `/api/v1/connectors`.
 
 `severity` overrides the rule's severity for that action. `message` and each `fields` value fill in placeholders: `{rule} {group} {count} {window} {severity} {host} {index} {event_id} {technique} {time} {line}`.
 
@@ -598,6 +599,48 @@ curl -X POST http://localhost:5000/api/v1/rules -H "X-API-Key: $KEY" -H "Content
 ```
 
 Emitted events carry source type `detection` and are written below the detection layer, so they never trigger detection again.
+
+`PUT /api/v1/rules/{id}` adds a rule under a new ID, which `cabinet rules push` relies on.
+
+#### Sigma and ATT&CK coverage
+
+`POST /api/v1/rules/sigma` takes Sigma YAML as `text/plain` (several rules separated by `---`) and returns each rule's converted condition, or why it couldn't be converted. With `?save=true` it adds them, turned off. `GET /api/v1/rules/coverage` returns the ATT&CK tactics, each with its techniques and the rules covering them.
+
+### Connectors
+
+`/api/v1/connectors/{name}`: `GET`, `PUT` and `DELETE`, and `POST /{name}/test`. Types are `slack`, `teams`, `discord`, `pagerduty`, `opsgenie`, `jira`, `servicenow`, `email` and `webhook`. A secret is never returned, and an empty one on `PUT` keeps the saved one. Reading needs `Alerts`; changing needs `UserManagement`.
+
+### Anomaly rules
+
+`/api/v1/anomaly-rules/{id}` (`PUT`, `DELETE`, and `GET /api/v1/anomaly-rules`), and `POST /api/v1/anomaly-rules/test` to see what a rule finds in the last window without alerting. `kind` is `Spike`, `Silence`, `NewValue` or `NewPattern`; `windowMinutes`, `baselineWindows`, `threshold` (standard deviations), `minCount`, `groupBy` and `field` tune it. They need `Alerts`, and changing one needs `Search` on every index.
+
+### Cases
+
+`/api/v1/cases`: list (`?status=`), `POST` to open one, `GET`/`PATCH`/`DELETE /{id}`, `POST /{id}/items` to add a `note`, a `search`, `eventIds` or `alertIds`, and `GET /{id}/timeline`. Reading and adding need `Search`; opening, changing and deleting need `Alerts`. The timeline leaves out events the caller can't read and says how many in `X-Hidden-Events`.
+
+### Investigate
+
+`POST /api/v1/investigate` with `{ "question": "..." }` answers with `answer`, the `steps` (each search, its row count or error) and the `model`. `GET /api/v1/investigate/status` says whether it's on. Needs `Search`. Off unless `Ai:Enabled`.
+
+### Ingest pipeline
+
+`/api/v1/pipelines/rules/{id}` (`PUT`, `DELETE`, and `GET /api/v1/pipelines/rules`), `POST /api/v1/pipelines/test` with `lines` (and optionally `rules`) to see what would happen, and `GET /api/v1/pipelines/stats`. They need `IndexManagement`, and changing a rule needs it on every index.
+
+### Archive
+
+`GET /api/v1/archive` lists what each readable index has archived. `POST /api/v1/archive/rehydrate` with `index`, `from`, `to` and optionally `targetIndex` brings events back. See the deployment guide.
+
+### Reports
+
+`/api/v1/reports/{id}` (`PUT`, `DELETE`, `GET /api/v1/reports`), `POST /{id}/send`, and `POST /api/v1/reports/preview` (HTML) or `/pdf` to render a report with the caller's access.
+
+### Moderation
+
+With the gaming extension on: `GET /api/v1/moderation/players` and `GET /api/v1/moderation/players/{steamIdOrName}`, the player's profile with a suggested action. Needs `Search`. Suggestions only; nothing is run.
+
+### Dashboard sign-in
+
+`/auth/providers`, `/auth/login/oidc`, `/auth/login/saml`, `POST /auth/login/ldap` and `POST /auth/logout` are for the dashboard, not API clients. See the deployment guide's SSO section.
 
 ### Alerts
 
@@ -697,7 +740,7 @@ curl -X POST "http://localhost:5000/services/collector/raw?host=web-01&sourcetyp
 2026-01-15 10:30:02 INFO Connection restored'
 ```
 
-An event can include an `id`: 16 to 64 letters, digits, hyphens or underscores. An event whose `id` is already stored is ignored, so a sender can safely retry. Without one, or with an invalid one, the server assigns an ID.
+An event can include an `id`: 16 to 64 letters, digits, hyphens or underscores. An event whose `id` this sender already stored is ignored, so a sender can safely retry. The stored ID is derived from the `id` and the sending key, so one sender can't block another's events by using their IDs first, and an event's stored ID isn't the `id` it was sent with. Without one, or with an invalid one, the server assigns an ID.
 
 #### GET /services/collector/health: HEC health check
 

@@ -20,6 +20,9 @@ public sealed partial class OpenSearchLogStorage : ILogStorage, IDisposable
     private readonly OpenSearchClient _client;
     private readonly string _indexPrefix;
     private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly int _shards;
+    private readonly int _replicas;
+    private readonly int _fieldLimit;
     private volatile bool _initialized;
 
     public OpenSearchLogStorage(
@@ -28,13 +31,26 @@ public sealed partial class OpenSearchLogStorage : ILogStorage, IDisposable
         string indexPrefix = "cabinet-logs",
         string? username = null,
         string? password = null,
-        bool allowInsecureSsl = false)
+        bool allowInsecureSsl = false,
+        int shards = 1,
+        int? replicas = null,
+        int fieldLimit = 10_000)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _indexPrefix = indexPrefix;
 
-        var uri = new Uri(connectionUri);
-        var pool = new SingleNodeConnectionPool(uri);
+        // Several nodes, comma-separated, share the requests and cover for one that's down
+        var uris = connectionUri.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(u => new Uri(u)).ToList();
+        IConnectionPool pool = uris.Count == 1 ? new SingleNodeConnectionPool(uris[0]) : new StaticConnectionPool(uris);
+
+        // One shard per daily index suits most volumes; more only spreads small indexes thin. A
+        // replica needs a second node, so one node gets none and stays green.
+        _shards = Math.Clamp(shards, 1, 64);
+        _replicas = Math.Clamp(replicas ?? (uris.Count > 1 ? 1 : 0), 0, 8);
+
+        // Each custom field name is a mapped field. OpenSearch's default of 1,000 rejects events once
+        // logs have used that many names in a day.
+        _fieldLimit = Math.Clamp(fieldLimit, 1_000, 100_000);
         var settings = new ConnectionSettings(pool)
             .DefaultIndex($"{_indexPrefix}-*")
             .EnableHttpCompression()
@@ -78,8 +94,9 @@ public sealed partial class OpenSearchLogStorage : ILogStorage, IDisposable
                 templateName, t => t
                     .IndexPatterns($"{_indexPrefix}-*")
                     .Settings(s => s
-                        .NumberOfShards(2)
-                        .NumberOfReplicas(1)
+                        .NumberOfShards(_shards)
+                        .NumberOfReplicas(_replicas)
+                        .Setting("index.mapping.total_fields.limit", _fieldLimit)
                         .Setting("index.refresh_interval", "5s")
                         .Analysis(a => a
                             .Tokenizers(tk => tk.Pattern("cabinet_words", pt => pt.Pattern(@"[^\p{L}\p{N}]+")))

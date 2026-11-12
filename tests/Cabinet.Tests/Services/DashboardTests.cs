@@ -42,7 +42,7 @@ public sealed class DashboardTests
     public void EveryHandlerInThePage_ExistsInTheScript()
     {
         // Named in the page, and in the HTML the scripts build
-        var scripts = App + Asset("search-page.js") + Asset("settings-page.js");
+        var scripts = App + Asset("search-page.js") + Asset("settings-page.js") + Asset("v3.js");
         var names = Regex.Matches(Html + scripts, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
 
         names.Should().NotBeEmpty();
@@ -175,6 +175,91 @@ public sealed class DashboardTests
         {
             drawn.Should().NotContain("<img");
         }
+    }
+
+    [Fact]
+    public void Pie_FoldsSmallSlicesIntoOther_AndDropsNonPositive()
+    {
+        var shaped = Evaluate("""
+            CabinetCharts.shape(Array.from({ length: 12 }, (_, i) => ({ host: 'h' + i, count: 12 - i })).concat([{ host: 'neg', count: -5 }]), 'pie').slices.map(s => s.label)
+            """);
+
+        shaped.Should().Be("""["h0","h1","h2","h3","h4","h5","h6","Other"]""");
+    }
+
+    [Fact]
+    public void Gauge_UsesAMaxColumn_OrARoundNumberAboveTheValue()
+    {
+        Evaluate("CabinetCharts.shape([{ used: 70, max: 200 }], 'gauge')").Should().Contain("\"max\":200");
+        Evaluate("CabinetCharts.shape([{ used: 73 }], 'gauge')").Should().Contain("\"kind\":\"gauge\"").And.Contain("\"max\":80");
+    }
+
+    [Fact]
+    public void Map_NeedsCoordinates()
+    {
+        Evaluate("CabinetCharts.shape([{ lat: 51.5, lon: -0.1, City: 'London', count: 3 }], 'map')")
+            .Should().Contain("\"kind\":\"map\"").And.Contain("\"label\":\"London\"");
+        Evaluate("CabinetCharts.shape([{ host: 'a', count: 3 }], 'map')").Should().Contain("\"kind\":\"table\"");
+    }
+
+    [Fact]
+    public void Heatmap_IsGroupsOverTime()
+    {
+        Evaluate("""CabinetCharts.shape([{ _time: "2026-03-04T01:00:00Z", host: "a", count: 1 }, { _time: "2026-03-04T02:00:00Z", host: "b", count: 2 }], 'heatmap')""")
+            .Should().Contain("\"kind\":\"heatmap\"");
+    }
+
+    [Fact]
+    public void NewCharts_EscapeLogContent()
+    {
+        var engine = Charts();
+        engine.SetValue("payload", "<img src=x onerror=alert(1)>");
+
+        var drawn = new[]
+        {
+            "CabinetCharts.pieSvg(CabinetCharts.shape([{ host: payload, count: 1 }, { host: 'b', count: 2 }], 'pie'), 200)",
+            "CabinetCharts.gaugeSvg(Object.assign(CabinetCharts.shape([{ x: 1 }], 'gauge'), { label: payload }), 300)",
+            "CabinetCharts.heatmapSvg(CabinetCharts.shape([{ _time: '2026-03-04T01:00:00Z', host: payload, count: 1 }], 'heatmap'), 600)",
+            "CabinetCharts.mapSvg(CabinetCharts.shape([{ lat: 1, lon: 2, City: payload, count: 1 }], 'map'), 600)",
+        }.Select(script => engine.Evaluate(script).AsString());
+
+        drawn.Should().AllSatisfy(svg => svg.Should().NotContain("<img"));
+    }
+
+    private static Engine Tail()
+    {
+        var engine = new Engine();
+        engine.Execute("var window = {};");
+        engine.Execute(Asset("v3.js"));
+        return engine;
+    }
+
+    [Theory]
+    [InlineData("disk full on web-1", "disk", "<mark>disk</mark> full on web-1", true)]
+    [InlineData("Disk FULL", "full disk", "<mark>Disk</mark> <mark>FULL</mark>", true)]
+    [InlineData("nothing here", "disk", "nothing here", false)]
+    [InlineData("a.b(c) a.b", "a.b(c)", "<mark>a.b(c)</mark> a.b", true)]
+    public void LiveTail_HighlightsTheWords_AsPlainText(string line, string words, string html, bool matched)
+    {
+        var engine = Tail();
+        engine.SetValue("line", line);
+        engine.SetValue("words", words);
+
+        engine.Execute("var result = highlightHtml(line, highlightTerms(words));");
+
+        engine.Evaluate("result.html").AsString().Should().Be(html);
+        engine.Evaluate("result.matched").AsBoolean().Should().Be(matched);
+    }
+
+    [Fact]
+    public void LiveTail_EscapesTheLine_AroundAndInsideMatches()
+    {
+        var engine = Tail();
+        engine.SetValue("line", "<img src=x onerror=alert(1)> img");
+
+        var html = engine.Evaluate("highlightHtml(line, highlightTerms('img')).html").AsString();
+
+        html.Should().NotContain("<img").And.Contain("&lt;<mark>img</mark>");
     }
 
     [Fact]

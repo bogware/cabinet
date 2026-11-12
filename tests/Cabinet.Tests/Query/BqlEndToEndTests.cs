@@ -150,9 +150,14 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
     [InlineData("request", 2)]
     [InlineData("requests", 0)]
     [InlineData("requ", 0)]
+    [InlineData("\"disk full\"", 1)]
+    [InlineData("\"full disk\"", 0)]
+    [InlineData("disk OR gateway", 2)]
+    [InlineData("request NOT disk", 2)]
     public async Task Search_RequiresEveryWholeWord(string text, int expected)
     {
-        (await RunAsync($"find \"{text}\"")).Should().HaveCount(expected, text);
+        // Quoted, words are a phrase: in that order, next to each other
+        (await RunAsync($"find {text}")).Should().HaveCount(expected, text);
     }
 
     [SkippableTheory]

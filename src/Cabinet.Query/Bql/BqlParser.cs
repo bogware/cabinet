@@ -137,8 +137,36 @@ public sealed class BqlParser : IQueryParser
             AppendSearchToken(sb);
         }
 
-        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
-        return new SearchStage(searchText);
+        return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TimeModifier = new(
+        @"(?<![\w.])(?<which>earliest|latest)=(?<value>""[^""]*""|\S+)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Takes SPL's <c>earliest=-1d@d latest=now</c> out of search text as the query's time range,
+    /// and returns the rest of the text.
+    /// </summary>
+    private static string TakeTimeModifiers(BqlQuery query, string text)
+    {
+        var rest = TimeModifier.Replace(text, match =>
+        {
+            var value = match.Groups["value"].Value.Trim('"');
+            var now = DateTime.UtcNow;
+            var time = value.Equals("now", StringComparison.OrdinalIgnoreCase) ? now
+                : value == "0" ? DateTime.UnixEpoch
+                : BqlTime.ApplyRelative(now, value) ?? BqlTime.Parse(value, null)
+                    ?? throw new QueryParseException($"'{value}' isn't a time: use one such as -24h, -1d@d, now or 2026-03-04T05:00:00Z");
+            query.TimeRange ??= new BqlTimeRange();
+            if (match.Groups["which"].Value.Equals("earliest", StringComparison.OrdinalIgnoreCase))
+                query.TimeRange.Start = time;
+            else
+                query.TimeRange.End = time;
+            return string.Empty;
+        }).Trim();
+        return rest.Length > 0 ? rest : "*";
     }
 
     private SearchStage ParseImplicitSearch(BqlQuery query)
@@ -163,8 +191,7 @@ public sealed class BqlParser : IQueryParser
             AppendSearchToken(sb);
         }
 
-        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
-        return new SearchStage(searchText);
+        return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
     }
 
     // Spaced as typed, so host=l4d2-dev stays one comparison rather than becoming host = l4d2 - dev
@@ -234,6 +261,8 @@ public sealed class BqlParser : IQueryParser
         if (Current.IsKeyword("xyseries")) { Advance(); return ParseXyseriesStage(); }
         if (Current.IsKeyword("untable")) { Advance(); return ParseUntableStage(); }
         if (Current.IsKeyword("convert")) { Advance(); return ParseConvertStage(); }
+        if (Current.IsKeyword("iplocation")) { Advance(); return ParseIplocationStage(); }
+        if (Current.IsKeyword("cluster")) { Advance(); return ParseClusterStage(); }
 
         // SPL-style keywords
         if (Current.IsKeyword("eventstats")) { Advance(); return ParseEventStatsStage(); }
@@ -544,6 +573,27 @@ public sealed class BqlParser : IQueryParser
         if (Current.Kind == BqlTokenKind.OpenParen)
         {
             Advance();
+
+            // count(eval(status >= 500)): what an expression gives, row by row
+            if (Current.IsKeyword("eval") && Peek(1).Kind == BqlTokenKind.OpenParen)
+            {
+                Advance();
+                Advance();
+                var start = Current.Position;
+                var expression = ParseOrExpression();
+                var text = SourceText(start, Current);
+                Expect(BqlTokenKind.CloseParen, ")");
+                Expect(BqlTokenKind.CloseParen, ")");
+                var evaluated = new AggregateFunction(name, $"eval({text})") { Expression = expression };
+                if (Current.IsKeyword("as"))
+                {
+                    Advance();
+                    evaluated.Alias = ExpectIdentifier();
+                }
+
+                return evaluated;
+            }
+
             var field = ExpectIdentifier();
             Expect(BqlTokenKind.CloseParen, ")");
             var agg = new AggregateFunction(name, field);
@@ -861,36 +911,62 @@ public sealed class BqlParser : IQueryParser
         };
     }
 
-    private AppendStage ParseAppendStage()
+    /// <summary>
+    /// Reads a bracketed subquery, starting at its "[", and returns its text exactly as written:
+    /// re-joining tokens would change spacing (host=l4d2-dev) and lose escaped quotes.
+    /// </summary>
+    private string ReadBracketed(bool skipSearchKeyword = false)
     {
-        // append [<subsearch>] — consume everything up to the next pipe or EOF as the subsearch text
-        var sb = new StringBuilder();
-        // Expect opening bracket for subsearch
-        if (Current.Kind == BqlTokenKind.OpenBracket)
+        Advance(); // skip "["
+        if (skipSearchKeyword && Current.IsAnyKeyword("search", "find"))
         {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
-            // No brackets — consume tokens until pipe or EOF
-            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
-            {
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
+            Advance();
         }
 
-        return new AppendStage { SubsearchQuery = sb.ToString() };
+        var start = Current.Kind == BqlTokenKind.Eof ? -1 : Current.Position;
+        var depth = 1;
+        while (Current.Kind != BqlTokenKind.Eof)
+        {
+            if (Current.Kind == BqlTokenKind.OpenBracket)
+            {
+                depth++;
+            }
+            else if (Current.Kind == BqlTokenKind.CloseBracket && --depth == 0)
+            {
+                var text = SourceText(start, Current);
+                Advance(); // skip "]"
+                return text;
+            }
+
+            Advance();
+        }
+
+        throw new QueryParseException("Missing ']' to close the subsearch");
+    }
+
+    /// <summary>Reads the rest of the stage, up to the next pipe, exactly as written.</summary>
+    private string ReadUntilPipe()
+    {
+        var start = Current.Kind == BqlTokenKind.Eof ? -1 : Current.Position;
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            Advance();
+        }
+
+        return SourceText(start, Current);
+    }
+
+    private string SourceText(int start, BqlToken end)
+    {
+        var stop = end.Kind == BqlTokenKind.Eof || end.Position < 0 || end.Position > _source.Length ? _source.Length : end.Position;
+        return start < 0 || stop <= start ? string.Empty : _source[start..stop].Trim();
+    }
+
+    private AppendStage ParseAppendStage()
+    {
+        // append [<subsearch>], or the rest of the stage without brackets
+        var text = Current.Kind == BqlTokenKind.OpenBracket ? ReadBracketed() : ReadUntilPipe();
+        return new AppendStage { SubsearchQuery = text };
     }
 
     private JoinStage ParseJoinStage()
@@ -910,36 +986,13 @@ public sealed class BqlParser : IQueryParser
 
         var joinField = ExpectIdentifier();
 
-        // Parse subsearch
-        var sb = new StringBuilder();
-        if (Current.Kind == BqlTokenKind.OpenBracket)
-        {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
-            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
-            {
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
+        var subsearch = Current.Kind == BqlTokenKind.OpenBracket ? ReadBracketed() : ReadUntilPipe();
 
         return new JoinStage
         {
             JoinField = joinField,
             JoinType = joinType,
-            SubsearchQuery = sb.ToString()
+            SubsearchQuery = subsearch
         };
     }
 
@@ -990,34 +1043,14 @@ public sealed class BqlParser : IQueryParser
     private SubsearchStage ParseSubsearchStage()
     {
         // subsearch [<inner_query>]
-        var sb = new StringBuilder();
-
-        if (Current.Kind == BqlTokenKind.OpenBracket)
-        {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket)
-                {
-                    depth--;
-                    if (depth == 0) { Advance(); break; }
-                }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
+        if (Current.Kind != BqlTokenKind.OpenBracket)
             throw new QueryParseException("Expected '[' after 'subsearch'", $"position {Current.Position}");
-        }
 
-        if (string.IsNullOrWhiteSpace(sb.ToString()))
+        var text = ReadBracketed();
+        if (string.IsNullOrWhiteSpace(text))
             throw new QueryParseException("Subsearch query cannot be empty");
 
-        return new SubsearchStage(sb.ToString());
+        return new SubsearchStage(text);
     }
 
     // ─── MULTISEARCH stage ──────────────────────────────────────
@@ -1030,31 +1063,7 @@ public sealed class BqlParser : IQueryParser
 
         while (Current.Kind == BqlTokenKind.OpenBracket)
         {
-            Advance(); // skip "["
-            var sb = new StringBuilder();
-
-            // Expect "search" keyword inside brackets
-            if (Current.IsAnyKeyword("search", "find"))
-            {
-                Advance(); // skip "search"/"find"
-            }
-
-            // Consume the search query text until closing bracket
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket)
-                {
-                    depth--;
-                    if (depth == 0) { Advance(); break; }
-                }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-
-            var query = sb.ToString().Trim();
+            var query = ReadBracketed(skipSearchKeyword: true);
             if (!string.IsNullOrWhiteSpace(query))
             {
                 searchQueries.Add(query);
@@ -1572,7 +1581,8 @@ public sealed class BqlParser : IQueryParser
     {
         if (Current.Kind != BqlTokenKind.NumberLiteral)
             throw new QueryParseException($"Expected number but got '{Current.Value}'", $"position {Current.Position}");
-        var num = int.Parse(Current.Value, CultureInfo.InvariantCulture);
+        if (!int.TryParse(Current.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var num))
+            throw new QueryParseException($"'{Current.Value}' isn't a whole number between {int.MinValue} and {int.MaxValue}", $"position {Current.Position}");
         Advance();
         return num;
     }
@@ -1633,7 +1643,55 @@ public sealed class BqlParser : IQueryParser
             "fillnull", "bucket", "bin", "makeresults", "mvexpand",
             "chart", "filldown", "addcoltotals", "inputlookup",
             "rare", "regex", "fieldsummary", "xyseries", "untable", "convert",
-            "macro", "subsearch", "multisearch");
+            "macro", "subsearch", "multisearch", "iplocation", "cluster");
+
+    private ClusterStage ParseClusterStage()
+    {
+        // cluster [t=0.5] [field=RawLine] [labelonly=true|false]
+        double similarity = 0.5;
+        var field = "RawLine";
+        var labelOnly = false;
+        while (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            var name = Current.Value.ToLowerInvariant();
+            Advance();
+            Advance();
+            var value = Current.Value;
+            Advance();
+            switch (name)
+            {
+                case "t":
+                    if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out similarity) || similarity <= 0 || similarity > 1)
+                        throw new QueryParseException($"cluster t= is between 0 and 1, not '{value}'");
+                    break;
+                case "field":
+                    field = value;
+                    break;
+                case "labelonly":
+                    labelOnly = value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";
+                    break;
+                default:
+                    throw new QueryParseException($"cluster doesn't take {name}=; it takes t=, field= and labelonly=");
+            }
+        }
+
+        return new ClusterStage { Similarity = similarity, Field = field, LabelOnly = labelOnly };
+    }
+
+    private IplocationStage ParseIplocationStage()
+    {
+        // iplocation [prefix=x] field
+        var prefix = string.Empty;
+        if (Current.IsKeyword("prefix") && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance();
+            Advance();
+            prefix = Current.Value;
+            Advance();
+        }
+
+        return new IplocationStage { Field = ExpectIdentifier(), Prefix = prefix };
+    }
 
     // ─── Legacy QueryPlan conversion ─────────────────────────
 
@@ -1670,6 +1728,8 @@ public sealed class BqlParser : IQueryParser
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
+        IplocationStage ip => new LegacyIplocationOperator(ip),
+        ClusterStage cl => new LegacyClusterOperator(cl),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),
@@ -1696,23 +1756,13 @@ public sealed class BqlParser : IQueryParser
 
 internal sealed class LegacySearchOperator : QueryOperator
 {
-    private readonly IReadOnlyList<string> _terms;
+    private readonly BqlTextSearch _search;
     public override string Name => "search";
 
-    public LegacySearchOperator(string pattern) { _terms = SearchTerms.Parse(pattern); }
+    public LegacySearchOperator(string pattern) { _search = BqlTextSearch.Parse(pattern); }
 
-    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
-    {
-        if (_terms.Count == 0) return Task.FromResult(input);
-
-        var result = input.Where(evt =>
-        {
-            var dict = (IDictionary<string, object?>)evt;
-            return SearchTerms.Matches(dict.TryGetValue("RawLine", out var line) ? line?.ToString() : null, _terms);
-        });
-
-        return Task.FromResult(result);
-    }
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default) =>
+        Task.FromResult<IEnumerable<dynamic>>(((IEnumerable<object>)input).Where(evt => _search.Matches((IDictionary<string, object?>)evt)));
 }
 
 internal sealed class LegacyWhereOperator : QueryOperator
@@ -1748,7 +1798,7 @@ internal sealed class LegacyStatsOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = new StatsSink(_aggregations, _groupByFields, new QueryBudget(new QueryLimits()));
+        var sink = new StatsSink(_aggregations, _groupByFields, Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -1886,7 +1936,7 @@ internal sealed class LegacyTopOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2062,7 +2112,7 @@ internal sealed class LegacyTimechartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2320,6 +2370,35 @@ internal sealed class LegacyStreamStatsOperator : QueryOperator
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
         var events = input.ToList();
+        if (_window <= 0)
+        {
+            // Without a window, running totals: each row costs one update, not a pass over all before it
+            var budget = Budget ?? new QueryBudget(new QueryLimits());
+            var running = new Dictionary<string, AggregateAccumulator[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in events)
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                var groupKey = _groupByFields.Count > 0 ? BqlGroupKey.For(dict, _groupByFields) : "";
+                if (!running.TryGetValue(groupKey, out var accumulators))
+                {
+                    accumulators = _aggregations.Select(agg => new AggregateAccumulator(agg, budget)).ToArray();
+                    running[groupKey] = accumulators;
+                }
+
+                foreach (var accumulator in accumulators)
+                {
+                    accumulator.Add(dict);
+                }
+
+                for (var i = 0; i < _aggregations.Count; i++)
+                {
+                    dict[_aggregations[i].OutputName] = accumulators[i].Result();
+                }
+            }
+
+            return Task.FromResult<IEnumerable<dynamic>>(events);
+        }
+
         // Track running windows per group (or global if no group-by)
         var groupWindows = new Dictionary<string, List<dynamic>>(StringComparer.OrdinalIgnoreCase);
 
@@ -2565,7 +2644,7 @@ internal sealed class LegacyChartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2680,7 +2759,7 @@ internal sealed class LegacyRareOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2970,7 +3049,7 @@ internal sealed class LegacyInputLookupOperator : QueryOperator
     {
         var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
         if (lookup == null)
-            return Enumerable.Empty<dynamic>();
+            throw new QueryExecutionException($"There's no lookup table named '{_lookupName}'");
 
         var results = new List<dynamic>();
         foreach (var row in lookup.Rows)
@@ -3011,7 +3090,7 @@ internal sealed class LegacyLookupOperator : QueryOperator
     {
         var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
         if (lookup == null)
-            return input; // No lookup found, pass through unchanged
+            throw new QueryExecutionException($"There's no lookup table named '{_lookupName}'");
 
         // Build index: key field value → lookup row (first match wins)
         var index = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);

@@ -438,7 +438,7 @@ public class BqlExpressionEvaluatorTests
         var ctx = MakeContext(("a", null), ("b", null));
 
         var eqExpr = new ComparisonExpression(new FieldExpression("a"), "==", new FieldExpression("b"));
-        ((bool)BqlExpressionEvaluator.Evaluate(eqExpr, ctx)!).Should().BeTrue("null == null should be true");
+        ((bool)BqlExpressionEvaluator.Evaluate(eqExpr, ctx)!).Should().BeFalse("as in SPL, a comparison with a missing value is false");
 
         var neExpr = new ComparisonExpression(new FieldExpression("a"), "!=", new FieldExpression("b"));
         ((bool)BqlExpressionEvaluator.Evaluate(neExpr, ctx)!).Should().BeFalse("null != null should be false");
@@ -453,6 +453,34 @@ public class BqlExpressionEvaluatorTests
         ((bool)BqlExpressionEvaluator.Evaluate(eqExpr, ctx)!).Should().BeFalse();
 
         var neExpr = new ComparisonExpression(new FieldExpression("a"), "!=", new FieldExpression("b"));
-        ((bool)BqlExpressionEvaluator.Evaluate(neExpr, ctx)!).Should().BeTrue();
+        ((bool)BqlExpressionEvaluator.Evaluate(neExpr, ctx)!).Should().BeFalse("as in SPL, where x != y drops events without x");
+    }
+
+    [Fact]
+    public void If_EvaluatesOnlyTheBranchTaken()
+    {
+        var ctx = MakeContext(("a", 1));
+        var badRegex = new FunctionExpression("match", [new FieldExpression("a"), new LiteralExpression("(")]);
+        var expr = new FunctionExpression("if", [new LiteralExpression(true), new LiteralExpression("ok"), badRegex]);
+
+        BqlExpressionEvaluator.Evaluate(expr, ctx).Should().Be("ok");
+        BqlExpressionEvaluator.Evaluate(new FunctionExpression("case", [new LiteralExpression(true), new LiteralExpression("ok"), new LiteralExpression(true), badRegex]), ctx)
+            .Should().Be("ok");
+        BqlExpressionEvaluator.Evaluate(new FunctionExpression("coalesce", [new LiteralExpression("ok"), badRegex]), ctx).Should().Be("ok");
+    }
+
+    [Theory]
+    [InlineData("false", false)]
+    [InlineData("FALSE", false)]
+    [InlineData("0", false)]
+    [InlineData("", false)]
+    [InlineData("true", true)]
+    [InlineData("yes", true)]
+    public void If_TreatsFalseTextAsFalse(string value, bool expected)
+    {
+        var ctx = MakeContext(("flag", value));
+        var expr = new FunctionExpression("if", [new FieldExpression("flag"), new LiteralExpression("y"), new LiteralExpression("n")]);
+
+        BqlExpressionEvaluator.Evaluate(expr, ctx).Should().Be(expected ? "y" : "n");
     }
 }

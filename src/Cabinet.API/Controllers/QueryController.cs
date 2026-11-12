@@ -21,7 +21,7 @@ namespace Cabinet.API.Controllers;
 public class QueryController : ControllerBase
 {
     private static string QueryErrorDetail(QueryParseException ex) =>
-        ex is Cabinet.Query.Bql.QueryLimitExceededException ? ex.Message : $"Invalid query syntax: {ex.Message}";
+        ex is Cabinet.Query.Bql.QueryLimitExceededException or Cabinet.Query.Bql.QueryExecutionException ? ex.Message : $"Invalid query syntax: {ex.Message}";
 
     private readonly IQueryEngine _queryEngine;
     private readonly IQueryParser _queryParser;
@@ -81,6 +81,7 @@ public class QueryController : ControllerBase
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(_limits.QueryTimeoutSeconds));
 
             var startTime = DateTime.UtcNow;
+            var cacheVersion = Services.QueryCacheService.Now();
 
             // Check query cache for dashboard refresh acceleration
             var useCache = request.UseCache;
@@ -91,6 +92,17 @@ public class QueryController : ControllerBase
                 {
                     var cacheTime = DateTime.UtcNow - startTime;
                     Response.Headers["X-Cache"] = "HIT";
+
+                    // A search answered from the cache is still a search someone ran
+                    await _auditLogger.LogAsync(new AuditEvent
+                    {
+                        PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
+                        Action = AuditAction.Search,
+                        ResourceType = "Query",
+                        Description = $"Executed query (cached): {request.Query[..Math.Min(200, request.Query.Length)]}",
+                        SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString()
+                    });
+
                     return Ok(new QueryResponse
                     {
                         Query = request.Query,
@@ -120,7 +132,8 @@ public class QueryController : ControllerBase
             // Cache the result for future requests
             if (_queryCache != null)
             {
-                _queryCache.Set(request.Query, result, $"{_indexScope?.CacheKey}|{request.Index}|{request.StartTime:O}|{request.EndTime:O}|{request.Limit}");
+                _queryCache.Set(request.Query, result, $"{_indexScope?.CacheKey}|{request.Index}|{request.StartTime:O}|{request.EndTime:O}|{request.Limit}",
+                    dataIndex: string.IsNullOrWhiteSpace(request.Index) ? null : request.Index, createdAt: cacheVersion);
                 Response.Headers["X-Cache"] = "MISS";
             }
 

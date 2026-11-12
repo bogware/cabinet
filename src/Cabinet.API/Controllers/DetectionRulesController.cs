@@ -19,12 +19,36 @@ public class DetectionRulesController : ControllerBase
 {
     private readonly DetectionRuleStore _rules;
     private readonly Infrastructure.ServerLimits _limits;
+    private readonly OutboundUrlGuard? _guard;
+    private readonly ConnectorStore? _connectors;
+    private readonly Cabinet.API.Authentication.IndexAccessScope? _scope;
+    private readonly Cabinet.Core.Interfaces.IAuditLogger? _audit;
 
-    public DetectionRulesController(DetectionRuleStore rules, Infrastructure.ServerLimits? limits = null)
+    public DetectionRulesController(
+        DetectionRuleStore rules,
+        Infrastructure.ServerLimits? limits = null,
+        OutboundUrlGuard? guard = null,
+        ConnectorStore? connectors = null,
+        Cabinet.API.Authentication.IndexAccessScope? scope = null,
+        Cabinet.Core.Interfaces.IAuditLogger? audit = null)
     {
         _rules = rules;
         _limits = limits ?? new Infrastructure.ServerLimits();
+        _guard = guard;
+        _connectors = connectors;
+        _scope = scope;
+        _audit = audit;
     }
+
+    private Task AuditAsync(AuditAction action, string id, string description) => _audit?.LogAsync(new AuditEvent
+    {
+        PrincipalId = User.FindFirst("ClientId")?.Value ?? User.Identity?.Name ?? "unknown",
+        Action = action,
+        ResourceType = "DetectionRule",
+        ResourceId = id,
+        Description = description,
+        SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
+    }) ?? Task.CompletedTask;
 
     /// <summary>
     /// List rules
@@ -60,17 +84,18 @@ public class DetectionRulesController : ControllerBase
     {
         rule.Id = Cabinet.Core.Utilities.Ulid.NewUlid();
         rule.Builtin = false;
-        if (Validate(rule) is { } problem)
+        if (await ValidateAsync(rule, cancellationToken) is { } problem)
         {
             return problem;
         }
 
         await _rules.SaveAsync(rule, cancellationToken);
+        await AuditAsync(AuditAction.Create, rule.Id, $"Added detection rule {rule.Name}");
         return CreatedAtAction(nameof(Get), new { id = rule.Id }, rule);
     }
 
     /// <summary>
-    /// Change a rule. Built-in rules can only be turned on and off.
+    /// Change a rule, or add one under this ID. Built-in rules can only be turned on and off.
     /// </summary>
     [HttpPut("{id}")]
     [RequireEveryIndex(Capability.Search)]
@@ -80,25 +105,27 @@ public class DetectionRulesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(string id, [FromBody] DetectionRule rule, CancellationToken cancellationToken = default)
     {
+        // A new ID adds the rule, so rules kept as files keep the IDs they were written with
         var existing = await _rules.GetAsync(id, cancellationToken);
-        if (existing == null)
+        if (existing == null && !System.Text.RegularExpressions.Regex.IsMatch(id, "^[A-Za-z0-9._-]{1,64}$"))
         {
-            return Problem(detail: "Rule not found", statusCode: 404);
+            return Problem(detail: "A rule ID is 1 to 64 letters, digits, '.', '_' or '-'", statusCode: 400);
         }
 
-        if (existing.Builtin)
+        if (existing?.Builtin == true)
         {
             return Problem(detail: "Built-in rules can only be turned on and off. Copy it to a new rule to change it.", statusCode: 400);
         }
 
         rule.Id = id;
         rule.Builtin = false;
-        if (Validate(rule) is { } problem)
+        if (await ValidateAsync(rule, cancellationToken) is { } problem)
         {
             return problem;
         }
 
         await _rules.SaveAsync(rule, cancellationToken);
+        await AuditAsync(existing == null ? AuditAction.Create : AuditAction.Update, id, $"{(existing == null ? "Added" : "Changed")} detection rule {rule.Name}");
         return Ok(rule);
     }
 
@@ -110,8 +137,16 @@ public class DetectionRulesController : ControllerBase
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Enable(string id, CancellationToken cancellationToken = default) =>
-        await _rules.SetEnabledAsync(id, true, cancellationToken) ? NoContent() : Problem(detail: "Rule not found", statusCode: 404);
+    public async Task<IActionResult> Enable(string id, CancellationToken cancellationToken = default)
+    {
+        if (!await _rules.SetEnabledAsync(id, true, cancellationToken))
+        {
+            return Problem(detail: "Rule not found", statusCode: 404);
+        }
+
+        await AuditAsync(AuditAction.Update, id, "Turned a detection rule on");
+        return NoContent();
+    }
 
     /// <summary>
     /// Turn a rule off
@@ -121,8 +156,16 @@ public class DetectionRulesController : ControllerBase
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Disable(string id, CancellationToken cancellationToken = default) =>
-        await _rules.SetEnabledAsync(id, false, cancellationToken) ? NoContent() : Problem(detail: "Rule not found", statusCode: 404);
+    public async Task<IActionResult> Disable(string id, CancellationToken cancellationToken = default)
+    {
+        if (!await _rules.SetEnabledAsync(id, false, cancellationToken))
+        {
+            return Problem(detail: "Rule not found", statusCode: 404);
+        }
+
+        await AuditAsync(AuditAction.Update, id, "Turned a detection rule off");
+        return NoContent();
+    }
 
     /// <summary>
     /// Delete a rule. Built-in rules can only be turned off.
@@ -132,8 +175,16 @@ public class DetectionRulesController : ControllerBase
     [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(string id, CancellationToken cancellationToken = default) =>
-        await _rules.DeleteAsync(id, cancellationToken) ? NoContent() : Problem(detail: "Rule not found", statusCode: 404);
+    public async Task<IActionResult> Delete(string id, CancellationToken cancellationToken = default)
+    {
+        if (!await _rules.DeleteAsync(id, cancellationToken))
+        {
+            return Problem(detail: "Rule not found", statusCode: 404);
+        }
+
+        await AuditAsync(AuditAction.Delete, id, "Deleted a detection rule");
+        return NoContent();
+    }
 
     /// <summary>
     /// Try a rule's expressions on a line, without saving anything
@@ -197,7 +248,7 @@ public class DetectionRulesController : ControllerBase
         }
 
         rule.Name = string.IsNullOrWhiteSpace(rule.Name) ? "Backtest" : rule.Name;
-        if (Validate(rule) is { } problem)
+        if (await ValidateAsync(rule, cancellationToken) is { } problem)
         {
             return problem;
         }
@@ -210,7 +261,7 @@ public class DetectionRulesController : ControllerBase
         return Ok(result);
     }
 
-    private ObjectResult? Validate(DetectionRule rule)
+    private async Task<ObjectResult?> ValidateAsync(DetectionRule rule, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(rule.Name))
         {
@@ -230,14 +281,41 @@ public class DetectionRulesController : ControllerBase
         foreach (var action in rule.Actions ?? [])
         {
             var type = action.Type?.ToLowerInvariant();
-            if (type is not ("notify" or "event" or "webhook"))
+            if (type is not ("notify" or "event" or "webhook" or "connector"))
             {
-                return Problem(detail: $"Action type must be notify, event or webhook, not '{action.Type}'", statusCode: 400);
+                return Problem(detail: $"Action type must be notify, event, webhook or connector, not '{action.Type}'", statusCode: 400);
             }
 
-            if (type == "webhook" && (!Uri.TryCreate(action.Target, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")))
+            if (type == "webhook")
             {
-                return Problem(detail: "A webhook action needs an http or https URL in Target", statusCode: 400);
+                var reason = _guard?.Check(action.Target) ?? (Uri.TryCreate(action.Target, UriKind.Absolute, out var url) && url.Scheme is "http" or "https" ? null : "Needs an http or https URL");
+                if (reason != null)
+                {
+                    return Problem(detail: $"Webhook action: {reason}", statusCode: 400);
+                }
+            }
+
+            if (type == "connector")
+            {
+                if (string.IsNullOrWhiteSpace(action.Target))
+                {
+                    return Problem(detail: "A connector action needs the connector's name in Target", statusCode: 400);
+                }
+
+                if (_connectors != null && await _connectors.GetAsync(action.Target, cancellationToken) == null)
+                {
+                    return Problem(detail: $"There's no connector named '{action.Target}'", statusCode: 400);
+                }
+            }
+
+            // Writing events into an index is ingesting into it, so it needs that right.
+            if (type == "event")
+            {
+                var index = string.IsNullOrWhiteSpace(action.Target) ? DetectionActionExecutor.DefaultEventIndex : action.Target.Trim();
+                if (_scope?.Principal is not null && !_scope.Can(Capability.Ingest, index))
+                {
+                    return Problem(detail: $"Not allowed to write events to index '{index}'", statusCode: 403);
+                }
             }
 
             if (action.Severity != null && !Enum.TryParse<Cabinet.Alerts.AlertSeverity>(action.Severity, ignoreCase: true, out _))

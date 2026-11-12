@@ -9,6 +9,56 @@ function showLogin(message) {
     openModal('loginModal');
 }
 
+/* With an API key, it identifies every request. Without one, the browser's sign-in session does,
+   and the custom header shows the request came from this page: another site's page can't add it. */
+function authHeaders() {
+    return API_KEY ? { 'X-API-Key': API_KEY } : { 'X-Cabinet-Request': '1' };
+}
+
+/* The ways to sign in this server offers, shown in the sign-in dialog. */
+async function loadSignInOptions() {
+    try {
+        const res = await fetch('/auth/providers', { headers: { Accept: 'application/json' } });
+        if (!res.ok) return null;
+        const p = await res.json();
+        document.getElementById('loginOidc').hidden = !p.oidc;
+        document.getElementById('loginSaml').hidden = !p.saml;
+        document.getElementById('loginLdap').hidden = !p.ldap;
+        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap);
+        const signOut = document.getElementById('signOutButton');
+        if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
+        return p;
+    } catch { return null; }
+}
+
+function signInWith(provider) {
+    window.location.href = `/auth/login/${provider}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+}
+
+async function signInLdap() {
+    const username = document.getElementById('ldapUser').value.trim();
+    const password = document.getElementById('ldapPassword').value;
+    if (!username || !password) return;
+    const res = await fetch('/auth/login/ldap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Cabinet-Request': '1' },
+        body: JSON.stringify({ username, password }),
+    });
+    document.getElementById('ldapPassword').value = '';
+    if (res.ok) { window.location.reload(); return; }
+    let message = 'Sign-in failed';
+    try { message = (await res.json()).message || message; } catch {}
+    document.getElementById('loginError').textContent = message;
+}
+
+async function signOut() {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'X-Cabinet-Request': '1' } });
+    sessionStorage.removeItem('cabinet_api_key');
+    localStorage.removeItem('cabinet_api_key');
+    API_KEY = '';
+    window.location.reload();
+}
+
 function storeApiKey(key, remember) {
     API_KEY = key;
     sessionStorage.setItem('cabinet_api_key', key);
@@ -116,8 +166,11 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
 });
 
 const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings'];
+// Pages added by other scripts register here: { name: { title, load } }
+window.EXTRA_PAGES = window.EXTRA_PAGES || {};
+function isPage(page) { return VALID_PAGES.includes(page) || Object.prototype.hasOwnProperty.call(window.EXTRA_PAGES, page); }
 function navigate(page) {
-    if (!VALID_PAGES.includes(page)) return;
+    if (!isPage(page)) return;
     currentPage = page;
     document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
     const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
@@ -127,7 +180,8 @@ function navigate(page) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     const pageEl = document.getElementById('page-' + page);
     if (pageEl) pageEl.classList.add('active');
-    const titles = { rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
+    const extra = window.EXTRA_PAGES[page];
+    const titles = { [page]: extra ? extra.title : page, rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
     document.getElementById('pageTitle').textContent = titles[page] || page;
     // Update URL without reload
     // Search keeps its own state in the hash, so a search can be bookmarked
@@ -149,14 +203,16 @@ function navigate(page) {
     if (page === 'settings') loadSettings();
     if (page === 'livetail') loadTailIndexes();
     if (page === 'jobs') loadJobs();
+    if (extra && typeof extra.load === 'function') extra.load();
 }
 
 /* ===== API Helper ===== */
 async function api(method, path, body) {
-    const opts = { method, headers: { 'X-API-Key': API_KEY, 'Accept': 'application/json' } };
+    const opts = { method, headers: { ...authHeaders(), 'Accept': 'application/json' } };
     if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     const res = await fetch(path, opts);
     if (res.status === 401) {
+        loadSignInOptions();
         showLogin(API_KEY ? 'That API key was not accepted.' : '');
     }
     if (!res.ok) {
@@ -331,7 +387,7 @@ function stopDashboardRefresh() {
     if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
 }
 
-const PANEL_VIZ = { Table: 'table', LineChart: 'line', AreaChart: 'area', BarChart: 'bar', SingleValue: 'stat' };
+const PANEL_VIZ = { Table: 'table', LineChart: 'line', AreaChart: 'area', BarChart: 'bar', SingleValue: 'stat', PieChart: 'pie', Gauge: 'gauge', Heatmap: 'heatmap', Map: 'map' };
 
 async function renderPanel(panel, body) {
     if (!panel.query) { body.innerHTML = '<p class="chart-note">No query defined.</p>'; return; }
@@ -378,7 +434,7 @@ function addPanelRow(panel) {
     const data = panel && panel.title !== undefined ? panel : { title: '', query: '', type: 'LineChart', width: 6 };
     const row = document.createElement('div');
     row.className = 'panel-row';
-    const options = [['LineChart', 'Line'], ['AreaChart', 'Stacked area'], ['BarChart', 'Bars'], ['SingleValue', 'Single value'], ['Table', 'Table']]
+    const options = [['LineChart', 'Line'], ['AreaChart', 'Stacked area'], ['BarChart', 'Bars'], ['PieChart', 'Pie'], ['SingleValue', 'Single value'], ['Gauge', 'Gauge'], ['Heatmap', 'Heatmap'], ['Map', 'Map'], ['Table', 'Table']]
         .map(([value, label]) => `<option value="${value}"${data.type === value ? ' selected' : ''}>${label}</option>`).join('');
     const widths = [[12, 'Full'], [6, 'Half'], [4, 'Third'], [3, 'Quarter']]
         .map(([value, label]) => `<option value="${value}"${Number(data.width) === value ? ' selected' : ''}>${label}</option>`).join('');
@@ -579,7 +635,7 @@ async function loadRules() {
                 ? `${fmt(rule.threshold)} matches in ${fmt(rule.windowSeconds)}s${rule.groupBy ? ' by ' + esc(rule.groupBy) : ''}`
                 : 'Each match';
             const actionSummary = (rule.actions && rule.actions.length)
-                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
+                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'connector' ? `→${esc(a.target || '?')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
                 : 'notify';
             tr.innerHTML = `<td><div style="font-weight:500">${esc(rule.name)}</div><div class="chart-note">${esc(rule.description || '')}</div><div class="chart-note">On fire: ${actionSummary}</div></td>
                 <td>${sevBadge(rule.severity)}</td>
@@ -668,6 +724,7 @@ function addRuleAction(action) {
             <option value="notify"${action.type === 'notify' ? ' selected' : ''}>Notify channels</option>
             <option value="event"${action.type === 'event' ? ' selected' : ''}>Write an event</option>
             <option value="webhook"${action.type === 'webhook' ? ' selected' : ''}>Call a webhook</option>
+            <option value="connector"${action.type === 'connector' ? ' selected' : ''}>Send to connector</option>
         </select>
         <input class="ra-target" style="flex:1;min-width:160px" value="${esc(action.target || '')}">
         <select class="ra-sev" style="width:auto">${sevOptions}</select>
@@ -679,7 +736,7 @@ function addRuleAction(action) {
     const apply = () => {
         const t = type.value;
         row.querySelector('.ra-target').style.display = t === 'notify' ? 'none' : '';
-        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : 'Index for the event (default detections)';
+        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : t === 'connector' ? 'Connector name (see Connectors)' : 'Index for the event (default detections)';
         row.querySelector('.ra-fields').style.display = t === 'event' ? '' : 'none';
     };
     type.addEventListener('change', apply);
@@ -1261,6 +1318,8 @@ function toggleTail() {
     document.getElementById('tailStartBtn').textContent = 'Stop';
     document.getElementById('tailStartBtn').classList.remove('btn-primary');
     document.getElementById('tailStartBtn').classList.add('btn-danger');
+    document.getElementById('tailPauseBtn').disabled = false;
+    setTailPaused(false);
 
     // SSE connection with API key via query param not supported; use fetch streaming instead
     const controller = new AbortController();
@@ -1269,7 +1328,7 @@ function toggleTail() {
     (async () => {
         try {
             const res = await fetch(url, {
-                headers: { 'X-API-Key': API_KEY, 'Accept': 'text/event-stream' },
+                headers: { ...authHeaders(), 'Accept': 'text/event-stream' },
                 signal: controller.signal
             });
             const reader = res.body.getReader();
@@ -1284,21 +1343,8 @@ function toggleTail() {
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         try {
-                            const evt = JSON.parse(line.slice(6));
-                            tailCount++;
-                            const div = document.createElement('div');
-                            div.style.cssText = 'padding:2px 0;border-bottom:1px solid rgba(48,54,61,0.3)';
-                            const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
-                            const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE','DEBUG','INFO','WARN','ERROR','CRIT','FATAL'][Math.min(parseInt(evt.severity)||0, 6)]}</span>` : '';
-                            const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
-                            div.innerHTML = `<span style="color:var(--text-muted);margin-right:8px">${esc(ts)}</span>${sev}<span>${esc(raw)}</span>`;
-                            output.appendChild(div);
-                            // Auto-scroll to bottom
-                            output.scrollTop = output.scrollHeight;
-                            // Limit DOM nodes to prevent memory issues
-                            while (output.children.length > 2000) output.removeChild(output.firstChild);
-                            document.getElementById('tailCount').textContent = tailCount + ' events';
-                        } catch {}
+                            receiveTailEvent(JSON.parse(line.slice(6)));
+                        } catch (parseError) { console.warn('Skipped a live tail line', parseError); }
                     }
                 }
             }
@@ -1311,6 +1357,8 @@ function toggleTail() {
             }
         }
         // Clean up
+        document.getElementById('tailPauseBtn').disabled = true;
+        setTailPaused(false);
         document.getElementById('tailDot').style.display = 'none';
         document.getElementById('tailStartBtn').textContent = 'Start';
         document.getElementById('tailStartBtn').classList.remove('btn-danger');
@@ -1321,6 +1369,7 @@ function toggleTail() {
 
 function clearTail() {
     document.getElementById('tailOutput').innerHTML = '';
+    tailBuffer = [];
     tailCount = 0;
     document.getElementById('tailCount').textContent = '0 events';
 }
@@ -1556,7 +1605,7 @@ setInterval(loadStats, 120000);
 })();
 window.addEventListener('popstate', e => {
     const page = (e.state && e.state.page) || window.location.hash.replace('#', '').split('?')[0] || 'search';
-    if (VALID_PAGES.includes(page)) navigate(page);
+    if (isPage(page)) navigate(page);
 });
 
 // P11: Keyboard shortcuts
@@ -1603,5 +1652,5 @@ document.querySelectorAll('.modal-bg').forEach(bg => {
 });
 
 initAccessibility();
-if (!API_KEY) showLogin();
+loadSignInOptions().then(p => { if (!API_KEY && !(p && p.signedIn)) showLogin(); });
 

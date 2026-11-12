@@ -19,4 +19,18 @@ internal static class BqlGroupKey
 
         return key.ToString();
     }
+
+    /// <summary>Whether the row has a value for every field.</summary>
+    public static bool HasAll(IDictionary<string, object?> row, IReadOnlyList<string> fields)
+    {
+        foreach (var field in fields)
+        {
+            if (!row.TryGetValue(field, out var value) || value == null)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

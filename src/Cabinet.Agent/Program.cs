@@ -99,6 +99,25 @@ public static class Program
             return new FileMonitorService(agentConfig, registry, forwarder, logger);
         });
 
+        // The journal and Windows event logs, each checkpointed in its own file next to the registry
+        builder.Services.AddSingleton(sp => new Cabinet.Agent.Monitoring.InputCheckpoints(
+            Path.Combine(Path.GetDirectoryName(Path.GetFullPath(agentConfig.Registry.Path)) ?? ".", "checkpoints.json"),
+            sp.GetRequiredService<ILogger<Cabinet.Agent.Monitoring.InputCheckpoints>>()));
+        foreach (var input in agentConfig.Inputs.Where(i => i.Type.Equals("journald", StringComparison.OrdinalIgnoreCase)))
+        {
+            builder.Services.AddSingleton<IHostedService>(sp => new Cabinet.Agent.Monitoring.JournaldInput(
+                input, agentConfig, sp.GetRequiredService<LogForwarder>(), sp.GetRequiredService<Cabinet.Agent.Monitoring.InputCheckpoints>(),
+                sp.GetRequiredService<ILogger<Cabinet.Agent.Monitoring.JournaldInput>>()));
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var input in agentConfig.Inputs.Where(i => i.Type.Equals("wineventlog", StringComparison.OrdinalIgnoreCase)))
+            {
+                AddWindowsEventLog(builder.Services, input, agentConfig);
+            }
+        }
+
         // Keeps the agent at the server's version
         builder.Services.AddHostedService(sp => new Cabinet.Agent.Updating.AgentUpdater(
             sp.GetRequiredService<HttpClient>(),
@@ -126,6 +145,12 @@ public static class Program
         return 0;
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void AddWindowsEventLog(IServiceCollection services, InputConfiguration input, AgentConfiguration agentConfig) =>
+        services.AddSingleton<IHostedService>(sp => new Cabinet.Agent.Monitoring.WindowsEventLogInput(
+            input, agentConfig, sp.GetRequiredService<LogForwarder>(), sp.GetRequiredService<Cabinet.Agent.Monitoring.InputCheckpoints>(),
+            sp.GetRequiredService<ILogger<Cabinet.Agent.Monitoring.WindowsEventLogInput>>()));
+
     private static List<string> ValidateConfiguration(AgentConfiguration config)
     {
         var errors = new List<string>();
@@ -137,9 +162,26 @@ public static class Program
 
         foreach (var input in config.Inputs)
         {
-            if (input.Paths.Count == 0)
+            if (input.Type.ToLowerInvariant() is not ("file" or "kubernetes" or "journald" or "wineventlog"))
             {
-                errors.Add("Input has no paths configured.");
+                errors.Add($"Input type '{input.Type}' isn't one of file, kubernetes, journald or wineventlog.");
+            }
+            else if (input.IsKubernetes && input.Paths.Count == 0)
+            {
+                // Where the kubelet links every container's log
+                input.Paths.Add("/var/log/containers/*.log");
+            }
+            else if (input.IsFileInput && input.Paths.Count == 0)
+            {
+                errors.Add("A file input has no paths configured.");
+            }
+            else if (input.Type.Equals("journald", StringComparison.OrdinalIgnoreCase) && !OperatingSystem.IsLinux())
+            {
+                errors.Add("journald inputs only run on Linux.");
+            }
+            else if (input.Type.Equals("wineventlog", StringComparison.OrdinalIgnoreCase) && !OperatingSystem.IsWindows())
+            {
+                errors.Add("wineventlog inputs only run on Windows.");
             }
         }
 

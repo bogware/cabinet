@@ -35,6 +35,9 @@ public enum BqlTokenKind
     Slash,
     Percent,
 
+    /// <summary>Any other printable character, such as @ or :, which search text keeps as typed.</summary>
+    Symbol,
+
     // End of input
     Eof
 }

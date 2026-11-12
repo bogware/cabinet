@@ -55,7 +55,7 @@ public class HecControllerTests
         var stored = await PostEventAsync(body);
 
         var logEvent = stored.Should().ContainSingle().Subject;
-        logEvent.Id.Should().Be(id);
+        logEvent.Id.Should().Be(SenderEventId.For(_controller.User, id));
         logEvent.RawLine.Should().Be(line);
         logEvent.Host.Should().Be("agent-host");
         logEvent.Index.Should().Be("web");
@@ -64,6 +64,31 @@ public class HecControllerTests
         logEvent.Severity.Should().Be(LogSeverity.Error);
         logEvent.Timestamp.Should().Be(new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc));
         logEvent.GetField<long>("status").Should().Be(503);
+    }
+
+    [Fact]
+    public void SenderIds_AreKeptApartPerSender_ButStableForOneSender()
+    {
+        static ClaimsPrincipal Sender(string clientId) => new(new ClaimsIdentity(new[] { new Claim("ClientId", clientId) }, "ApiKey"));
+        const string id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+        SenderEventId.For(Sender("a"), id).Should().Be(SenderEventId.For(Sender("a"), id));
+        SenderEventId.For(Sender("a"), id).Should().NotBe(SenderEventId.For(Sender("b"), id));
+    }
+
+    [Fact]
+    public async Task Event_IntoAnIndexTheCallerCantIngest_IsRefused_EvenWithNoPrincipal()
+    {
+        var logger = new Mock<ILogger<HecController>>();
+        var controller = new HecController(_storage.Object, CreateLineParser(), _auditLogger.Object, logger.Object,
+            indexScope: new Cabinet.API.Authentication.IndexAccessScope());
+        SetupHttpContext(controller);
+        controller.ControllerContext.HttpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("{\"index\":\"web\",\"event\":\"x\"}"));
+
+        var result = await controller.ReceiveEvent(CancellationToken.None);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        _storage.Verify(s => s.StoreBatchAsync(It.IsAny<IEnumerable<LogEvent>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

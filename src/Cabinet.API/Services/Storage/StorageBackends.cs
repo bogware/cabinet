@@ -52,7 +52,10 @@ public static class StorageBackends
                 indexPrefix: configuration["Storage:IndexPrefix"] ?? "cabinet-logs",
                 username: configuration["Storage:Username"],
                 password: configuration["Storage:Password"],
-                allowInsecureSsl: configuration.GetValue<bool>("Storage:AllowInsecureSsl")),
+                allowInsecureSsl: configuration.GetValue<bool>("Storage:AllowInsecureSsl"),
+                shards: configuration.GetValue("Storage:OpenSearchShards", 1),
+                replicas: configuration.GetValue<int?>("Storage:OpenSearchReplicas"),
+                fieldLimit: configuration.GetValue("Storage:OpenSearchFieldLimit", 10_000)),
             "Memory" => new InMemoryStorage(),
             _ => new SqliteLogStorage(Options.Create(Bind(configuration)), loggers.CreateLogger<SqliteLogStorage>()),
         };

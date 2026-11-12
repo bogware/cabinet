@@ -87,15 +87,22 @@ search error | sort -timestamp | head 10
 | Splunk HEC ingest | Available | `/services/collector/event` and `/raw`. |
 | OpenTelemetry logs | Available | OTLP over HTTP at `/v1/logs`, in protobuf or JSON. Retried exports are stored once. |
 | Syslog listener | Working | RFC 3164 and RFC 5424 over UDP, TCP and TLS. Off by default, and Compose doesn't publish the port. |
-| Forwarding agent | Available | Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
+| Forwarding agent | Available | Files, Kubernetes container logs, the systemd journal and Windows event logs. Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
+| Ingest pipeline | Available | Drop, sample, route or redact events before they're stored, with how much was kept out. |
 | Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
-| BQL query engine | Available | Every example in the guide runs as a test. Filters, `stats`, `timechart`, `chart`, `top`, `rare` and `sort | head` read every matching event without holding them in memory. Stages that need all their rows at once hold up to 100,000 and flag results as `truncated` beyond that. See [benchmarks](docs/BENCHMARKS.md). |
+| BQL query engine | Available | SPL search syntax (OR, NOT, phrases, wildcards, field terms, `earliest=`), `stats` functions including `values`, `earliest`, `mode` and `count(eval())`, `cluster` for log patterns, and `iplocation`. Every example in the guide runs as a test. Filters, `stats`, `timechart`, `chart`, `top`, `rare` and `sort | head` read every matching event without holding them in memory. Stages that need all their rows at once hold up to 100,000 and flag results as `truncated` beyond that. See [benchmarks](docs/BENCHMARKS.md). |
 | Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
 | Web dashboard | Available | Search with charts, dashboards with a panel editor and auto-refresh, detections, and keyboard and screen reader support. Served from the API outside the Development environment. |
 | Search in the dashboard | Available | Time picker, timeline with drag-to-zoom, fields sidebar with top values and one-click filters, query highlighting and autocomplete, shareable links, CSV and JSON export. |
 | Settings in the dashboard | Available | Every server setting described and editable, with defaults, limits and where each value comes from; API keys; restart. |
 | Importing existing logs | Available | `cabinet-agent import` sends a folder, file or glob once, from any machine, or the history an agent skips. Repeating it stores nothing twice. |
-| Detection actions | Available | When a rule fires: notify, write a searchable `detections` event, or call a webhook — templated and configurable per rule in the dashboard or API. |
+| Detection actions | Available | When a rule fires: notify, write a searchable `detections` event, call a webhook, or send to a connector (Slack, Teams, Discord, PagerDuty, Opsgenie, Jira, ServiceNow, email) — off the ingest path, templated and configurable per rule. |
+| Sigma and ATT&CK | Available | Import Sigma rules; see which ATT&CK techniques the rules cover. |
+| Detection rules as code | Available | YAML rule files with tests; `cabinet rules test`, `push` and `pull`. |
+| Anomaly rules | Available | Spikes against a learned baseline, silence, new values and new kinds of line. |
+| Cases | Available | Alerts, events, searches and notes on one investigation timeline. |
+| AI investigator | Available | Off by default. Answers questions by running searches with the asker's access, on a local model (Ollama or any OpenAI-compatible server) or Claude. |
+| Scheduled reports | Available | Searches emailed on a schedule as HTML with a PDF. |
 | Storage management | Available | Where the database is, its size and span; move to another file or drive, switch to PostgreSQL, or start empty, from the dashboard, API or Windows installer, with ingest paused only for the switch. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
 | Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |
@@ -106,8 +113,8 @@ search error | sort -timestamp | head 10
 | Roles and capabilities per endpoint | Available | A test fails if an endpoint has no capability check. |
 | Per-index RBAC | Available | Grants limit a principal to some indexes for every read and write, including subsearches and search jobs. |
 | Index and user management routes | Available | `IndexManagement` from the Enterprise tier, `UserManagement` from the Admin tier. |
-| OIDC | Available | Bearer tokens, with claims mapped to roles and index grants. Tested end to end against a local identity provider. |
-| SAML, LDAP | Not implemented | Configuration models only. |
+| OIDC | Available | Bearer tokens for API clients, and dashboard sign-in with the authorization code flow, with claims mapped to roles and index grants. |
+| SAML, LDAP | Available | Dashboard sign-in. |
 | Rate limiting | Available | Per address and per key, shared out among running instances. Queries and streams also have concurrency limits. |
 | Audit log | Available | Hash-chained records in the database, optionally keyed with HMAC, searchable and checkable through `/api/v1/audit`. |
 | Global retention | Available | `Storage:RetentionDays`. 0, the default, keeps everything. |
@@ -115,7 +122,7 @@ search error | sort -timestamp | head 10
 | Log parsers | Available | JSON, CEF, Apache, Nginx, CSV, Generic. |
 | Data models | Available | Pre-aggregated summaries for `tstats`. |
 | Field extractions | Available | Regular expressions applied at search time, to events already stored too. |
-| Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers and on-demand moderation detection at `/api/v1/detection/*`. |
+| Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers, on-demand moderation detection at `/api/v1/detection/*`, and player profiles with suggested moderation actions (never run by Cabinet). |
 | Security detection rules | Available | Rules run on every event at ingest, with thresholds and cooldowns shared by all instances. 29 built-in rules for SSH, sudo, Linux persistence, Windows, Kerberos, web attacks and AWS, off until turned on. Add your own, and backtest any rule against stored events before turning it on. |
 | Health and Prometheus metrics | Available | `/health`, `/health/ready`, `/health/live`, `/metrics`. |
 | AWS CloudWatch and CloudTrail | Available | CLI only (`cabinet aws`). |
@@ -123,7 +130,8 @@ search error | sort -timestamp | head 10
 | Kubernetes manifests | Available | `k8s/`, tested on a kind cluster by `tests/EndToEnd/k8s-smoke.sh`. The included PostgreSQL pod is for trying it, not for production. |
 | Encryption at rest | Available | AES-256-GCM on configured fields, or whole lines, with key rotation. Those values can't be searched in storage. |
 | PII and field masking | Available | Applied to every read by role, in fields and in the raw line. |
-| Hot/warm/cold tiering, S3 archival | Not implemented | |
+| Archive and rehydrate | Available | Retention can archive events to a directory or S3 first, and archived events can be brought back to search. Hot/warm tiering isn't implemented. |
+| Charts | Available | Line, area, bar, pie, single value, gauge, heatmap, map and table. |
 | Multiple API instances | Available | On PostgreSQL, sharing all state. One instance at a time runs background work. |
 | OpenTelemetry | Available | Receives OTLP logs, traces and metrics, in protobuf or JSON, as searchable events. Exports its own request, query and ingest spans. |
 | Server-side multi-line merging | Not implemented | The agent merges multi-line events; the API does not. |
@@ -143,7 +151,7 @@ search error | sort -timestamp | head 10
 
 ## Command-line tools
 
-`cabinet` is the CLI. Commands: `peek`, `tail`, `ingest`, `query`, `dashboard`, `aws`, `setup`, `version`, `help`. `cabinet setup` is the interactive setup wizard.
+`cabinet` is the CLI. Commands: `peek`, `tail`, `ingest`, `query` (local, or on a server with `--server`), `rules`, `dashboard`, `aws`, `setup`, `version`, `help`. `cabinet setup` is the interactive setup wizard.
 
 `Cabinet.Agent` is a separate forwarder that tails files and sends them to `/services/collector/event`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#forwarding-agent).
 

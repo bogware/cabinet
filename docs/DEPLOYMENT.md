@@ -243,6 +243,24 @@ Delivery is at-least-once, and the server stores each event once.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
 
+### Other inputs
+
+An input's `Type` is `file` (the default), `kubernetes`, `journald` or `wineventlog`:
+
+```json
+"Inputs": [
+  { "Type": "journald", "Units": ["sshd.service"], "Index": "linux" },
+  { "Type": "wineventlog", "Channels": ["Security", "System"], "Index": "windows" },
+  { "Type": "kubernetes", "Index": "k8s" }
+]
+```
+
+- **journald** (Linux) runs `journalctl -o json --follow`, every unit or the `Units` listed, and sends each entry as syslog shows it, with `unit`, `identifier`, `pid` and `priority` fields. The service user needs to read the journal (the `systemd-journal` group).
+- **wineventlog** (Windows) reads the `Channels` (Application, System and Security by default). Each event's EventData values become fields under their own names, such as `TargetUserName`, `LogonType` and `IpAddress`, which is what Sigma rules for Windows test. Security needs the agent to run as an administrator or in Event Log Readers.
+- **kubernetes** reads container logs, `/var/log/containers/*.log` unless `Paths` says otherwise, as a DaemonSet with that folder mounted. CRI and Docker lines are unwrapped to what the container wrote, at the time it wrote it, with `k8s.pod`, `k8s.namespace`, `k8s.container` and `k8s.stream` fields. Lines a runtime split for length arrive as separate events.
+
+journald and wineventlog start at what's new unless `FromBeginning` is set. They resume from a journal cursor or record number kept in `checkpoints.json` beside the registry, which moves only when a batch is durable, as file checkpoints do; their event IDs come from the cursor or record, so a re-read is stored once.
+
 ### Importing existing logs
 
 `cabinet-agent import` sends files that already exist, once, and exits.
@@ -359,6 +377,36 @@ Set `Gaming:Enabled=true` (`Gaming__Enabled=true` as an environment variable) to
 ### Retention
 
 `Storage:RetentionDays` deletes older events across every index. 0, the default, keeps everything. `/api/v1/retention/{index}` sets a policy for one index, enforced hourly; changing one needs `IndexManagement` on that index, and is audited.
+
+### Archive
+
+Retention can archive events before deleting them: per index with the policy's `ArchiveBeforeDelete`, or for indexes without a policy with `Archive:BeforeRetention`. Set where with `Archive:Type`:
+
+- `Directory`: `Archive:Path`, a local disk or a mounted share.
+- `S3`: `Archive:S3Bucket` and `Archive:S3Prefix`, with credentials from the usual AWS sources.
+
+Events are kept as gzipped JSON lines, one file per index, day and run. If archiving fails, or an index should be archived and no archive is set, its events aren't deleted. `POST /api/v1/archive/rehydrate` with `index`, `from` and `to` (up to 31 days) brings them back into `{index}-restored`, or `targetIndex`, keeping their IDs so a second run adds nothing. It needs `IndexManagement`, reading the index and writing the target.
+
+### Ingest pipeline
+
+The Ingest Pipeline page, or `/api/v1/pipelines/rules`, sets rules that run on every event as it arrives, in order, before it's stored or checked by detection rules: drop, sample (keep one in N, chosen by event ID), route to another index, or redact what a regular expression matches. Rules apply on every instance within 30 seconds; `/api/v1/pipelines/stats` shows what each did since the server started.
+
+### GeoIP
+
+`GeoIp:DatabasePath` points at a MaxMind GeoLite2-City or GeoIP2-City `.mmdb` file for `iplocation` and map panels. GeoLite2 is free from maxmind.com with an account; MaxMind's `geoipupdate` keeps it current.
+
+### AI investigator
+
+Off unless `Ai:Enabled=true`. People with search access ask a question on the Investigate page; a model answers by running searches with their indexes and shows each search.
+
+- `Ai:Provider=openai-compatible` (the default) uses a model server you run, such as Ollama (`Ai:BaseUrl`, default `http://localhost:11434/v1`) with `Ai:Model` (default `llama3.1`). Pick a model that supports tool calling. Logs stay on your network.
+- `Ai:Provider=anthropic` uses Claude (`Ai:Model` defaults to `claude-opus-5-5`) with `Ai:ApiKey` or `ANTHROPIC_API_KEY`. Questions and the masked rows its searches return go to Anthropic.
+
+Whatever the asker's role, the model sees values masked as for a Viewer. `Ai:MaxSearches` (8), `Ai:RowsPerSearch` (50) and `Ai:TimeoutSeconds` (180) bound each question, and the question, every search and the answer are audited.
+
+### Reports
+
+The Reports page, or `/api/v1/reports`, emails searches on a cron schedule (UTC) as HTML tables with a PDF copy, through the `Email:*` settings. Values are masked as for a Viewer, and adding a report needs search on every index.
 
 ### API Keys
 
@@ -506,13 +554,19 @@ Webhook `Format` is `generic`, `slack`, `discord`, `teams` or `pagerduty`.
 
 ### SSO
 
-OIDC JWT validation is configured under `SSO` (`Enabled`, `Provider`, `Oidc:Authority`, `Oidc:ClientId`). A token gets the role and index permissions that `SSO:RoleMappings` assign to its claims, and none when nothing matches and `AutoProvision` is off. Claims in the token named like Cabinet's own (`CabinetRole`, `IndexPermission`, `ClientId`, `Tier`, `Permission`) are dropped, so a user attribute at the identity provider can't grant access. SAML and LDAP are not implemented.
+Under `SSO` (`Enabled`): an identity gets the role and index permissions that `SSO:RoleMappings` assign to its claims or groups, and none when nothing matches and `AutoProvision` is off. Claims named like Cabinet's own (`CabinetRole`, `IndexPermission`, `ClientId`, `Tier`, `Permission`) are dropped, so a user attribute at the identity provider can't grant access. A sign-in that maps to no role is refused, and every sign-in is audited.
+
+- **OIDC** (`Oidc:Authority`, `Oidc:ClientId`): API clients send bearer tokens. With `Oidc:ClientSecret` too, the dashboard offers "Sign in with SSO" (authorization code with PKCE); register `https://<cabinet>/auth/callback` (`Oidc:CallbackPath`) as a redirect URI.
+- **SAML 2.0** (`Saml:EntityId`, `Saml:MetadataUrl`, optionally `Saml:Certificate`): Cabinet is the service provider. Give the identity provider `https://<cabinet>/auth/saml/acs` as the assertion consumer service URL. Responses must be signed by a certificate from the metadata.
+- **LDAP or Active Directory** (`Ldap:Server`, `Port`, `UseSsl`, `BaseDn`, `BindDn`, `BindPassword`, `UserSearchFilter`): the dashboard asks for a directory user name and password, finds the user with the service account, and binds as them. Groups come from `memberOf`, by full DN or CN.
+
+Dashboard sign-ins get an HttpOnly, SameSite=Strict session cookie lasting `SSO:SessionHours` (8) while used. A cookie request that changes anything must carry the `X-Cabinet-Request` header, which the dashboard sends and another site's page can't.
 
 ### Not implemented
 
 These have configuration or classes in the code but no effect, so don't rely on them:
 
-- Hot/warm/cold tiering and S3 archival.
+- Hot/warm tiering. Archive (above) covers cold storage.
 - Server-side multi-line merging. Use the agent.
 
 ## Security Hardening
