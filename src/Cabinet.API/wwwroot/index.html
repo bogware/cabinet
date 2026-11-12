@@ -472,6 +472,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-5 6.25C3 11.9 5.24 10 8 10s5 1.9 5 4.25a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75Z"/></svg>
                 Players
             </button>
+            <button type="button" class="nav-item" data-page="coverage">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 1.75C1 .78 1.78 0 2.75 0h10.5C14.22 0 15 .78 15 1.75v12.5A1.75 1.75 0 0 1 13.25 16H2.75A1.75 1.75 0 0 1 1 14.25Zm1.5 0v3.75h3V1.5H2.75a.25.25 0 0 0-.25.25ZM7 1.5v4h2v-4Zm3.5 0v4h3V1.75a.25.25 0 0 0-.25-.25ZM13.5 7h-3v3.5h3Zm0 5h-3v2.5h2.75a.25.25 0 0 0 .25-.25ZM9 14.5V12H7v2.5Zm-3.5 0V12h-3v2.25c0 .14.11.25.25.25ZM2.5 10.5h3V7h-3Zm4.5 0h2V7H7Z"/></svg>
+                ATT&amp;CK Coverage
+            </button>
             <button type="button" class="nav-item" data-page="anomalies">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 13.25h13a.75.75 0 0 1 0 1.5h-13A1.5 1.5 0 0 1 0 13.25V1.75a.75.75 0 0 1 1.5 0Zm3.03-3.47a.75.75 0 0 1-1.06-1.06l3-3a.75.75 0 0 1 1.06 0L9.5 7.69l3.97-3.97a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0L7 7.31Z"/></svg>
                 Anomalies
@@ -787,6 +791,25 @@
                     <tbody id="playersBody"></tbody>
                 </table></div></div>
                 <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:12px"></div>
+            </div>
+
+            <div class="page" id="page-coverage">
+                <div class="toolbar">
+                    <h3>ATT&amp;CK Coverage</h3>
+                    <div class="toolbar-actions"><button class="btn btn-secondary btn-sm" data-click="loadCoverage">Refresh</button></div>
+                </div>
+                <p class="page-note">Which MITRE ATT&amp;CK techniques your detection rules cover. Shaded cells have a rule that's on; outlined ones only rules that are off; the rest are gaps.</p>
+                <div class="panel"><div id="coverageMatrix" class="scroll-y" style="display:flex;gap:8px;overflow-x:auto;padding:8px"></div></div>
+                <div class="panel" style="padding:16px;margin-top:12px">
+                    <h4>Import Sigma rules</h4>
+                    <p class="page-note">Paste one or more Sigma rules (YAML, separated by ---). They're added turned off, so you can check them against your logs before turning them on.</p>
+                    <div class="form-group"><label for="sigmaYaml">Sigma YAML</label><textarea id="sigmaYaml" rows="10" class="mono" spellcheck="false"></textarea></div>
+                    <div class="modal-actions" style="justify-content:flex-start">
+                        <button class="btn btn-secondary" data-click="importSigma" data-args='[false]'>Preview</button>
+                        <button class="btn btn-primary" data-click="importSigma" data-args='[true]'>Import</button>
+                    </div>
+                    <div id="sigmaResult" aria-live="polite"></div>
+                </div>
             </div>
 
             <div class="page" id="page-anomalies">

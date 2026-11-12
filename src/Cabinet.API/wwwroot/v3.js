@@ -172,6 +172,46 @@ async function openPlayer(player) {
     } catch (e) { panel.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
 }
 
+/* ===== ATT&CK coverage and Sigma import ===== */
+window.EXTRA_PAGES.coverage = { title: 'ATT&CK Coverage', load: () => loadCoverage() };
+
+async function loadCoverage() {
+    const box = document.getElementById('coverageMatrix');
+    if (!box) return;
+    try {
+        const matrix = await api('GET', '/api/v1/detection-rules/coverage');
+        box.innerHTML = matrix.map(tactic => {
+            const cells = tactic.techniques.map(t => {
+                const on = t.rules.filter(r => r.enabled).length;
+                const style = on > 0 ? 'background:var(--accent);color:var(--bg-primary)' : t.rules.length > 0 ? 'border:1px solid var(--accent)' : 'border:1px solid var(--border);color:var(--text-muted)';
+                const title = t.rules.length ? t.rules.map(r => `${r.name}${r.enabled ? '' : ' (off)'}`).join('\n') : 'No rule';
+                return `<div title="${esc(title)}" style="padding:4px 6px;border-radius:4px;font-size:11px;margin-bottom:4px;${style}">${esc(t.id)} ${esc(t.name)}${t.rules.length ? ` (${t.rules.length})` : ''}</div>`;
+            }).join('');
+            const covered = tactic.techniques.filter(t => t.rules.some(r => r.enabled)).length;
+            return `<div style="min-width:160px;max-width:180px"><div style="font-weight:600;font-size:12px;margin-bottom:6px">${esc(tactic.name)} <span style="color:var(--text-secondary)">${covered}/${tactic.techniques.length}</span></div>${cells}</div>`;
+        }).join('');
+    } catch (e) { box.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function importSigma(save) {
+    const out = document.getElementById('sigmaResult');
+    const yaml = document.getElementById('sigmaYaml').value;
+    if (!yaml.trim()) return;
+    out.innerHTML = '<span class="spinner"></span>';
+    try {
+        const res = await fetch('/api/v1/detection-rules/sigma' + (save ? '?save=true' : ''), {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'text/plain', Accept: 'application/json' },
+            body: yaml,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const results = await res.json();
+        out.innerHTML = `<ul>${results.map(r => `<li><strong>${esc(r.title)}</strong>: ${r.problem ? `<span style="color:var(--error)">${esc(r.problem)}</span>`
+            : `${r.saved ? 'added, turned off' : 'converts'} (${esc(r.severity || '')}${r.technique ? ', ' + esc(r.technique) : ''})<div class="mono" style="font-size:11px">${esc(r.condition || '')}</div>`}</li>`).join('')}</ul>`;
+        if (save) loadCoverage();
+    } catch (e) { out.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
 /* ===== Anomalies ===== */
 window.EXTRA_PAGES.anomalies = { title: 'Anomalies', load: () => loadAnomalyRules() };
 

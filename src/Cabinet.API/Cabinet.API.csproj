@@ -10,6 +10,7 @@
     <PackageReference Include="System.DirectoryServices.Protocols" />
     <PackageReference Include="ITfoxtec.Identity.Saml2.MvcCore" />
     <PackageReference Include="Anthropic" />
+    <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
