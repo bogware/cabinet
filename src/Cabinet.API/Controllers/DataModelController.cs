@@ -80,6 +80,9 @@ public class DataModelController : ControllerBase
         if (request.Fields.Count > 50)
             return Problem(detail: "Maximum 50 fields allowed", statusCode: 400);
 
+        if (request.Fields.FirstOrDefault(f => !DataModelAccelerationService.IsValidFieldName(f)) is { } badField)
+            return Problem(detail: $"Field names are letters, digits, '_' and '.', starting with a letter or '_': '{badField}'", statusCode: 400);
+
         var model = new DataModel
         {
             Name = request.Name,
