@@ -42,7 +42,10 @@ public static class StorageBackends
         var connectionString = configuration["Storage:ConnectionString"] ?? "Data Source=cabinet.db";
         return Normalize(configuration["Storage:Type"]) switch
         {
-            "PostgreSQL" => new Cabinet.Database.Providers.PostgresLogStorage(connectionString, loggers.CreateLogger<Cabinet.Database.Providers.PostgresLogStorage>()),
+            "PostgreSQL" => new Cabinet.Database.Providers.PostgresLogStorage(
+                connectionString,
+                loggers.CreateLogger<Cabinet.Database.Providers.PostgresLogStorage>(),
+                configuration.GetValue("Storage:PostgresWorkMemMb", 256)),
             "OpenSearch" => new Cabinet.Database.Providers.OpenSearchLogStorage(
                 connectionString,
                 loggers.CreateLogger<Cabinet.Database.Providers.OpenSearchLogStorage>(),

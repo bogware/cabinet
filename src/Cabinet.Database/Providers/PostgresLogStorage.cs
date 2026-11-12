@@ -23,25 +23,28 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
     // would keep /var/log/app.log as one word, so searching for "log" wouldn't find it.
     private const string SearchVector = "to_tsvector('simple'::regconfig, regexp_replace(raw_line, '[^[:alnum:]]+', ' ', 'g'))";
 
-    // The stored search column, kept current by a trigger. Reads use it once it's filled for every
-    // row; until then they fall back to recomputing the expression above.
-    private const string SearchVectorColumn = "search_vector";
-
-    private volatile bool _searchVectorReady;
-    private int _searchVectorMigrationStarted;
-
     private readonly string _connectionString;
     private readonly ILogger<PostgresLogStorage> _logger;
     private readonly NpgsqlDataSource _dataSource;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private volatile bool _initialized;
 
-    public PostgresLogStorage(string connectionString, ILogger<PostgresLogStorage> logger)
+    public PostgresLogStorage(string connectionString, ILogger<PostgresLogStorage> logger, int workMemMb = 256)
     {
         _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+
+        // A full-text search builds a bitmap of the matching rows. The default work_mem (4 MB) is far
+        // too little for a large match set, so the bitmap turns lossy and Postgres rechecks by
+        // recomputing the text vector for every row on each matched page, which made broad searches
+        // take close to a minute. More work_mem keeps the bitmap exact, so there is no recheck.
+        var workMem = Math.Clamp(workMemMb, 4, 4096);
+        dataSourceBuilder.UsePhysicalConnectionInitializer(
+            connection => connection.Execute($"SET work_mem = '{workMem}MB'"),
+            async connection => await connection.ExecuteAsync($"SET work_mem = '{workMem}MB'"));
+
         _dataSource = dataSourceBuilder.Build();
     }
 
@@ -109,12 +112,12 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
             await conn.ExecuteAsync(@"
                 CREATE INDEX IF NOT EXISTS idx_log_events_tags ON log_events USING GIN (tags)");
 
+            // Full-text search index on the raw line. Searches run with a higher work_mem (set on
+            // every connection) so the match bitmap stays exact and nothing is recomputed per row.
+            await conn.ExecuteAsync($@"
+                CREATE INDEX IF NOT EXISTS idx_log_events_search
+                ON log_events USING GIN ({SearchVector})");
             await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_fts");
-
-            // Full-text search uses a stored tsvector column, so a search reads the index without
-            // recomputing the vector for every matching row. New databases are ready at once; older
-            // ones fill it in the background (see MigrateSearchVectorAsync).
-            await ConfigureSearchVectorAsync(conn, cancellationToken);
 
             await schemaLock.CommitAsync(cancellationToken);
             _initialized = true;
@@ -123,219 +126,6 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
         finally
         {
             _initLock.Release();
-        }
-
-        if (!_searchVectorReady)
-        {
-            StartSearchVectorMigration();
-        }
-    }
-
-    private async Task ConfigureSearchVectorAsync(NpgsqlConnection conn, CancellationToken cancellationToken)
-    {
-        // This runs under the schema lock, so instances serialize here. The DDL is guarded by
-        // existence checks, so only the first instance ever takes a table lock; later startups read
-        // the state and do nothing, which keeps a busy server from deadlocking on repeated DDL.
-        await conn.ExecuteAsync("CREATE TABLE IF NOT EXISTS cabinet_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
-
-        if (await ColumnMissingAsync(conn, "search_vector"))
-        {
-            await conn.ExecuteAsync("ALTER TABLE log_events ADD COLUMN search_vector tsvector");
-        }
-
-        await conn.ExecuteAsync(@"
-            CREATE OR REPLACE FUNCTION cabinet_search_vector() RETURNS trigger AS $$
-            BEGIN
-                NEW.search_vector := to_tsvector('simple'::regconfig, regexp_replace(NEW.raw_line, '[^[:alnum:]]+', ' ', 'g'));
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql");
-        if (await ScalarAsync<bool>(conn, "SELECT NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname = 'trg_cabinet_search_vector')"))
-        {
-            await conn.ExecuteAsync("CREATE TRIGGER trg_cabinet_search_vector BEFORE INSERT ON log_events FOR EACH ROW EXECUTE FUNCTION cabinet_search_vector()");
-        }
-
-        var ready = await conn.ExecuteScalarAsync<string?>("SELECT v FROM cabinet_meta WHERE k = 'search_vector_ready'");
-        if (ready == "true")
-        {
-            _searchVectorReady = true;
-            return;
-        }
-
-        var hasRows = await ScalarAsync<bool>(conn, "SELECT EXISTS(SELECT 1 FROM log_events)");
-        if (!hasRows)
-        {
-            // Empty table: index now (instant) and use the column straight away.
-            if (await IndexMissingAsync(conn, "idx_log_events_search_vector"))
-            {
-                await conn.ExecuteAsync("CREATE INDEX idx_log_events_search_vector ON log_events USING GIN (search_vector)");
-            }
-
-            await conn.ExecuteAsync("INSERT INTO cabinet_meta (k, v) VALUES ('search_vector_ready', 'true') ON CONFLICT (k) DO UPDATE SET v = 'true'");
-            _searchVectorReady = true;
-        }
-        else
-        {
-            // Existing rows: the old expression index keeps searches working while a background task
-            // fills the column and builds its index.
-            if (await IndexMissingAsync(conn, "idx_log_events_search"))
-            {
-                await conn.ExecuteAsync($"CREATE INDEX idx_log_events_search ON log_events USING GIN ({SearchVector})");
-            }
-
-            _searchVectorReady = false;
-        }
-    }
-
-    private static async Task<bool> ColumnMissingAsync(NpgsqlConnection conn, string column) =>
-        await ScalarAsync<bool>(conn, $"SELECT NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'log_events' AND column_name = '{column}')");
-
-    private static async Task<bool> IndexMissingAsync(NpgsqlConnection conn, string index) =>
-        await ScalarAsync<bool>(conn, $"SELECT NOT EXISTS(SELECT 1 FROM pg_class WHERE relname = '{index}')");
-
-    private static async Task<T> ScalarAsync<T>(NpgsqlConnection conn, string sql)
-    {
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        var value = await cmd.ExecuteScalarAsync();
-        return value is DBNull or null ? default! : (T)value;
-    }
-
-    private void StartSearchVectorMigration()
-    {
-        if (Interlocked.Exchange(ref _searchVectorMigrationStarted, 1) == 1)
-        {
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await MigrateSearchVectorAsync(CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Filling the search column failed; searches still work the slower way, and it resumes on the next restart");
-                Interlocked.Exchange(ref _searchVectorMigrationStarted, 0);
-            }
-        });
-    }
-
-    /// <summary>
-    /// Fills <c>search_vector</c> for rows from before the column existed, builds its index, then
-    /// switches searches to it and drops the old expression index. Safe to stop and resume: it only
-    /// touches rows still missing the vector, and new rows get it from the trigger. Public for tests.
-    /// </summary>
-    public async Task MigrateSearchVectorAsync(CancellationToken cancellationToken = default)
-    {
-        const long migrationLockKey = 0x4341_4249_4E45_5356L; // "CABINESV"
-        const int batchSize = 10000;
-
-        // Everything runs on one connection, which holds the advisory lock so only one instance
-        // migrates at a time. Filling a batch and building the index take far longer than the
-        // default command timeout, so these commands are given no timeout.
-        await using var holder = await _dataSource.OpenConnectionAsync(cancellationToken);
-        if (!await ScalarAsync<bool>(holder, $"SELECT pg_try_advisory_lock({migrationLockKey})"))
-        {
-            return;
-        }
-
-        try
-        {
-            if (await ScalarAsync<string?>(holder, "SELECT v FROM cabinet_meta WHERE k = 'search_vector_ready'") == "true")
-            {
-                _searchVectorReady = true;
-                return;
-            }
-
-            var filled = 0L;
-            var batches = 0;
-            var last = string.Empty;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Walk the primary key in order, so each row is read once. Scanning for NULL rows
-                // instead would restart from the beginning every batch and crawl as the fill grows.
-                var ids = (await holder.QueryAsync<string>(new CommandDefinition(
-                    "SELECT id FROM log_events WHERE id > @last ORDER BY id LIMIT @n",
-                    new { last, n = batchSize }, commandTimeout: 0, cancellationToken: cancellationToken))).ToList();
-                if (ids.Count == 0)
-                {
-                    break;
-                }
-
-                last = ids[^1];
-
-                // Only rows still missing it are rewritten, so a resumed run does no wasted writes.
-                filled += await holder.ExecuteAsync(new CommandDefinition(@"
-                    UPDATE log_events
-                    SET search_vector = to_tsvector('simple'::regconfig, regexp_replace(raw_line, '[^[:alnum:]]+', ' ', 'g'))
-                    WHERE id = ANY(@ids) AND search_vector IS NULL",
-                    new { ids = ids.ToArray() }, commandTimeout: 0, cancellationToken: cancellationToken));
-
-                if (++batches % 40 == 0)
-                {
-                    _logger.LogInformation("Search column: visited {Visited:N0} rows, filled {Filled:N0} ({Rate:N0}/s)", (long)batches * batchSize, filled, filled / Math.Max(1, sw.Elapsed.TotalSeconds));
-
-                    // The new column has no index yet, so these are HOT updates that mostly reuse
-                    // space; a periodic vacuum keeps the table from growing on disk during a big fill.
-                    await holder.ExecuteAsync(new CommandDefinition("VACUUM log_events", commandTimeout: 0, cancellationToken: cancellationToken));
-                }
-
-                await Task.Delay(50, cancellationToken);
-            }
-
-            await EnsureSearchVectorIndexAsync(holder, cancellationToken);
-            await holder.ExecuteAsync("INSERT INTO cabinet_meta (k, v) VALUES ('search_vector_ready', 'true') ON CONFLICT (k) DO UPDATE SET v = 'true'");
-            _searchVectorReady = true;
-
-            // The old expression index is now dead weight. Dropping it waits for readers, so give up
-            // quickly and leave it for a later run rather than hold things up.
-            try
-            {
-                await holder.ExecuteAsync("SET lock_timeout = '5s'");
-                await holder.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_search");
-                await holder.ExecuteAsync("SET lock_timeout = 0");
-            }
-            catch (PostgresException ex) when (ex.SqlState is "55P03" or "40P01")
-            {
-                _logger.LogInformation("Left the old search index in place for now; it'll be dropped on a later start");
-            }
-
-            _logger.LogInformation("Search column ready: filled {Filled:N0} rows in {Elapsed}; searches now use it", filled, sw.Elapsed);
-        }
-        finally
-        {
-            try
-            {
-                await ScalarAsync<bool>(holder, $"SELECT pg_advisory_unlock({migrationLockKey})");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Couldn't release the search-migration lock; it frees when the connection closes");
-            }
-        }
-    }
-
-    private static async Task EnsureSearchVectorIndexAsync(NpgsqlConnection conn, CancellationToken cancellationToken)
-    {
-        // Drop a half-built index left by an interrupted run, then build it without blocking writes.
-        // Building the index can take minutes on a large table, so it is given no command timeout.
-        var valid = await conn.ExecuteScalarAsync<bool?>(@"
-            SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
-            WHERE c.relname = 'idx_log_events_search_vector'");
-        if (valid == false)
-        {
-            await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_search_vector");
-        }
-
-        if (valid != true)
-        {
-            await conn.ExecuteAsync(new CommandDefinition(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_events_search_vector ON log_events USING GIN (search_vector)",
-                commandTimeout: 0, cancellationToken: cancellationToken));
         }
     }
 
@@ -664,7 +454,7 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
         var terms = SearchTerms.Parse(context.SearchText);
         if (terms.Count > 0)
         {
-            sb.Append($" AND {(_searchVectorReady ? SearchVectorColumn : SearchVector)} @@ plainto_tsquery('simple', @SearchText)");
+            sb.Append($" AND {SearchVector} @@ plainto_tsquery('simple', @SearchText)");
             p.Add("SearchText", string.Join(' ', terms));
         }
 

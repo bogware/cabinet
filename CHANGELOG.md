@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-11-11
+
+### Changed
+
+- PostgreSQL searches now run each connection with a higher `work_mem` (default 256 MB, set by `Storage:PostgresWorkMemMb`). This is the real fix for slow broad searches: with the default 4 MB, the match bitmap turned lossy and Postgres rechecked by recomputing the text vector for every row on each matched page, so a search over a large result set took close to a minute. With enough memory the bitmap stays exact and there's no recheck.
+- This replaces the stored search-vector column added in 2.5.0–2.5.2, which needed a long one-time backfill on existing data for no real gain over the `work_mem` fix (both end up reading the same heap). New databases no longer add that column, trigger or background fill. A database that already has the column from 2.5.0–2.5.2 is unaffected and the column can be dropped; searches use the raw-line index as before.
+
 ## [2.5.2] - 2026-11-11
 
 ### Fixed

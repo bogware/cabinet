@@ -78,6 +78,9 @@ public static class SettingsCatalog
         S("Storage:Password", "Storage", "OpenSearch password", SettingType.Secret, null, "Password for OpenSearch, if it requires one."),
         S("Storage:AllowInsecureSsl", "Storage", "Accept any OpenSearch certificate", SettingType.Bool, false,
             "Skip checking OpenSearch's TLS certificate. Only for testing: anyone between the two could read and change events."),
+        S("Storage:PostgresWorkMemMb", "Storage", "PostgreSQL search memory", SettingType.Int, 256,
+            "Memory (MB) each PostgreSQL connection may use per operation. Full-text searches over large result sets need enough that the match stays exact instead of being rechecked row by row. Lower it on a small server; raise it if broad searches are slow. Takes effect on restart.",
+            unit: "MB", min: 4, max: 4096),
 
         // Retention
         S("Storage:RetentionDays", "Retention", "Keep events for", SettingType.Int, 0,
