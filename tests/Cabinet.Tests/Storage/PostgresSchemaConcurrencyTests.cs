@@ -6,7 +6,13 @@ using Xunit;
 
 namespace Cabinet.Tests.Storage;
 
+/// <summary>
+/// Opens many instances' connections at once, so it runs on its own: alongside the other
+/// PostgreSQL tests it can exceed the server's connection limit.
+/// </summary>
 [Trait("Category", "Integration")]
+[Collection(nameof(PostgresSchemaConcurrencyTests))]
+[CollectionDefinition(nameof(PostgresSchemaConcurrencyTests), DisableParallelization = true)]
 public class PostgresSchemaConcurrencyTests
 {
     private const int Instances = 8;
@@ -25,7 +31,16 @@ public class PostgresSchemaConcurrencyTests
             await create.ExecuteNonQueryAsync();
         }
 
-        var scoped = $"{connectionString};Search Path={schema}";
+        // Earlier tests' pools keep idle connections, which count against the server's limit.
+        // This collection runs after the parallel tests, so nothing is using them.
+        await using (var idle = admin.CreateCommand(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle' AND pid <> pg_backend_pid()"))
+        {
+            await idle.ExecuteNonQueryAsync();
+        }
+
+        // Two connections a store is plenty to race on creating the schema
+        var scoped = $"{connectionString};Search Path={schema};Maximum Pool Size=2";
         var initializations = new List<Task>();
         var stores = new List<IDisposable>();
         for (var i = 0; i < Instances; i++)

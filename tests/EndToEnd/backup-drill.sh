@@ -92,8 +92,12 @@ echo "== Checking"
 start_api
 after="$(count_events)"
 echo "events after: $after"
-[ "$after" = "$before" ]
-api "http://127.0.0.1:$api_port/api/v1/retention/main" | grep -q '"maxAgeDays":42'
-api "http://127.0.0.1:$api_port/api/v1/query/execute" -d '{"query":"find \"drill\" | head 1"}' | grep -q 'drill event'
-api "http://127.0.0.1:$api_port/api/v1/audit/verify" | grep -q '"valid":true'
+fail() { echo "FAIL: $1"; echo "$2"; tail -n 40 "$work/api.log"; exit 1; }
+[ "$after" = "$before" ] || fail "event count changed" "$before before, $after after"
+retention=$(api "http://127.0.0.1:$api_port/api/v1/retention/main") || fail "reading retention" ""
+grep -q '"maxAgeDays":42' <<<"$retention" || fail "retention policy not restored" "$retention"
+found=$(api "http://127.0.0.1:$api_port/api/v1/query/execute" -d '{"query":"find \"drill\" | head 1"}') || fail "search request" ""
+grep -q 'drill event' <<<"$found" || fail "search didn't find the drill event" "$found"
+verify=$(api "http://127.0.0.1:$api_port/api/v1/audit/verify") || fail "audit verify request" ""
+grep -q '"valid":true' <<<"$verify" || fail "audit chain not intact" "$verify"
 echo "PASS: restored $after events, shared state and an intact audit log"
