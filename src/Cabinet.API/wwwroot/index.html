@@ -464,6 +464,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5c-1.736 0-3.369.676-4.596 1.903A6.47 6.47 0 0 0 1.5 8c0 1.736.676 3.369 1.904 4.597A6.47 6.47 0 0 0 8 14.5a6.47 6.47 0 0 0 4.596-1.903A6.47 6.47 0 0 0 14.5 8a6.47 6.47 0 0 0-1.904-4.597A6.47 6.47 0 0 0 8 1.5ZM8 9.5a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5A.75.75 0 0 1 8 9.5Zm1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>
                 Alerts
             </button>
+            <button type="button" class="nav-item" data-page="pipelines">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"/></svg>
+                Ingest Pipeline
+            </button>
             <button type="button" class="nav-item" data-page="cases">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.75 0h2.5C10.22 0 11 .78 11 1.75V3h3.25c.97 0 1.75.78 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25v-8.5C0 3.78.78 3 1.75 3H5V1.75C5 .78 5.78 0 6.75 0ZM6.5 3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25ZM1.5 4.75v8.5c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/></svg>
                 Cases
@@ -795,6 +799,44 @@
                     <tbody id="playersBody"></tbody>
                 </table></div></div>
                 <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:12px"></div>
+            </div>
+
+            <div class="page" id="page-pipelines">
+                <div class="toolbar">
+                    <h3>Ingest Pipeline</h3>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary btn-sm" data-click="editPipelineRule">+ New Rule</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadPipelines">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note" id="pipelineSavings">Rules that drop, sample, route or redact events as they arrive, before they're stored or checked by detection rules. They run in order.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Order</th><th scope="col">Name</th><th scope="col">Matches</th><th scope="col">Does</th><th scope="col">Since start</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="pipelineBody"></tbody>
+                </table></div></div>
+                <div class="panel" id="pipelineEditor" hidden style="padding:16px;margin-top:12px">
+                    <div class="st-grid-2">
+                        <div class="form-group"><label for="plName">Name</label><input type="text" id="plName"></div>
+                        <div class="form-group"><label for="plOrder">Order</label><input type="number" id="plOrder" value="10"></div>
+                        <div class="form-group"><label for="plPattern">Line matches (regular expression)</label><input type="text" id="plPattern" class="mono"></div>
+                        <div class="form-group"><label for="plCondition">And the event satisfies (BQL where)</label><input type="text" id="plCondition" class="mono" placeholder='severity <= 1 AND host = "web-1"'></div>
+                        <div class="form-group"><label for="plAction">Then</label>
+                            <select id="plAction"><option value="Drop">Drop it</option><option value="Sample">Keep one in N</option><option value="Route">Store it in another index</option><option value="Redact">Redact part of it</option></select></div>
+                        <div class="form-group"><label for="plRate">Keep one in (sample)</label><input type="number" id="plRate" value="10" min="2"></div>
+                        <div class="form-group"><label for="plTarget">Index (route)</label><input type="text" id="plTarget"></div>
+                        <div class="form-group"><label for="plRedact">Redact what matches (regular expression)</label><input type="text" id="plRedact" class="mono"></div>
+                        <div class="form-group"><label for="plReplacement">Replace with</label><input type="text" id="plReplacement" value="[REDACTED]"></div>
+                        <div class="form-group"><label class="check-label"><input type="checkbox" id="plStop"> Stop here for what this matched</label>
+                            <label class="check-label"><input type="checkbox" id="plEnabled" checked> On</label></div>
+                    </div>
+                    <div class="form-group"><label for="plLines">Try it on lines</label><textarea id="plLines" rows="4" class="mono" placeholder="One log line per row"></textarea></div>
+                    <div class="modal-actions" style="justify-content:flex-start">
+                        <button class="btn btn-secondary" data-click="testPipelineRule">Try</button>
+                        <button class="btn btn-primary" data-click="savePipelineRule">Save</button>
+                        <button class="btn btn-secondary" data-click="closePipelineEditor">Cancel</button>
+                    </div>
+                    <div id="pipelineTestResult" aria-live="polite"></div>
+                </div>
             </div>
 
             <div class="page" id="page-cases">

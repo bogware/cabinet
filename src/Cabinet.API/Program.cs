@@ -497,12 +497,17 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         return backend;
     });
 
+    // The ingest pipeline runs first: what it drops is never stored or seen by detection, and
+    // what it redacts is redacted before either
+    services.AddSingleton<Cabinet.API.Services.IngestPipeline>();
     services.AddSingleton<ILogStorage>(sp =>
-        // Outermost, so that rules see what arrived rather than what was encrypted
-        new Cabinet.API.Services.DetectingLogStorage(
-            sp.GetRequiredKeyedService<ILogStorage>("base"),
-            sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>(),
-            sp.GetService<Cabinet.API.Services.QueryCacheService>()));
+        new Cabinet.API.Services.PipelineLogStorage(
+            // Detection sees what arrived rather than what was encrypted
+            new Cabinet.API.Services.DetectingLogStorage(
+                sp.GetRequiredKeyedService<ILogStorage>("base"),
+                sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>(),
+                sp.GetService<Cabinet.API.Services.QueryCacheService>()),
+            sp.GetRequiredService<Cabinet.API.Services.IngestPipeline>()));
 
     services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
 

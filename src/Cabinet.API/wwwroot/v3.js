@@ -172,6 +172,96 @@ async function openPlayer(player) {
     } catch (e) { panel.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
 }
 
+/* ===== Ingest pipeline ===== */
+window.EXTRA_PAGES.pipelines = { title: 'Ingest Pipeline', load: () => loadPipelines() };
+
+let pipelineRules = {};
+let editingPipelineId = null;
+
+function formatBytes(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = Number(bytes) || 0;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+    return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+async function loadPipelines() {
+    const tbody = document.getElementById('pipelineBody');
+    if (!tbody) return;
+    try {
+        const [rules, stats] = await Promise.all([api('GET', '/api/v1/pipelines/rules'), api('GET', '/api/v1/pipelines/stats')]);
+        pipelineRules = Object.fromEntries(rules.map(r => [r.id, r]));
+        const byId = Object.fromEntries((stats.rules || []).map(s => [s.id, s]));
+        document.getElementById('pipelineSavings').textContent =
+            `Rules that drop, sample, route or redact events as they arrive, before they're stored or checked by detection rules. Since this server started they've kept ${Number(stats.eventsDropped).toLocaleString()} events (${formatBytes(stats.bytesDropped)}) out of storage.`;
+        tbody.innerHTML = rules.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-secondary)">No rules: every event is stored as it arrives.</td></tr>'
+            : rules.map(r => {
+                const s = byId[r.id] || {};
+                const does = r.action === 'Sample' ? `Keep 1 in ${r.sampleRate}` : r.action === 'Route' ? `To ${r.targetIndex}` : r.action;
+                return `<tr><td>${esc(String(r.order))}</td><td>${esc(r.name)}${r.enabled ? '' : ' <span class="badge badge-muted">Off</span>'}</td>
+                    <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc([r.pattern, r.condition].filter(Boolean).join(' and ') || 'every event')}</td>
+                    <td>${esc(does)}${r.stop ? ', then stop' : ''}</td><td>${esc(String(s.matched || 0))} matched${s.dropped ? `, ${esc(String(s.dropped))} dropped (${esc(formatBytes(s.bytesDropped))})` : ''}</td>
+                    <td><button type="button" class="btn btn-secondary btn-sm" data-click="editPipelineRule" data-args='${esc(JSON.stringify([r.id]))}'>Edit</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-click="deletePipelineRule" data-args='${esc(JSON.stringify([r.id]))}'>Del</button></td></tr>`;
+            }).join('');
+    } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
+}
+
+function editPipelineRule(id) {
+    const r = (typeof id === 'string' && pipelineRules[id]) || { order: 10, action: 'Drop', sampleRate: 10, replacement: '[REDACTED]', enabled: true };
+    editingPipelineId = r.id || null;
+    const set = (field, value) => { document.getElementById(field).value = value ?? ''; };
+    set('plName', r.name); set('plOrder', r.order); set('plPattern', r.pattern); set('plCondition', r.condition); set('plAction', r.action);
+    set('plRate', r.sampleRate); set('plTarget', r.targetIndex); set('plRedact', r.redactPattern); set('plReplacement', r.replacement);
+    document.getElementById('plStop').checked = !!r.stop;
+    document.getElementById('plEnabled').checked = r.enabled !== false;
+    document.getElementById('pipelineTestResult').textContent = '';
+    document.getElementById('pipelineEditor').hidden = false;
+}
+
+function closePipelineEditor() { document.getElementById('pipelineEditor').hidden = true; }
+
+function pipelineRuleFromForm() {
+    const value = field => document.getElementById(field).value.trim();
+    return {
+        id: editingPipelineId || undefined, name: value('plName'), order: Number(value('plOrder')) || 0,
+        pattern: value('plPattern') || null, condition: value('plCondition') || null, action: value('plAction'),
+        sampleRate: Number(value('plRate')) || 10, targetIndex: value('plTarget') || null,
+        redactPattern: value('plRedact') || null, replacement: document.getElementById('plReplacement').value,
+        stop: document.getElementById('plStop').checked, enabled: document.getElementById('plEnabled').checked,
+    };
+}
+
+async function testPipelineRule() {
+    const out = document.getElementById('pipelineTestResult');
+    const lines = document.getElementById('plLines').value.split('\n').map(l => l.trimEnd()).filter(Boolean);
+    if (lines.length === 0) { out.textContent = 'Paste some lines to try it on.'; return; }
+    const rule = pipelineRuleFromForm();
+    const others = Object.values(pipelineRules).filter(r => r.id !== editingPipelineId);
+    try {
+        const results = await api('POST', '/api/v1/pipelines/test', { lines, rules: [...others, { ...rule, id: rule.id || 'preview' }] });
+        out.innerHTML = `<ul>${results.map(r => `<li>${r.kept ? `<span class="badge badge-success">Kept</span> in ${esc(r.index)}: <span class="mono">${esc(r.result)}</span>` : `<span class="badge badge-muted">Dropped</span> <span class="mono">${esc(r.line)}</span>`}</li>`).join('')}</ul>`;
+    } catch (e) { out.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function savePipelineRule() {
+    const rule = pipelineRuleFromForm();
+    const id = editingPipelineId || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    try {
+        await api('PUT', '/api/v1/pipelines/rules/' + encodeURIComponent(id), rule);
+        closePipelineEditor();
+        toast('Rule saved', 'success');
+        loadPipelines();
+    } catch (e) { document.getElementById('pipelineTestResult').innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function deletePipelineRule(id) {
+    if (!confirm('Delete this ingest rule?')) return;
+    try { await api('DELETE', '/api/v1/pipelines/rules/' + encodeURIComponent(id)); loadPipelines(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
 /* ===== Cases ===== */
 window.EXTRA_PAGES.cases = { title: 'Cases', load: () => loadCases() };
 
