@@ -282,10 +282,15 @@ public static class BqlExpressionEvaluator
             // JSON functions
             "tojson" or "json_object" => EvalToJson(args),
             "fromjson" or "spath" => EvalFromJson(args),
-            "json_extract" => EvalJsonExtract(args),
 
             // Multi-value functions
             "mvcount" => EvalMvCount(args),
+            "mvzip" => EvalMvZip(args),
+            "mvrange" => EvalMvRange(args),
+            "json_keys" => EvalJsonKeys(args),
+            "json_extract" => EvalJsonExtract(args),
+            "in" => args.Count > 1 && args[0] != null && args.Skip(1).Any(v => string.Equals(args[0]!.ToString(), v?.ToString(), StringComparison.OrdinalIgnoreCase)),
+            "cidrmatch" => EvalCidrMatch(args),
             "mvindex" => EvalMvIndex(args),
             "mvjoin" => EvalMvJoin(args),
             "mvappend" => EvalMvAppend(args),
@@ -455,6 +460,60 @@ public static class BqlExpressionEvaluator
         var str = args.ElementAtOrDefault(0)?.ToString();
         var sep = args.ElementAtOrDefault(1)?.ToString() ?? ",";
         return str?.Split(sep);
+    }
+
+    /// <summary>mvzip(a, b, delim): the values of two fields paired up, as SPL does.</summary>
+    private static object? EvalMvZip(List<object?> args)
+    {
+        var left = AsMultiValue(args.ElementAtOrDefault(0)) ?? (args.ElementAtOrDefault(0) is { } l ? [l] : null);
+        var right = AsMultiValue(args.ElementAtOrDefault(1)) ?? (args.ElementAtOrDefault(1) is { } r ? [r] : null);
+        if (left == null || right == null) return null;
+        var delimiter = args.ElementAtOrDefault(2)?.ToString() ?? ",";
+        return left.Zip(right, (a, b) => (object?)$"{a}{delimiter}{b}").ToList();
+    }
+
+    /// <summary>mvrange(start, end, step): numbers from start up to but not including end.</summary>
+    private static object? EvalMvRange(List<object?> args)
+    {
+        var start = ToDouble(args.ElementAtOrDefault(0));
+        var end = ToDouble(args.ElementAtOrDefault(1));
+        var step = ToDouble(args.ElementAtOrDefault(2)) ?? 1;
+        if (start == null || end == null || step == 0 || (end - start) / step > 10_000) return null;
+        var values = new List<object?>();
+        for (var value = start.Value; step > 0 ? value < end : value > end; value += step)
+        {
+            values.Add(value % 1 == 0 && Math.Abs(value) < long.MaxValue ? (long)value : value);
+        }
+
+        return values;
+    }
+
+    /// <summary>json_keys(json): the top-level keys of a JSON object.</summary>
+    private static object? EvalJsonKeys(List<object?> args)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(args.FirstOrDefault()?.ToString() ?? string.Empty);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                ? document.RootElement.EnumerateObject().Select(p => (object?)p.Name).ToList()
+                : null;
+        }
+        catch (JsonException)
+        {
+            // Not JSON: no keys, as SPL gives
+            return null;
+        }
+    }
+
+    /// <summary>cidrmatch("10.0.0.0/8", ip): whether an address is in a network.</summary>
+    private static object EvalCidrMatch(List<object?> args)
+    {
+        var cidr = args.ElementAtOrDefault(0)?.ToString();
+        var address = args.ElementAtOrDefault(1)?.ToString();
+        return cidr != null && address != null
+            && System.Net.IPNetwork.TryParse(cidr.Trim(), out var network)
+            && System.Net.IPAddress.TryParse(address.Trim(), out var ip)
+            && network.Contains(ip);
     }
 
     private static object EvalMvCount(List<object?> args)

@@ -597,6 +597,19 @@ internal sealed class AggregateAccumulator
     private HashSet<string>? _distinct;
     private List<double>? _values;
     private Random? _sampler;
+    private SortedSet<string>? _valueSet;
+    private List<object?>? _list;
+    private object? _first;
+    private bool _hasFirst;
+    private object? _last;
+    private DateTime? _earliestTime;
+    private object? _earliestValue;
+    private DateTime? _latestTime;
+    private object? _latestValue;
+    private Dictionary<string, (long Count, object? Value, long Order)>? _modes;
+
+    /// <summary>Most values list() keeps, as in SPL.</summary>
+    public const int MaxListValues = 100;
 
     public AggregateAccumulator(AggregateFunction function, QueryBudget budget)
     {
@@ -619,12 +632,44 @@ internal sealed class AggregateAccumulator
         PopulationDeviation,
         SampleVariance,
         PopulationVariance,
+        Values,
+        List,
+        First,
+        Last,
+        Earliest,
+        Latest,
+        Range,
+        Mode,
     }
 
     public void Add(IDictionary<string, object?> row)
     {
+        if (_function.Expression is { } expression)
+        {
+            // count(eval(...)) counts rows where it's true; the others aggregate its value
+            if (_kind == Kind.Count)
+            {
+                if (BqlExpressionEvaluator.EvaluateBool(expression, row))
+                {
+                    _count++;
+                }
+
+                return;
+            }
+
+            row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                [_function.Field!] = BqlExpressionEvaluator.Evaluate(expression, row),
+                ["_time"] = RowTime(row),
+            };
+        }
+
         switch (_kind)
         {
+            case Kind.Values or Kind.List or Kind.First or Kind.Last or Kind.Earliest or Kind.Latest or Kind.Mode:
+                AddValue(row);
+                return;
+
             case Kind.Count:
                 if (_function.Field == null || (row.TryGetValue(_function.Field, out var counted) && counted != null))
                 {
@@ -689,6 +734,22 @@ internal sealed class AggregateAccumulator
                 return CountValue(_count);
             case Kind.DistinctCount:
                 return _distinct?.Count ?? 0;
+            case Kind.Values:
+                return _valueSet is { Count: > 0 } set ? set.Cast<object?>().ToList() : null;
+            case Kind.List:
+                return _list is { Count: > 0 } list ? list.ToList() : null;
+            case Kind.First:
+                return _first;
+            case Kind.Last:
+                return _last;
+            case Kind.Earliest:
+                return _earliestValue;
+            case Kind.Latest:
+                return _latestValue;
+            case Kind.Mode:
+                return _modes is { Count: > 0 } modes
+                    ? modes.Values.OrderByDescending(m => m.Count).ThenBy(m => m.Order).First().Value
+                    : null;
         }
 
         if (_count == 0)
@@ -707,6 +768,7 @@ internal sealed class AggregateAccumulator
             Kind.Average => _sum / _count,
             Kind.Min => _min,
             Kind.Max => _max,
+            Kind.Range => _max - _min,
             Kind.Median => Percentile(50, medianStyle: true),
             Kind.Percentile => Percentile(_percentile, medianStyle: false),
             Kind.SampleDeviation => _count == 1 ? double.NaN : Math.Sqrt(_squaredDeviations / (_count - 1)),
@@ -760,8 +822,94 @@ internal sealed class AggregateAccumulator
             "stdevp" => Kind.PopulationDeviation,
             "variance" => Kind.SampleVariance,
             "varp" => Kind.PopulationVariance,
+            "values" => Kind.Values,
+            "list" => Kind.List,
+            "first" => Kind.First,
+            "last" => Kind.Last,
+            "earliest" => Kind.Earliest,
+            "latest" => Kind.Latest,
+            "range" => Kind.Range,
+            "mode" => Kind.Mode,
             _ => throw new QueryParseException($"Unknown aggregate function: {name}"),
         };
+    }
+
+    private static DateTime? RowTime(IDictionary<string, object?> row) =>
+        (row.TryGetValue("_time", out var time) ? AsTime(time) : null)
+        ?? (row.TryGetValue("Timestamp", out var timestamp) ? AsTime(timestamp) : null);
+
+    /// <summary>For the functions that keep values rather than a number.</summary>
+    private void AddValue(IDictionary<string, object?> row)
+    {
+        if (!row.TryGetValue(_function.Field ?? string.Empty, out var value) || value == null)
+        {
+            return;
+        }
+
+        switch (_kind)
+        {
+            case Kind.Values:
+                _valueSet ??= new SortedSet<string>(StringComparer.Ordinal);
+                if (_valueSet.Add(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty))
+                {
+                    _budget.RetainValue();
+                }
+
+                break;
+
+            case Kind.List:
+                _list ??= new List<object?>();
+                if (_list.Count < MaxListValues)
+                {
+                    _list.Add(value);
+                    _budget.RetainValue();
+                }
+
+                break;
+
+            case Kind.First:
+                if (!_hasFirst)
+                {
+                    _first = value;
+                    _hasFirst = true;
+                }
+
+                break;
+
+            case Kind.Last:
+                _last = value;
+                break;
+
+            case Kind.Earliest or Kind.Latest:
+                if (RowTime(row) is { } time)
+                {
+                    if (_kind == Kind.Earliest && (_earliestTime is not { } earliest || time < earliest))
+                    {
+                        (_earliestTime, _earliestValue) = (time, value);
+                    }
+                    else if (_kind == Kind.Latest && (_latestTime is not { } latest || time > latest))
+                    {
+                        (_latestTime, _latestValue) = (time, value);
+                    }
+                }
+
+                break;
+
+            case Kind.Mode:
+                _modes ??= new Dictionary<string, (long, object?, long)>(StringComparer.Ordinal);
+                var key = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+                if (_modes.TryGetValue(key, out var seen))
+                {
+                    _modes[key] = (seen.Count + 1, seen.Value, seen.Order);
+                }
+                else
+                {
+                    _modes[key] = (1, value, _modes.Count);
+                    _budget.RetainValue();
+                }
+
+                break;
+        }
     }
 
     private static DateTime? AsTime(object? value) => value switch

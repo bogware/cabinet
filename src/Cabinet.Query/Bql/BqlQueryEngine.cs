@@ -269,6 +269,11 @@ public sealed class BqlQueryEngine : IQueryEngine
     /// <summary>The storage form of an aggregate, or null for one storage isn't asked to do.</summary>
     internal static AggregateSpec? ToAggregateSpec(AggregateFunction function)
     {
+        if (function.Expression != null)
+        {
+            return null;
+        }
+
         var name = function.Name.ToLowerInvariant();
         double percentile = 0;
         AggregateKind? kind = name switch

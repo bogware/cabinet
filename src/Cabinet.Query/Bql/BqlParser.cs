@@ -137,8 +137,36 @@ public sealed class BqlParser : IQueryParser
             AppendSearchToken(sb);
         }
 
-        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
-        return new SearchStage(searchText);
+        return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TimeModifier = new(
+        @"(?<![\w.])(?<which>earliest|latest)=(?<value>""[^""]*""|\S+)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Takes SPL's <c>earliest=-1d@d latest=now</c> out of search text as the query's time range,
+    /// and returns the rest of the text.
+    /// </summary>
+    private static string TakeTimeModifiers(BqlQuery query, string text)
+    {
+        var rest = TimeModifier.Replace(text, match =>
+        {
+            var value = match.Groups["value"].Value.Trim('"');
+            var now = DateTime.UtcNow;
+            var time = value.Equals("now", StringComparison.OrdinalIgnoreCase) ? now
+                : value == "0" ? DateTime.UnixEpoch
+                : BqlTime.ApplyRelative(now, value) ?? BqlTime.Parse(value, null)
+                    ?? throw new QueryParseException($"'{value}' isn't a time: use one such as -24h, -1d@d, now or 2026-03-04T05:00:00Z");
+            query.TimeRange ??= new BqlTimeRange();
+            if (match.Groups["which"].Value.Equals("earliest", StringComparison.OrdinalIgnoreCase))
+                query.TimeRange.Start = time;
+            else
+                query.TimeRange.End = time;
+            return string.Empty;
+        }).Trim();
+        return rest.Length > 0 ? rest : "*";
     }
 
     private SearchStage ParseImplicitSearch(BqlQuery query)
@@ -163,8 +191,7 @@ public sealed class BqlParser : IQueryParser
             AppendSearchToken(sb);
         }
 
-        var searchText = sb.Length > 0 ? sb.ToString().Trim() : "*";
-        return new SearchStage(searchText);
+        return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
     }
 
     // Spaced as typed, so host=l4d2-dev stays one comparison rather than becoming host = l4d2 - dev
@@ -544,6 +571,27 @@ public sealed class BqlParser : IQueryParser
         if (Current.Kind == BqlTokenKind.OpenParen)
         {
             Advance();
+
+            // count(eval(status >= 500)): what an expression gives, row by row
+            if (Current.IsKeyword("eval") && Peek(1).Kind == BqlTokenKind.OpenParen)
+            {
+                Advance();
+                Advance();
+                var start = Current.Position;
+                var expression = ParseOrExpression();
+                var text = SourceText(start, Current);
+                Expect(BqlTokenKind.CloseParen, ")");
+                Expect(BqlTokenKind.CloseParen, ")");
+                var evaluated = new AggregateFunction(name, $"eval({text})") { Expression = expression };
+                if (Current.IsKeyword("as"))
+                {
+                    Advance();
+                    evaluated.Alias = ExpectIdentifier();
+                }
+
+                return evaluated;
+            }
+
             var field = ExpectIdentifier();
             Expect(BqlTokenKind.CloseParen, ")");
             var agg = new AggregateFunction(name, field);

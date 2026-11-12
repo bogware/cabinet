@@ -102,6 +102,8 @@ public sealed class BqlLexer
             '*' => new BqlToken(BqlTokenKind.Star, "*", start),
             '/' => new BqlToken(BqlTokenKind.Slash, "/", start),
             '%' => new BqlToken(BqlTokenKind.Percent, "%", start),
+            // Searches hold addresses, emails and paths: user@host, C:\logs, #channel
+            _ when !char.IsControl(ch) && !char.IsWhiteSpace(ch) => new BqlToken(BqlTokenKind.Symbol, ch.ToString(), start),
             _ => throw new QueryParseException($"Unexpected character: '{ch}'", $"position {start}")
         };
     }
