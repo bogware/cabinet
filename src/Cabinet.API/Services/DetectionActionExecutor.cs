@@ -16,7 +16,7 @@ public sealed record DetectionFiring(DetectionRule Rule, string GroupValue, int 
 /// event, or call a webhook. A rule with no actions notifies, which is how rules behaved before.
 /// One action failing doesn't stop the others, and never loses the history record.
 /// </summary>
-public sealed class DetectionActionExecutor
+public sealed class DetectionActionExecutor : BackgroundService
 {
     /// <summary>Where <c>event</c> actions write when they name no index.</summary>
     public const string DefaultEventIndex = "detections";
@@ -29,27 +29,91 @@ public sealed class DetectionActionExecutor
     private readonly ILogStorage _emitStore;
     private readonly HttpClient _http;
     private readonly ILogger<DetectionActionExecutor> _logger;
+    private readonly FieldMaskingService? _masking;
+    private readonly IActionConnectorRunner? _connectors;
+    private readonly TimeSpan _actionTimeout;
+    private readonly bool _background;
+    private readonly System.Threading.Channels.Channel<DetectionFiring> _queue;
+    private long _dropped;
 
+    /// <param name="background">
+    /// Run actions on their own queue, so a slow webhook or mail server can't hold up detection
+    /// and, through it, ingest. Off when constructed directly (tests), where actions run inline.
+    /// </param>
     public DetectionActionExecutor(
         IAlertHistoryStorage history,
         IAlertService alerts,
         ILogStorage emitStore,
         HttpClient http,
-        ILogger<DetectionActionExecutor> logger)
+        ILogger<DetectionActionExecutor> logger,
+        FieldMaskingService? masking = null,
+        bool background = false,
+        TimeSpan? actionTimeout = null,
+        int queueCapacity = 1000,
+        IActionConnectorRunner? connectors = null)
     {
         _history = history;
         _alerts = alerts;
         _emitStore = emitStore;
         _http = http;
         _logger = logger;
+        _masking = masking;
+        _background = background;
+        _connectors = connectors;
+        _actionTimeout = actionTimeout ?? TimeSpan.FromSeconds(15);
+        _queue = System.Threading.Channels.Channel.CreateBounded<DetectionFiring>(new System.Threading.Channels.BoundedChannelOptions(Math.Max(1, queueCapacity))
+        {
+            FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait,
+            SingleReader = true,
+        });
     }
 
+    /// <summary>Firings whose actions were skipped because the action queue was full.</summary>
+    public long DroppedActions => Interlocked.Read(ref _dropped);
+
+    /// <summary>
+    /// Records the firing in alert history, then runs its actions: on the action queue when running
+    /// in the background, or right away otherwise. History is written first and always, so a full
+    /// queue never loses the record that the rule fired.
+    /// </summary>
     public async Task ExecuteAsync(DetectionFiring firing, CancellationToken cancellationToken = default)
+    {
+        await RecordAsync(firing);
+
+        if (!_background)
+        {
+            await RunActionsAsync(firing, cancellationToken);
+            return;
+        }
+
+        if (!_queue.Writer.TryWrite(firing))
+        {
+            Interlocked.Increment(ref _dropped);
+            _logger.LogWarning("Detection {Rule} fired but its actions were skipped: the action queue is full. The firing is in alert history.", firing.Rule.Name);
+        }
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await foreach (var firing in _queue.Reader.ReadAllAsync(stoppingToken))
+            {
+                await RunActionsAsync(firing, stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Detection action queue stopping");
+        }
+    }
+
+    private Task RecordAsync(DetectionFiring firing)
     {
         var rule = firing.Rule;
 
         // History always records the firing, whatever the actions do, and keeps no log content.
-        await _history.SaveAlertAsync(new AlertRecord
+        return _history.SaveAlertAsync(new AlertRecord
         {
             SearchName = rule.Name,
             Query = rule.Condition ?? rule.Pattern ?? string.Empty,
@@ -64,6 +128,18 @@ public sealed class DetectionActionExecutor
             Technique = rule.Technique,
             FiredAt = firing.Event.Timestamp,
         });
+    }
+
+    private async Task RunActionsAsync(DetectionFiring firing, CancellationToken cancellationToken)
+    {
+        var rule = firing.Rule;
+
+        // Actions see the event as the most restricted viewer would: anything masked for anyone is
+        // masked here, since a webhook or channel reaches people outside Cabinet's access control.
+        if (_masking != null)
+        {
+            firing = firing with { Event = _masking.MaskEvent(firing.Event, SystemRole.Viewer) };
+        }
 
         // No actions means notify, as rules always did.
         var actions = rule.Actions is { Count: > 0 } configured
@@ -72,9 +148,15 @@ public sealed class DetectionActionExecutor
 
         foreach (var action in actions)
         {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_actionTimeout);
             try
             {
-                await RunAsync(action, firing, cancellationToken);
+                await RunAsync(action, firing, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("Detection {Rule}: the {Type} action took longer than {Seconds}s and was stopped", rule.Name, action.Type, _actionTimeout.TotalSeconds);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -88,8 +170,45 @@ public sealed class DetectionActionExecutor
         {
             "event" => EmitEventAsync(action, firing, cancellationToken),
             "webhook" => CallWebhookAsync(action, firing, cancellationToken),
+            "connector" => RunConnectorAsync(action, firing, cancellationToken),
             _ => NotifyAsync(action, firing, cancellationToken),
         };
+
+    private Task RunConnectorAsync(DetectionAction action, DetectionFiring firing, CancellationToken cancellationToken)
+    {
+        if (_connectors == null || string.IsNullOrWhiteSpace(action.Target))
+        {
+            _logger.LogWarning("Detection {Rule}: a connector action names no connector, or connectors aren't available", firing.Rule.Name);
+            return Task.CompletedTask;
+        }
+
+        return _connectors.SendAsync(action.Target, ToNotification(action, firing), cancellationToken);
+    }
+
+    /// <summary>The firing as a connector delivers it: a title, a message and the facts.</summary>
+    public ConnectorNotification ToNotification(DetectionAction action, DetectionFiring firing)
+    {
+        var rule = firing.Rule;
+        return new ConnectorNotification
+        {
+            Title = $"Detection: {rule.Name}",
+            Message = Fill(action.Message, firing) ?? DefaultMessage(firing, forHistory: false),
+            Severity = action.Severity ?? rule.Severity,
+            Source = $"Detection/{rule.Id}",
+            Time = firing.Event.Timestamp,
+            Facts = new Dictionary<string, string>
+            {
+                ["rule"] = rule.Name,
+                ["group"] = firing.GroupValue,
+                ["count"] = firing.Count.ToString(CultureInfo.InvariantCulture),
+                ["host"] = firing.Event.Host ?? string.Empty,
+                ["index"] = firing.Event.Index,
+                ["event_id"] = firing.Event.Id,
+                ["technique"] = rule.Technique ?? string.Empty,
+            },
+            DedupKey = $"{rule.Id}:{firing.GroupValue}",
+        };
+    }
 
     private Task NotifyAsync(DetectionAction action, DetectionFiring firing, CancellationToken cancellationToken)
     {

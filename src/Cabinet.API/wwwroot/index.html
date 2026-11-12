@@ -468,6 +468,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25a.75.75 0 0 0-1.5 0v3.5c0 .199.079.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94Z"/></svg>
                 Scheduled Searches
             </button>
+            <button type="button" class="nav-item" data-page="connectors">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.75 0a.75.75 0 0 1 .75.75V3h5V.75a.75.75 0 0 1 1.5 0V3h.75A1.25 1.25 0 0 1 14 4.25v2A4.75 4.75 0 0 1 9.75 11H8.75v4.25a.75.75 0 0 1-1.5 0V11h-1A4.75 4.75 0 0 1 2 6.25v-2A1.25 1.25 0 0 1 3.25 3H4V.75A.75.75 0 0 1 4.75 0ZM3.5 4.5v1.75A3.25 3.25 0 0 0 6.75 9.5h3a3.25 3.25 0 0 0 3.25-3.25V4.5Z"/></svg>
+                Connectors
+            </button>
             <div class="nav-section">Knowledge</div>
             <button type="button" class="nav-item" data-page="extractions">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.838 1.7a.75.75 0 0 1 .162 1.05A6.49 6.49 0 0 0 0 6.5a6.49 6.49 0 0 0 1 3.75.75.75 0 0 1-1.212.888A7.99 7.99 0 0 1 0 6.5a7.99 7.99 0 0 1-1.788-4.638.75.75 0 0 1 1.05-.162ZM14 6.5a6.49 6.49 0 0 0-1-3.75.75.75 0 0 1 1.212-.888A7.99 7.99 0 0 1 16 6.5a7.99 7.99 0 0 1-1.788 4.638.75.75 0 0 1-1.212-.888A6.49 6.49 0 0 0 14 6.5ZM4.25 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5ZM3.5 8.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1-.75-.75Zm1.5 3a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"/></svg>
@@ -738,6 +742,22 @@
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Fires on</th><th scope="col">Technique</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="rulesBody"></tbody>
+                </table></div></div>
+            </div>
+
+            <!-- ===== CONNECTORS PAGE ===== -->
+            <div class="page" id="page-connectors">
+                <div class="toolbar">
+                    <h3>Connectors</h3>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary btn-sm" data-click="showConnectorModal">+ New Connector</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadConnectors">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note">Named places alerts can go: Slack, Teams, Discord, PagerDuty, Opsgenie, Jira, ServiceNow, email or any webhook. Detection rules send to them with a "Send to connector" action. Secrets are kept on the server and never shown again.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Destination</th><th scope="col">Secret</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="connectorsBody"></tbody>
                 </table></div></div>
             </div>
 
@@ -1126,6 +1146,29 @@
     </div>
 
     <!-- Detection Rule Modal -->
+    <div class="modal-bg" id="connectorModal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="connectorModalTitle">
+            <h3 id="connectorModalTitle">New Connector</h3>
+            <div class="form-group"><label for="connectorName">Name</label><input type="text" id="connectorName" placeholder="oncall-pagerduty" spellcheck="false"></div>
+            <div class="form-group"><label for="connectorType">Type</label><select id="connectorType" data-change="connectorTypeChanged">
+                <option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="discord">Discord</option>
+                <option value="pagerduty">PagerDuty</option><option value="opsgenie">Opsgenie</option><option value="jira">Jira</option>
+                <option value="servicenow">ServiceNow</option><option value="email">Email</option><option value="webhook">Webhook (JSON)</option>
+            </select></div>
+            <div class="form-group"><label for="connectorUrl" id="connectorUrlLabel">URL</label><input type="text" id="connectorUrl" spellcheck="false"></div>
+            <div class="form-group"><label for="connectorSecret" id="connectorSecretLabel">Secret</label><input type="password" id="connectorSecret" autocomplete="new-password" placeholder="Leave empty to keep the saved one"></div>
+            <div class="form-group" id="connectorUserGroup"><label for="connectorUser">User</label><input type="text" id="connectorUser" spellcheck="false"></div>
+            <div class="form-group" id="connectorProjectGroup"><label for="connectorProject">Project key / table</label><input type="text" id="connectorProject" spellcheck="false"></div>
+            <div class="form-group" id="connectorToGroup"><label for="connectorTo">Send to (comma-separated)</label><input type="text" id="connectorTo" spellcheck="false"></div>
+            <label class="st-check"><input type="checkbox" id="connectorEnabled" checked> On</label>
+            <p id="connectorResult" class="page-note" role="status"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["connectorModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveConnector">Save</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-bg" id="ruleModal">
         <div class="modal modal-wide">
             <h3 id="ruleModalTitle">New Rule</h3>
@@ -1190,6 +1233,7 @@
     <script src="search.js"></script>
     <script src="search-page.js"></script>
     <script src="settings-page.js"></script>
+    <script src="v3.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

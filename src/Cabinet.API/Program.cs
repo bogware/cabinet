@@ -486,12 +486,34 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>()));
 
     services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
+
+    // Outbound calls people configure (webhook actions, connectors) can't reach private addresses
+    // unless allowed, and never follow redirects.
+    var outboundOptions = configuration.GetSection("Outbound").Get<Cabinet.API.Services.OutboundUrlOptions>() ?? new();
+    services.AddSingleton(outboundOptions);
+    services.AddSingleton<Cabinet.API.Services.OutboundUrlGuard>();
+    services.AddKeyedSingleton("outbound", (sp, _) =>
+        new HttpClient(sp.GetRequiredService<Cabinet.API.Services.OutboundUrlGuard>().CreateHandler()) { Timeout = TimeSpan.FromSeconds(15) });
+    services.AddSingleton<Cabinet.API.Services.ConnectorStore>();
+    services.AddSingleton(sp => new Cabinet.API.Services.ConnectorRunner(
+        sp.GetRequiredService<Cabinet.API.Services.ConnectorStore>(),
+        sp.GetRequiredKeyedService<HttpClient>("outbound"),
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.ConnectorRunner>>()));
+    services.AddSingleton<Cabinet.API.Services.IActionConnectorRunner>(sp => sp.GetRequiredService<Cabinet.API.Services.ConnectorRunner>());
+
     services.AddSingleton<Cabinet.API.Services.DetectionActionExecutor>(sp => new Cabinet.API.Services.DetectionActionExecutor(
         sp.GetRequiredService<IAlertHistoryStorage>(),
         sp.GetRequiredService<Cabinet.Alerts.IAlertService>(),
         sp.GetRequiredKeyedService<ILogStorage>("base"),
-        new HttpClient { Timeout = TimeSpan.FromSeconds(10) },
-        sp.GetRequiredService<ILogger<Cabinet.API.Services.DetectionActionExecutor>>()));
+        sp.GetRequiredKeyedService<HttpClient>("outbound"),
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.DetectionActionExecutor>>(),
+        masking: sp.GetRequiredService<FieldMaskingService>(),
+        background: true,
+        actionTimeout: TimeSpan.FromSeconds(configuration.GetValue("Detection:ActionTimeoutSeconds", 15)),
+        queueCapacity: configuration.GetValue("Detection:ActionQueueSize", 1000),
+        connectors: sp.GetRequiredService<Cabinet.API.Services.IActionConnectorRunner>()));
+    services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionActionExecutor>());
     services.AddSingleton<Cabinet.API.Services.DetectionRuleStore>();
     services.AddSingleton<Cabinet.API.Services.DetectionEngine>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());

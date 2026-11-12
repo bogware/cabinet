@@ -116,8 +116,11 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
 });
 
 const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings'];
+// Pages added by other scripts register here: { name: { title, load } }
+window.EXTRA_PAGES = window.EXTRA_PAGES || {};
+function isPage(page) { return VALID_PAGES.includes(page) || Object.prototype.hasOwnProperty.call(window.EXTRA_PAGES, page); }
 function navigate(page) {
-    if (!VALID_PAGES.includes(page)) return;
+    if (!isPage(page)) return;
     currentPage = page;
     document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
     const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
@@ -127,7 +130,8 @@ function navigate(page) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     const pageEl = document.getElementById('page-' + page);
     if (pageEl) pageEl.classList.add('active');
-    const titles = { rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
+    const extra = window.EXTRA_PAGES[page];
+    const titles = { [page]: extra ? extra.title : page, rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
     document.getElementById('pageTitle').textContent = titles[page] || page;
     // Update URL without reload
     // Search keeps its own state in the hash, so a search can be bookmarked
@@ -149,6 +153,7 @@ function navigate(page) {
     if (page === 'settings') loadSettings();
     if (page === 'livetail') loadTailIndexes();
     if (page === 'jobs') loadJobs();
+    if (extra && typeof extra.load === 'function') extra.load();
 }
 
 /* ===== API Helper ===== */
@@ -579,7 +584,7 @@ async function loadRules() {
                 ? `${fmt(rule.threshold)} matches in ${fmt(rule.windowSeconds)}s${rule.groupBy ? ' by ' + esc(rule.groupBy) : ''}`
                 : 'Each match';
             const actionSummary = (rule.actions && rule.actions.length)
-                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
+                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'connector' ? `→${esc(a.target || '?')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
                 : 'notify';
             tr.innerHTML = `<td><div style="font-weight:500">${esc(rule.name)}</div><div class="chart-note">${esc(rule.description || '')}</div><div class="chart-note">On fire: ${actionSummary}</div></td>
                 <td>${sevBadge(rule.severity)}</td>
@@ -668,6 +673,7 @@ function addRuleAction(action) {
             <option value="notify"${action.type === 'notify' ? ' selected' : ''}>Notify channels</option>
             <option value="event"${action.type === 'event' ? ' selected' : ''}>Write an event</option>
             <option value="webhook"${action.type === 'webhook' ? ' selected' : ''}>Call a webhook</option>
+            <option value="connector"${action.type === 'connector' ? ' selected' : ''}>Send to connector</option>
         </select>
         <input class="ra-target" style="flex:1;min-width:160px" value="${esc(action.target || '')}">
         <select class="ra-sev" style="width:auto">${sevOptions}</select>
@@ -679,7 +685,7 @@ function addRuleAction(action) {
     const apply = () => {
         const t = type.value;
         row.querySelector('.ra-target').style.display = t === 'notify' ? 'none' : '';
-        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : 'Index for the event (default detections)';
+        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : t === 'connector' ? 'Connector name (see Connectors)' : 'Index for the event (default detections)';
         row.querySelector('.ra-fields').style.display = t === 'event' ? '' : 'none';
     };
     type.addEventListener('change', apply);
@@ -1556,7 +1562,7 @@ setInterval(loadStats, 120000);
 })();
 window.addEventListener('popstate', e => {
     const page = (e.state && e.state.page) || window.location.hash.replace('#', '').split('?')[0] || 'search';
-    if (VALID_PAGES.includes(page)) navigate(page);
+    if (isPage(page)) navigate(page);
 });
 
 // P11: Keyboard shortcuts
