@@ -295,6 +295,50 @@ public sealed class PostgresLeaderLeaseTests
         }
     }
 
+    [SkippableFact]
+    public async Task Leader_WhoseConnectionIsKilled_StepsDown_AndLeadsAgain()
+    {
+        Skip.If(string.IsNullOrEmpty(ConnectionString), "Set CABINET_TEST_POSTGRES_CONNSTR to enable.");
+
+        var database = $"cabinet_lease_{Guid.NewGuid():N}";
+        await using (var admin = new NpgsqlConnection(ConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var create = new NpgsqlCommand($"CREATE DATABASE {database}", admin);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        var isolated = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = database }.ConnectionString;
+        var lease = new PostgresLeaderLease(isolated, NullLogger<PostgresLeaderLease>.Instance);
+        try
+        {
+            await WaitUntilAsync(() => lease.IsLeader);
+            lease.IsLeader.Should().BeTrue();
+
+            await using (var admin = new NpgsqlConnection(ConnectionString))
+            {
+                await admin.OpenAsync();
+                await using var kill = new NpgsqlCommand($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}'", admin);
+                await kill.ExecuteNonQueryAsync();
+            }
+
+            await WaitUntilAsync(() => !lease.IsLeader);
+            lease.IsLeader.Should().BeFalse("its lock went with the connection");
+
+            await WaitUntilAsync(() => lease.IsLeader);
+            lease.IsLeader.Should().BeTrue("the loop keeps trying after losing the connection");
+        }
+        finally
+        {
+            await lease.DisposeAsync();
+            NpgsqlConnection.ClearAllPools();
+            await using var admin = new NpgsqlConnection(ConnectionString);
+            await admin.OpenAsync();
+            await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS {database} WITH (FORCE)", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);

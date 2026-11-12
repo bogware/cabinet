@@ -153,6 +153,7 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
     private const long LockKey = 7_236_151_002;
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan CheckTimeout = TimeSpan.FromSeconds(10);
 
     private readonly string _connectionString;
     private readonly ILogger<PostgresLeaderLease> _logger;
@@ -164,7 +165,14 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
     public PostgresLeaderLease(string connectionString, ILogger<PostgresLeaderLease> logger)
     {
         // A pooled connection could be reset, which would silently release the lock
-        _connectionString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ConnectionString;
+        // A lost connection must be noticed in seconds, since another instance may take the lock then
+        _connectionString = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Pooling = false,
+            Timeout = (int)CheckTimeout.TotalSeconds,
+            CommandTimeout = (int)CheckTimeout.TotalSeconds,
+            KeepAlive = (int)PollInterval.TotalSeconds,
+        }.ConnectionString;
         _logger = logger;
         _loop = Task.Run(() => RunAsync(_stopping.Token));
     }
@@ -185,7 +193,8 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                 {
                     if (!_isLeader)
                     {
-                        _isLeader = await connection.ExecuteScalarAsync<bool>("SELECT pg_try_advisory_lock(@Key)", new { Key = LockKey });
+                        _isLeader = await connection.ExecuteScalarAsync<bool>(
+                            new CommandDefinition("SELECT pg_try_advisory_lock(@Key)", new { Key = LockKey }, commandTimeout: (int)CheckTimeout.TotalSeconds, cancellationToken: cancellationToken));
                         if (_isLeader)
                         {
                             _logger.LogInformation("This instance is now the leader");
@@ -194,7 +203,8 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                     else
                     {
                         // Notices a lost connection, which means the lock is gone too
-                        await connection.ExecuteScalarAsync<int>("SELECT 1");
+                        await connection.ExecuteScalarAsync<int>(
+                            new CommandDefinition("SELECT 1", commandTimeout: (int)CheckTimeout.TotalSeconds, cancellationToken: cancellationToken));
                     }
 
                     await Task.Delay(PollInterval, cancellationToken);
@@ -204,8 +214,9 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
             {
                 _logger.LogDebug("Leader lease stopping");
             }
-            catch (Exception ex) when (ex is NpgsqlException or TimeoutException or System.Net.Sockets.SocketException or InvalidOperationException)
+            catch (Exception ex)
             {
+                // Anything else would end the loop, and this instance could never lead again
                 if (_isLeader)
                 {
                     _logger.LogWarning(ex, "Lost the leader lease");
