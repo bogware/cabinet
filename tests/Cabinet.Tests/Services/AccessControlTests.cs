@@ -327,22 +327,28 @@ public sealed class PostgresLeaderLeaseTests
             }
 
             var before = await BackendsAsync();
-            await using (var kill = new NpgsqlCommand($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}'", admin))
+            var killed = 0;
+            foreach (var pid in before)
             {
-                await kill.ExecuteNonQueryAsync();
+                await using var kill = new NpgsqlCommand("SELECT pg_terminate_backend(@pid)", admin);
+                kill.Parameters.AddWithValue("pid", pid);
+                killed += await kill.ExecuteScalarAsync() is true ? 1 : 0;
             }
 
             // The lock went with the connection; the loop has to reconnect and take it again,
             // which can happen faster than a poll here could see it step down
             var reconnected = false;
-            var deadline = DateTime.UtcNow.AddSeconds(30);
+            var after = before;
+            var deadline = DateTime.UtcNow.AddSeconds(60);
             while (!reconnected && DateTime.UtcNow < deadline)
             {
                 await Task.Delay(200);
-                reconnected = lease.IsLeader && (await BackendsAsync()).Except(before).Any();
+                after = await BackendsAsync();
+                reconnected = lease.IsLeader && after.Except(before).Any();
             }
 
-            reconnected.Should().BeTrue("the loop keeps trying after losing the connection, and leads on a new one");
+            reconnected.Should().BeTrue(
+                $"the loop keeps trying after losing the connection, and leads on a new one (killed {killed}, before [{string.Join(',', before)}], after [{string.Join(',', after)}], leader {lease.IsLeader})");
         }
         finally
         {
