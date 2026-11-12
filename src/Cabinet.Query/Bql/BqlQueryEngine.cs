@@ -3,7 +3,6 @@ using System.Dynamic;
 using System.Runtime.CompilerServices;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Query.NaturalLanguage;
 using Microsoft.Extensions.Logging;
 
 namespace Cabinet.Query.Bql;
@@ -18,7 +17,6 @@ public sealed class BqlQueryEngine : IQueryEngine
     private readonly ILogStorage _storage;
     private readonly BqlParser _parser;
     private readonly BqlOptimizer _optimizer;
-    private readonly INaturalLanguageTranslator? _nlTranslator;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
     private readonly QueryLimits _limits;
@@ -34,7 +32,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         BqlParser parser,
         BqlOptimizer optimizer,
         ILogger<BqlQueryEngine> logger,
-        INaturalLanguageTranslator? nlTranslator = null,
         IKnowledgeStorage? knowledgeStorage = null,
         QueryLimits? limits = null)
     {
@@ -43,7 +40,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         _parser = parser;
         _optimizer = optimizer;
         _logger = logger;
-        _nlTranslator = nlTranslator;
         _knowledgeStorage = knowledgeStorage;
     }
 
@@ -61,16 +57,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         var sw = Stopwatch.StartNew();
         var queryString = context.Query;
 
-        // Try natural language translation if available
-        if (_nlTranslator != null && _nlTranslator.IsNaturalLanguage(queryString))
-        {
-            var translation = await _nlTranslator.TranslateAsync(queryString, cancellationToken);
-            if (translation.Success && translation.BqlQuery != null)
-            {
-                _logger.LogDebug("NL translated: '{Original}' → '{BQL}'", queryString, translation.BqlQuery);
-                queryString = translation.BqlQuery;
-            }
-        }
 
         // Parse the query into a BQL AST
         var bqlQuery = _parser.ParseBql(queryString);
@@ -588,16 +574,6 @@ public sealed class BqlQueryEngine : IQueryEngine
 
         var queryString = context.Query;
 
-        // Try natural language translation if available
-        if (_nlTranslator != null && _nlTranslator.IsNaturalLanguage(queryString))
-        {
-            var translation = await _nlTranslator.TranslateAsync(queryString, token);
-            if (translation.Success && translation.BqlQuery != null)
-            {
-                _logger.LogDebug("NL translated for stream: '{Original}' → '{BQL}'", queryString, translation.BqlQuery);
-                queryString = translation.BqlQuery;
-            }
-        }
 
         // Parse and optimize
         var bqlQuery = _parser.ParseBql(queryString);

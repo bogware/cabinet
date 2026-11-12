@@ -52,9 +52,9 @@ public static class Fuzzy
     /// The one candidate closest to a word, within the edits its length allows. Null when none is
     /// close enough, or two are equally close, since then a guess could be wrong either way.
     /// </summary>
-    public static string? Closest(string word, IEnumerable<string> candidates)
+    public static string? Closest(string word, IEnumerable<string> candidates, int leastAllowed = 0)
     {
-        var allowed = Allowed(word.Length);
+        var allowed = Math.Max(leastAllowed, Allowed(word.Length));
         if (allowed == 0)
         {
             return null;

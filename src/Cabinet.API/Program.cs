@@ -666,7 +666,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<Cabinet.Query.Bql.BqlParser>();
     services.AddScoped<Cabinet.Query.Bql.BqlOptimizer>();
     services.AddScoped<Cabinet.Query.IQueryParser>(sp => sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>());
-    services.AddScoped<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator, Cabinet.Query.NaturalLanguage.RuleBasedTranslator>();
+    services.AddSingleton<Cabinet.Query.Natural.QueryUnderstander>();
+    services.AddSingleton<Cabinet.API.Services.FieldCatalogService>();
 
     // The engine reads through the caller's index scope, so subsearches, joins and macros are
     // limited the same as the query around them.
@@ -675,7 +676,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>(),
         sp.GetRequiredService<Cabinet.Query.Bql.BqlOptimizer>(),
         sp.GetRequiredService<ILogger<Cabinet.Query.Bql.BqlQueryEngine>>(),
-        sp.GetService<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator>(),
         sp.GetService<IKnowledgeStorage>(),
         sp.GetRequiredService<Cabinet.Query.Bql.QueryLimits>()));
     services.AddSingleton(configuration.GetSection("Query:Limits").Get<Cabinet.Query.Bql.QueryLimits>() ?? new Cabinet.Query.Bql.QueryLimits());

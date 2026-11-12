@@ -6168,7 +6168,7 @@
         }
       }
     },
-    "/api/v1/Query/translate": {
+    "/api/v1/Query/understand": {
       "post": {
         "tags": [
           "Query"
@@ -6177,17 +6177,17 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TranslateRequest"
+                "$ref": "#/components/schemas/UnderstandRequest"
               }
             },
             "text/json": {
               "schema": {
-                "$ref": "#/components/schemas/TranslateRequest"
+                "$ref": "#/components/schemas/UnderstandRequest"
               }
             },
             "application/*+json": {
               "schema": {
-                "$ref": "#/components/schemas/TranslateRequest"
+                "$ref": "#/components/schemas/UnderstandRequest"
               }
             }
           }
@@ -6198,17 +6198,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/TranslateResponse"
+                  "$ref": "#/components/schemas/UnderstandResponse"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TranslateResponse"
+                  "$ref": "#/components/schemas/UnderstandResponse"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TranslateResponse"
+                  "$ref": "#/components/schemas/UnderstandResponse"
                 }
               }
             }
@@ -6229,6 +6229,99 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/Query/complete": {
+      "get": {
+        "tags": [
+          "Query"
+        ],
+        "parameters": [
+          {
+            "name": "text",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Completion"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Completion"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Completion"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/Query/examples": {
+      "get": {
+        "tags": [
+          "Query"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueryExample"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueryExample"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueryExample"
+                  }
                 }
               }
             }
@@ -9680,6 +9773,32 @@
         ],
         "type": "string"
       },
+      "Completion": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "length": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "ConnectorTestResult": {
         "type": "object",
         "properties": {
@@ -11147,6 +11266,24 @@
         },
         "additionalProperties": { }
       },
+      "QueryExample": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "query": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "QueryMacro": {
         "required": [
           "definition",
@@ -11221,6 +11358,9 @@
           },
           "useCache": {
             "type": "boolean"
+          },
+          "exact": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -11261,6 +11401,9 @@
           },
           "pushedDown": {
             "type": "boolean"
+          },
+          "understanding": {
+            "$ref": "#/components/schemas/UnderstandResponse"
           }
         },
         "additionalProperties": false
@@ -11515,6 +11658,9 @@
           "description": {
             "type": "string",
             "nullable": true
+          },
+          "exact": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -12249,40 +12395,6 @@
         },
         "additionalProperties": false
       },
-      "TranslateRequest": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "TranslateResponse": {
-        "type": "object",
-        "properties": {
-          "originalText": {
-            "type": "string",
-            "nullable": true
-          },
-          "bqlQuery": {
-            "type": "string",
-            "nullable": true
-          },
-          "success": {
-            "type": "boolean"
-          },
-          "confidence": {
-            "type": "number",
-            "format": "double"
-          },
-          "isNaturalLanguage": {
-            "type": "boolean"
-          }
-        },
-        "additionalProperties": false
-      },
       "TstatsRequest": {
         "type": "object",
         "properties": {
@@ -12338,6 +12450,127 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UnderstandAlternative": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UnderstandCorrection": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "nullable": true
+          },
+          "to": {
+            "type": "string",
+            "nullable": true
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "length": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UnderstandProblem": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "length": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "fix": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UnderstandRequest": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UnderstandResponse": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "query": {
+            "type": "string",
+            "nullable": true
+          },
+          "willRun": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "explanation": {
+            "type": "string",
+            "nullable": true
+          },
+          "corrections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnderstandCorrection"
+            },
+            "nullable": true
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnderstandAlternative"
+            },
+            "nullable": true
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnderstandProblem"
+            },
+            "nullable": true
+          },
+          "suggestAssistant": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

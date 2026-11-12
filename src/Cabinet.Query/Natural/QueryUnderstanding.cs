@@ -408,7 +408,8 @@ public sealed partial class QueryUnderstander
                 continue;
             }
 
-            if (Fuzzy.Closest(name, catalog.Fields) is { } near)
+            // A field position allows a slip even in a short name: "usr" for user
+            if (Fuzzy.Closest(name, catalog.Fields, leastAllowed: name.Length >= 3 ? 1 : 0) is { } near)
             {
                 problems.Add(new QueryProblem(field.Index, field.Length, $"No events have a field \"{name}\". Did you mean \"{near}\"?", text[..field.Index] + near + text[(field.Index + field.Length)..]));
             }

@@ -7,7 +7,7 @@ using Cabinet.Core.Models;
 using Cabinet.API.Middleware;
 using Cabinet.Query;
 using Cabinet.Query.Bql;
-using Cabinet.Query.NaturalLanguage;
+using Cabinet.Query.Natural;
 
 namespace Cabinet.API.Controllers;
 
@@ -27,7 +27,9 @@ public class QueryController : ControllerBase
     private readonly IQueryParser _queryParser;
     private readonly ISavedQueryStorage _savedQueryStorage;
     private readonly IAuditLogger _auditLogger;
-    private readonly INaturalLanguageTranslator? _nlTranslator;
+    private readonly QueryUnderstander? _understander;
+    private readonly Services.FieldCatalogService? _catalogs;
+    private readonly ILogStorage? _storage;
     private readonly Services.QueryCacheService? _queryCache;
     private readonly Cabinet.API.Authentication.IndexAccessScope? _indexScope;
     private readonly ILogger<QueryController> _logger;
@@ -39,18 +41,22 @@ public class QueryController : ControllerBase
         ISavedQueryStorage savedQueryStorage,
         IAuditLogger auditLogger,
         ILogger<QueryController> logger,
-        INaturalLanguageTranslator? nlTranslator = null,
         Services.QueryCacheService? queryCache = null,
         Cabinet.API.Authentication.IndexAccessScope? indexScope = null,
-        Infrastructure.ServerLimits? limits = null)
+        Infrastructure.ServerLimits? limits = null,
+        QueryUnderstander? understander = null,
+        Services.FieldCatalogService? catalogs = null,
+        ILogStorage? storage = null)
     {
+        _understander = understander;
+        _catalogs = catalogs;
+        _storage = storage;
         _limits = limits ?? new Infrastructure.ServerLimits();
         _indexScope = indexScope;
         _queryEngine = queryEngine;
         _queryParser = queryParser;
         _savedQueryStorage = savedQueryStorage;
         _auditLogger = auditLogger;
-        _nlTranslator = nlTranslator;
         _queryCache = queryCache;
         _logger = logger;
     }
@@ -73,6 +79,16 @@ public class QueryController : ControllerBase
         {
             return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
         }
+
+        // Plain words, typos and SPL become the query that runs, unless asked for exactly as typed
+        var understanding = await UnderstandAsync(request.Query, request.Exact, cancellationToken);
+        if (understanding is { WillRun: false })
+        {
+            return NotUnderstood(understanding);
+        }
+
+        var typed = request.Query;
+        request.Query = understanding?.Query ?? request.Query;
 
         try
         {
@@ -113,7 +129,8 @@ public class QueryController : ControllerBase
                         EventsScanned = cached.Statistics?.EventsScanned ?? 0,
                         Truncated = cached.Statistics?.Truncated == true,
                         Approximate = cached.Statistics?.Approximate == true,
-                        PushedDown = cached.Statistics?.PushedDown == true
+                        PushedDown = cached.Statistics?.PushedDown == true,
+                        Understanding = Describe(understanding, typed),
                     });
                 }
             }
@@ -173,7 +190,8 @@ public class QueryController : ControllerBase
                 EventsScanned = result.Statistics?.EventsScanned ?? 0,
                 Truncated = truncated,
                 Approximate = result.Statistics?.Approximate == true,
-                PushedDown = result.Statistics?.PushedDown == true
+                PushedDown = result.Statistics?.PushedDown == true,
+                Understanding = Describe(understanding, typed),
             });
         }
         catch (QueryParseException ex)
@@ -221,6 +239,16 @@ public class QueryController : ControllerBase
                 cancellationToken);
             return;
         }
+
+        var understanding = await UnderstandAsync(request.Query, request.Exact, cancellationToken);
+        if (understanding is { WillRun: false })
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            await Response.WriteAsJsonAsync(NotUnderstoodProblem(understanding), cancellationToken);
+            return;
+        }
+
+        request.Query = understanding?.Query ?? request.Query;
 
         // Validate query syntax before starting the stream to enable proper error responses.
         // Once streaming begins, the HTTP status code is committed and cannot be changed.
@@ -359,6 +387,21 @@ public class QueryController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Query))
             return Problem(detail: "Query is required", statusCode: 400);
 
+        // A saved search keeps the BQL it was understood as, so a later change in how words are
+        // read can't change what it finds. The words become its description.
+        var understanding = await UnderstandAsync(request.Query, request.Exact, HttpContext.RequestAborted);
+        if (understanding is { WillRun: false })
+        {
+            return NotUnderstood(understanding);
+        }
+
+        var description = request.Description;
+        if (understanding is { Kind: not UnderstandingKind.Exact, Query: { } understood })
+        {
+            description ??= request.Query;
+            request.Query = understood;
+        }
+
         // Validate BQL syntax before saving
         try
         {
@@ -373,7 +416,7 @@ public class QueryController : ControllerBase
         {
             Name = request.Name,
             Query = request.Query,
-            Description = request.Description,
+            Description = description,
             CreatedBy = User.Identity?.Name ?? "unknown",
             CreatedAt = DateTime.UtcNow
         };
@@ -569,31 +612,108 @@ public class QueryController : ControllerBase
     }
 
     /// <summary>
-    /// Translate natural language to BQL query
+    /// What a query would run as, without running it: the BQL it's understood as, what that does
+    /// in words, corrections made, other readings, and problems with where they are. For showing
+    /// "Understood as" while someone types.
     /// </summary>
-    [HttpPost("translate")]
+    [HttpPost("understand")]
     [RequireCapability(Capability.Search)]
-    [ProducesResponseType(typeof(TranslateResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(UnderstandResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> TranslateQuery([FromBody] TranslateRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> Understand([FromBody] UnderstandRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Text))
-            return Problem(detail: "Text is required", statusCode: 400);
+        if (string.IsNullOrWhiteSpace(request.Query))
+            return Problem(detail: "Query is required", statusCode: 400);
+        if (request.Query.Length > _limits.MaxQueryLength)
+            return Problem(detail: $"Query too long. Maximum length is {_limits.MaxQueryLength:N0} characters.", statusCode: 400);
 
-        if (_nlTranslator == null)
-            return Problem(detail: "Natural language translation is not configured", statusCode: 400);
-
-        var result = await _nlTranslator.TranslateAsync(request.Text, cancellationToken);
-
-        return Ok(new TranslateResponse
-        {
-            OriginalText = request.Text,
-            BqlQuery = result.BqlQuery ?? request.Text,
-            Success = result.Success,
-            Confidence = result.Confidence,
-            IsNaturalLanguage = _nlTranslator.IsNaturalLanguage(request.Text)
-        });
+        var understanding = await UnderstandAsync(request.Query, exact: false, cancellationToken)
+            ?? new QueryUnderstanding { Input = request.Query, Kind = UnderstandingKind.Exact, Query = request.Query };
+        return Ok(Describe(understanding, request.Query, always: true));
     }
+
+    /// <summary>
+    /// Suggestions for the word being typed at <paramref name="cursor"/>: commands, fields from your
+    /// data, values of the field just named, functions, and words that start a question.
+    /// </summary>
+    [HttpGet("complete")]
+    [RequireCapability(Capability.Search)]
+    [ProducesResponseType(typeof(List<Completion>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Complete([FromQuery] string? text = null, [FromQuery] int? cursor = null, CancellationToken cancellationToken = default)
+    {
+        text ??= string.Empty;
+        if (text.Length > _limits.MaxQueryLength)
+            return Problem(detail: "Text too long", statusCode: 400);
+
+        var catalog = await CatalogAsync(cancellationToken);
+        return Ok(QueryCompletions.For(text, Math.Clamp(cursor ?? text.Length, 0, text.Length), catalog));
+    }
+
+    /// <summary>Starter questions, filled in with fields and hosts from your own data.</summary>
+    [HttpGet("examples")]
+    [RequireCapability(Capability.Search)]
+    [ProducesResponseType(typeof(List<QueryExample>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Examples(CancellationToken cancellationToken)
+    {
+        var catalog = await CatalogAsync(cancellationToken);
+        var understander = _understander ?? new QueryUnderstander();
+        var examples = QueryExamples.For(catalog)
+            .Select(example => example with { Query = understander.Understand(example.Text, catalog).Query ?? example.Text })
+            .ToList();
+        return Ok(examples);
+    }
+
+    private async Task<FieldCatalog> CatalogAsync(CancellationToken cancellationToken) =>
+        _catalogs != null && _storage != null
+            ? await _catalogs.GetAsync(_indexScope?.Restrict(_storage) ?? _storage, _indexScope?.CacheKey ?? "all", cancellationToken)
+            : FieldCatalog.Empty;
+
+    /// <summary>How a query typed by someone is understood, or null when asked to run it exactly.</summary>
+    private async Task<QueryUnderstanding?> UnderstandAsync(string query, bool exact, CancellationToken cancellationToken)
+    {
+        if (exact || _understander == null)
+        {
+            return null;
+        }
+
+        return _understander.Understand(query, await CatalogAsync(cancellationToken));
+    }
+
+    private static UnderstandResponse? Describe(QueryUnderstanding? understanding, string typed, bool always = false)
+    {
+        if (understanding == null || (!always && understanding.Kind == UnderstandingKind.Exact && understanding.Problems.Count == 0))
+        {
+            return null;
+        }
+
+        return new UnderstandResponse
+        {
+            Input = typed,
+            Kind = understanding.Kind.ToString().ToLowerInvariant(),
+            Query = understanding.Query,
+            WillRun = understanding.WillRun,
+            Confidence = Math.Round(understanding.Confidence, 2),
+            Explanation = understanding.Explanation,
+            Corrections = understanding.Corrections.Select(c => new UnderstandCorrection { From = c.From, To = c.To, Start = c.Start, Length = c.Length }).ToList(),
+            Alternatives = understanding.Alternatives.Select(a => new UnderstandAlternative { Query = a.Query, Description = a.Description }).ToList(),
+            Problems = understanding.Problems.Select(p => new UnderstandProblem { Start = p.Start, Length = p.Length, Message = p.Message, Fix = p.Fix }).ToList(),
+            SuggestAssistant = understanding.SuggestAssistant,
+        };
+    }
+
+    private ProblemDetails NotUnderstoodProblem(QueryUnderstanding understanding)
+    {
+        var problem = new ProblemDetails
+        {
+            Title = "Not understood",
+            Status = 400,
+            Detail = understanding.Problems.FirstOrDefault()?.Message ?? "Couldn't tell what this asks for.",
+        };
+        problem.Extensions["understanding"] = Describe(understanding, understanding.Input, always: true);
+        return problem;
+    }
+
+    private ObjectResult NotUnderstood(QueryUnderstanding understanding) => BadRequest(NotUnderstoodProblem(understanding));
 
     /// <summary>
     /// Explain a query's execution plan without running it
@@ -868,6 +988,12 @@ public class QueryRequest
     /// Default: false. Cached results use a configurable TTL (default 30s).
     /// </summary>
     public bool UseCache { get; set; }
+
+    /// <summary>
+    /// Run the query exactly as typed. By default plain-English questions are read into BQL,
+    /// mistyped commands and fields are fixed, and the response says how it was understood.
+    /// </summary>
+    public bool Exact { get; set; }
 }
 
 public class QueryResponse
@@ -895,6 +1021,9 @@ public class QueryResponse
 
     /// <summary>True when the database computed the aggregate, rather than reading every event.</summary>
     public bool PushedDown { get; set; }
+
+    /// <summary>How the query was understood, when it ran as something other than exactly what was typed.</summary>
+    public UnderstandResponse? Understanding { get; set; }
 }
 
 public class ValidationResponse
@@ -911,6 +1040,9 @@ public class SaveQueryRequest
     public string Name { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string? Description { get; set; }
+
+    /// <summary>Save the query exactly as typed, rather than as the BQL it's understood as.</summary>
+    public bool Exact { get; set; }
 }
 
 public class QuerySuggestion
@@ -920,18 +1052,65 @@ public class QuerySuggestion
     public string Category { get; set; } = string.Empty;
 }
 
-public class TranslateRequest
+public class UnderstandRequest
 {
-    public string Text { get; set; } = string.Empty;
+    public string Query { get; set; } = string.Empty;
 }
 
-public class TranslateResponse
+/// <summary>How a query was understood.</summary>
+public class UnderstandResponse
 {
-    public string OriginalText { get; set; } = string.Empty;
-    public string BqlQuery { get; set; } = string.Empty;
-    public bool Success { get; set; }
+    /// <summary>What was typed.</summary>
+    public string Input { get; set; } = string.Empty;
+
+    /// <summary>exact, corrected, natural or unclear.</summary>
+    public string Kind { get; set; } = "exact";
+
+    /// <summary>The BQL that runs, or null if it isn't clear enough to run.</summary>
+    public string? Query { get; set; }
+
+    public bool WillRun { get; set; }
+
+    /// <summary>How sure the reading is, from 0 to 1.</summary>
     public double Confidence { get; set; }
-    public bool IsNaturalLanguage { get; set; }
+
+    /// <summary>What the query does, in words.</summary>
+    public string? Explanation { get; set; }
+
+    public List<UnderstandCorrection> Corrections { get; set; } = new();
+
+    /// <summary>Other readings to offer as choices.</summary>
+    public List<UnderstandAlternative> Alternatives { get; set; } = new();
+
+    /// <summary>Problems with where they are in what was typed.</summary>
+    public List<UnderstandProblem> Problems { get; set; } = new();
+
+    /// <summary>Whether to offer the AI assistant, because the reader couldn't manage.</summary>
+    public bool SuggestAssistant { get; set; }
+}
+
+public class UnderstandCorrection
+{
+    public string From { get; set; } = string.Empty;
+    public string To { get; set; } = string.Empty;
+    public int Start { get; set; }
+    public int Length { get; set; }
+}
+
+public class UnderstandAlternative
+{
+    public string Query { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+}
+
+public class UnderstandProblem
+{
+    public int Start { get; set; }
+    public int Length { get; set; }
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>The whole query with the problem fixed, when there's one fix.</summary>
+    public string? Fix { get; set; }
 }
 
 public class ExplainResponse

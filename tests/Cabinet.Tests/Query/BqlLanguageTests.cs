@@ -4,7 +4,6 @@ using Cabinet.Core.Models;
 using Cabinet.Parsers;
 using Cabinet.Query;
 using Cabinet.Query.Bql;
-using Cabinet.Query.NaturalLanguage;
 using Cabinet.Storage;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -60,8 +59,7 @@ public class BqlLanguageTests : IAsyncLifetime
             new BqlParser(),
             new BqlOptimizer(),
             NullLogger<BqlQueryEngine>.Instance,
-            new RuleBasedTranslator(),
-            knowledge);
+            knowledgeStorage: knowledge);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -601,7 +599,7 @@ public class BqlLanguageTests : IAsyncLifetime
     [Fact]
     public async Task NaturalLanguage_Errors()
     {
-        var rows = await Run("how many errors");
+        var rows = await Run(new Cabinet.Query.Natural.QueryUnderstander().Understand("how many errors").Query!);
 
         Convert.ToInt32(rows.Single()["count"], CultureInfo.InvariantCulture).Should().Be(1);
     }

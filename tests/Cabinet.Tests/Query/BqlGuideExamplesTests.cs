@@ -4,7 +4,6 @@ using Cabinet.Core.Models;
 using Cabinet.Parsers;
 using Cabinet.Query;
 using Cabinet.Query.Bql;
-using Cabinet.Query.NaturalLanguage;
 using Cabinet.Storage;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,7 +36,11 @@ public class BqlGuideExamplesTests
     [MemberData(nameof(Examples))]
     public async Task Example_Runs(string query)
     {
-        var result = await Engine.Value.ExecuteAsync(new QueryExecutionContext { Query = query, Limit = 1000 });
+        // As typed into the search box: read, then run
+        var understanding = new Cabinet.Query.Natural.QueryUnderstander().Understand(query);
+        understanding.WillRun.Should().BeTrue($"\"{query}\" should be understood: {string.Join("; ", understanding.Problems.Select(p => p.Message))}");
+
+        var result = await Engine.Value.ExecuteAsync(new QueryExecutionContext { Query = understanding.Query!, Limit = 1000 });
 
         result.Should().NotBeNull();
     }
@@ -147,8 +150,7 @@ public class BqlGuideExamplesTests
             new BqlParser(),
             new BqlOptimizer(),
             NullLogger<BqlQueryEngine>.Instance,
-            new RuleBasedTranslator(),
-            knowledge);
+            knowledgeStorage: knowledge);
     }
 
     private sealed class FakeGeoIp : Cabinet.Core.Interfaces.IGeoIpLookup
