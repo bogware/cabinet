@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-11-11
+
+### Fixed
+
+- The background fill of the PostgreSQL search column now walks the table by primary key, so each row is read once. It had searched for unfilled rows from the start of the table every batch, which grew slower as the fill progressed. On a large table this is the difference between finishing in minutes and taking hours.
+
 ## [2.5.1] - 2026-11-11
 
 ### Fixed

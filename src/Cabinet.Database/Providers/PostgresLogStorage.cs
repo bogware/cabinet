@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -249,26 +250,34 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
 
             var filled = 0L;
             var batches = 0;
+            var last = string.Empty;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var n = await holder.ExecuteAsync(new CommandDefinition($@"
-                    WITH batch AS (
-                        SELECT id FROM log_events WHERE search_vector IS NULL LIMIT {batchSize} FOR UPDATE SKIP LOCKED
-                    )
-                    UPDATE log_events e
-                    SET search_vector = to_tsvector('simple'::regconfig, regexp_replace(e.raw_line, '[^[:alnum:]]+', ' ', 'g'))
-                    FROM batch WHERE e.id = batch.id", commandTimeout: 0, cancellationToken: cancellationToken));
-                if (n == 0)
+
+                // Walk the primary key in order, so each row is read once. Scanning for NULL rows
+                // instead would restart from the beginning every batch and crawl as the fill grows.
+                var ids = (await holder.QueryAsync<string>(new CommandDefinition(
+                    "SELECT id FROM log_events WHERE id > @last ORDER BY id LIMIT @n",
+                    new { last, n = batchSize }, commandTimeout: 0, cancellationToken: cancellationToken))).ToList();
+                if (ids.Count == 0)
                 {
                     break;
                 }
 
-                filled += n;
+                last = ids[^1];
+
+                // Only rows still missing it are rewritten, so a resumed run does no wasted writes.
+                filled += await holder.ExecuteAsync(new CommandDefinition(@"
+                    UPDATE log_events
+                    SET search_vector = to_tsvector('simple'::regconfig, regexp_replace(raw_line, '[^[:alnum:]]+', ' ', 'g'))
+                    WHERE id = ANY(@ids) AND search_vector IS NULL",
+                    new { ids = ids.ToArray() }, commandTimeout: 0, cancellationToken: cancellationToken));
+
                 if (++batches % 40 == 0)
                 {
-                    _logger.LogInformation("Search column: filled {Filled:N0} rows ({Rate:N0}/s)", filled, filled / Math.Max(1, sw.Elapsed.TotalSeconds));
+                    _logger.LogInformation("Search column: visited {Visited:N0} rows, filled {Filled:N0} ({Rate:N0}/s)", (long)batches * batchSize, filled, filled / Math.Max(1, sw.Elapsed.TotalSeconds));
 
                     // The new column has no index yet, so these are HOT updates that mostly reuse
                     // space; a periodic vacuum keeps the table from growing on disk during a big fill.
