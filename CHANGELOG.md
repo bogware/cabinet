@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-11
+
+### Fixed
+
+- The background fill of the PostgreSQL search column (2.5.0) stopped on the first batch on a large table, because filling a batch and building the index take longer than the default command timeout. Those commands now run without a timeout, in smaller batches, on a single connection, and the coordinating lock is always released. Searches kept working through the old path throughout.
+
 ## [2.5.0] - 2026-11-11
 
 ### Changed

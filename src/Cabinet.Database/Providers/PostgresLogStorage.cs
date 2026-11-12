@@ -228,9 +228,11 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
     public async Task MigrateSearchVectorAsync(CancellationToken cancellationToken = default)
     {
         const long migrationLockKey = 0x4341_4249_4E45_5356L; // "CABINESV"
-        const int batchSize = 20000;
+        const int batchSize = 10000;
 
-        // One instance migrates at a time. Another already doing it means there's nothing to do here.
+        // Everything runs on one connection, which holds the advisory lock so only one instance
+        // migrates at a time. Filling a batch and building the index take far longer than the
+        // default command timeout, so these commands are given no timeout.
         await using var holder = await _dataSource.OpenConnectionAsync(cancellationToken);
         if (!await ScalarAsync<bool>(holder, $"SELECT pg_try_advisory_lock({migrationLockKey})"))
         {
@@ -251,62 +253,67 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
-                var n = await conn.ExecuteAsync($@"
+                var n = await holder.ExecuteAsync(new CommandDefinition($@"
                     WITH batch AS (
                         SELECT id FROM log_events WHERE search_vector IS NULL LIMIT {batchSize} FOR UPDATE SKIP LOCKED
                     )
                     UPDATE log_events e
                     SET search_vector = to_tsvector('simple'::regconfig, regexp_replace(e.raw_line, '[^[:alnum:]]+', ' ', 'g'))
-                    FROM batch WHERE e.id = batch.id");
+                    FROM batch WHERE e.id = batch.id", commandTimeout: 0, cancellationToken: cancellationToken));
                 if (n == 0)
                 {
                     break;
                 }
 
                 filled += n;
-                if (++batches % 20 == 0)
+                if (++batches % 40 == 0)
                 {
                     _logger.LogInformation("Search column: filled {Filled:N0} rows ({Rate:N0}/s)", filled, filled / Math.Max(1, sw.Elapsed.TotalSeconds));
 
                     // The new column has no index yet, so these are HOT updates that mostly reuse
                     // space; a periodic vacuum keeps the table from growing on disk during a big fill.
-                    await conn.ExecuteAsync("VACUUM log_events");
+                    await holder.ExecuteAsync(new CommandDefinition("VACUUM log_events", commandTimeout: 0, cancellationToken: cancellationToken));
                 }
 
                 await Task.Delay(50, cancellationToken);
             }
 
-            await using (var conn = await _dataSource.OpenConnectionAsync(cancellationToken))
-            {
-                await EnsureSearchVectorIndexAsync(conn, cancellationToken);
-                await conn.ExecuteAsync("INSERT INTO cabinet_meta (k, v) VALUES ('search_vector_ready', 'true') ON CONFLICT (k) DO UPDATE SET v = 'true'");
-                _searchVectorReady = true;
+            await EnsureSearchVectorIndexAsync(holder, cancellationToken);
+            await holder.ExecuteAsync("INSERT INTO cabinet_meta (k, v) VALUES ('search_vector_ready', 'true') ON CONFLICT (k) DO UPDATE SET v = 'true'");
+            _searchVectorReady = true;
 
-                // The old expression index is now dead weight. Dropping it waits for readers, so give
-                // up quickly and leave it for a later run rather than hold things up.
-                try
-                {
-                    await conn.ExecuteAsync("SET lock_timeout = '5s'");
-                    await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_search");
-                }
-                catch (PostgresException ex) when (ex.SqlState is "55P03" or "40P01")
-                {
-                    _logger.LogInformation("Left the old search index in place for now; it'll be dropped on a later start");
-                }
+            // The old expression index is now dead weight. Dropping it waits for readers, so give up
+            // quickly and leave it for a later run rather than hold things up.
+            try
+            {
+                await holder.ExecuteAsync("SET lock_timeout = '5s'");
+                await holder.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_search");
+                await holder.ExecuteAsync("SET lock_timeout = 0");
+            }
+            catch (PostgresException ex) when (ex.SqlState is "55P03" or "40P01")
+            {
+                _logger.LogInformation("Left the old search index in place for now; it'll be dropped on a later start");
             }
 
             _logger.LogInformation("Search column ready: filled {Filled:N0} rows in {Elapsed}; searches now use it", filled, sw.Elapsed);
         }
         finally
         {
-            await ScalarAsync<bool>(holder, $"SELECT pg_advisory_unlock({migrationLockKey})");
+            try
+            {
+                await ScalarAsync<bool>(holder, $"SELECT pg_advisory_unlock({migrationLockKey})");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Couldn't release the search-migration lock; it frees when the connection closes");
+            }
         }
     }
 
     private static async Task EnsureSearchVectorIndexAsync(NpgsqlConnection conn, CancellationToken cancellationToken)
     {
         // Drop a half-built index left by an interrupted run, then build it without blocking writes.
+        // Building the index can take minutes on a large table, so it is given no command timeout.
         var valid = await conn.ExecuteScalarAsync<bool?>(@"
             SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
             WHERE c.relname = 'idx_log_events_search_vector'");
@@ -317,10 +324,10 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
 
         if (valid != true)
         {
-            await conn.ExecuteAsync("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_events_search_vector ON log_events USING GIN (search_vector)");
+            await conn.ExecuteAsync(new CommandDefinition(
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_events_search_vector ON log_events USING GIN (search_vector)",
+                commandTimeout: 0, cancellationToken: cancellationToken));
         }
-
-        _ = cancellationToken;
     }
 
     public async Task<bool> StoreAsync(LogEvent logEvent, CancellationToken cancellationToken = default)
