@@ -128,6 +128,87 @@ function openInvestigationSearch(query) {
     navigate('search');
 }
 
+/* ===== Anomalies ===== */
+window.EXTRA_PAGES.anomalies = { title: 'Anomalies', load: () => loadAnomalyRules() };
+
+const ANOMALY_KINDS = { Spike: 'A spike in count', Silence: 'Going quiet', NewValue: 'A new value', NewPattern: 'A new kind of line' };
+let anomalyRules = {};
+let editingAnomalyId = null;
+
+async function loadAnomalyRules() {
+    const tbody = document.getElementById('anomalyBody');
+    if (!tbody) return;
+    try {
+        const rules = await api('GET', '/api/v1/anomaly-rules');
+        anomalyRules = Object.fromEntries(rules.map(r => [r.id, r]));
+        if (rules.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-secondary)">No anomaly rules yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rules.map(r => `<tr><td style="font-weight:500">${esc(r.name)}${r.enabled ? '' : ' <span class="badge badge-muted">Off</span>'}</td>
+            <td>${esc(ANOMALY_KINDS[r.kind] || r.kind)}${r.groupBy ? ' by ' + esc(r.groupBy) : ''}${r.field ? ' of ' + esc(r.field) : ''}</td>
+            <td class="mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(r.query)}</td>
+            <td>${esc(String(r.windowMinutes))} min</td>
+            <td>${esc(r.lastResult || 'Not yet')}</td>
+            <td><button type="button" class="btn btn-secondary btn-sm" data-click="editAnomalyRule" data-args='${esc(JSON.stringify([r.id]))}'>Edit</button>
+                <button type="button" class="btn btn-danger btn-sm" data-click="deleteAnomalyRule" data-args='${esc(JSON.stringify([r.id]))}'>Del</button></td></tr>`).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
+    }
+}
+
+function editAnomalyRule(id) {
+    const r = (typeof id === 'string' && anomalyRules[id]) || { kind: 'Spike', query: 'find *', windowMinutes: 15, baselineWindows: 96, threshold: 3, minCount: 10, severity: 'Warning', enabled: true };
+    editingAnomalyId = r.id || null;
+    document.getElementById('anomalyEditorTitle').textContent = r.id ? 'Edit rule' : 'New rule';
+    const set = (field, value) => { document.getElementById(field).value = value ?? ''; };
+    set('anomalyName', r.name); set('anomalyKind', r.kind); set('anomalyQuery', r.query); set('anomalyGroup', r.groupBy);
+    set('anomalyField', r.field); set('anomalyWindow', r.windowMinutes); set('anomalyBaseline', r.baselineWindows);
+    set('anomalyThreshold', r.threshold); set('anomalyMinCount', r.minCount); set('anomalySeverity', r.severity);
+    document.getElementById('anomalyEnabled').checked = r.enabled !== false;
+    document.getElementById('anomalyTestResult').textContent = '';
+    document.getElementById('anomalyEditor').hidden = false;
+}
+
+function closeAnomalyEditor() { document.getElementById('anomalyEditor').hidden = true; }
+
+function anomalyRuleFromForm() {
+    const value = field => document.getElementById(field).value.trim();
+    return {
+        name: value('anomalyName'), kind: value('anomalyKind'), query: value('anomalyQuery'),
+        groupBy: value('anomalyGroup') || null, field: value('anomalyField') || null,
+        windowMinutes: Number(value('anomalyWindow')), baselineWindows: Number(value('anomalyBaseline')),
+        threshold: Number(value('anomalyThreshold')), minCount: Number(value('anomalyMinCount')),
+        severity: value('anomalySeverity'), enabled: document.getElementById('anomalyEnabled').checked,
+    };
+}
+
+async function testAnomalyRule() {
+    const out = document.getElementById('anomalyTestResult');
+    out.innerHTML = '<span class="spinner"></span>';
+    try {
+        const findings = await api('POST', '/api/v1/anomaly-rules/test', anomalyRuleFromForm());
+        out.innerHTML = findings.length === 0 ? '<p class="page-note">Nothing unusual in the last window.</p>'
+            : `<ul>${findings.map(f => `<li>${esc(f.message)}</li>`).join('')}</ul>`;
+    } catch (e) { out.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function saveAnomalyRule() {
+    const id = editingAnomalyId || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    try {
+        await api('PUT', '/api/v1/anomaly-rules/' + encodeURIComponent(id), anomalyRuleFromForm());
+        closeAnomalyEditor();
+        toast('Rule saved', 'success');
+        loadAnomalyRules();
+    } catch (e) { document.getElementById('anomalyTestResult').innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function deleteAnomalyRule(id) {
+    if (!confirm('Delete this anomaly rule?')) return;
+    try { await api('DELETE', '/api/v1/anomaly-rules/' + encodeURIComponent(id)); loadAnomalyRules(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
 /* ===== Connectors ===== */
 window.EXTRA_PAGES.connectors = { title: 'Connectors', load: () => loadConnectors() };
 

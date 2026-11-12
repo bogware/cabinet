@@ -717,6 +717,10 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Async search jobs — background execution for long-running queries
     services.AddHostedService<Cabinet.API.Services.SearchJobService>();
 
+    // Anomaly rules: baselines instead of thresholds, checked by the leader as each window ends
+    services.AddSingleton<Cabinet.API.Services.AnomalyRuleStore>();
+    services.AddHostedService<Cabinet.API.Services.AnomalyDetector>();
+
     // Data model acceleration — pre-aggregated summaries for tstats queries
     services.AddSingleton<Cabinet.API.Services.DataModelAccelerationService>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DataModelAccelerationService>());

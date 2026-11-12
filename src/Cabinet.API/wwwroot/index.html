@@ -468,6 +468,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.5 2.5v5c0 3.9 2.7 7.2 6.5 8.5 3.8-1.3 6.5-4.6 6.5-8.5v-5L8 0Zm0 1.6 5 1.9v4c0 3-2 5.6-5 6.8-3-1.2-5-3.8-5-6.8v-4l5-1.9Z"/></svg>
                 Detections
             </button>
+            <button type="button" class="nav-item" data-page="anomalies">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 13.25h13a.75.75 0 0 1 0 1.5h-13A1.5 1.5 0 0 1 0 13.25V1.75a.75.75 0 0 1 1.5 0Zm3.03-3.47a.75.75 0 0 1-1.06-1.06l3-3a.75.75 0 0 1 1.06 0L9.5 7.69l3.97-3.97a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0L7 7.31Z"/></svg>
+                Anomalies
+            </button>
             <button type="button" class="nav-item" data-page="schedules">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25a.75.75 0 0 0-1.5 0v3.5c0 .199.079.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94Z"/></svg>
                 Scheduled Searches
@@ -761,6 +765,47 @@
                         <textarea id="investigateQuestion" rows="3" maxlength="2000" placeholder="Why did errors on web-1 jump in the last hour?"></textarea></div>
                     <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary" id="investigateButton" data-click="runInvestigation">Investigate</button></div>
                     <div id="investigateResult" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <div class="page" id="page-anomalies">
+                <div class="toolbar">
+                    <h3>Anomalies</h3>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary btn-sm" data-click="editAnomalyRule">+ New Rule</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadAnomalyRules">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note">Rules that learn what's normal from recent windows and alert on what isn't: a count far above usual, something that went quiet, a value never seen before, or a kind of line never seen before. Each is checked once, as its window ends.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Name</th><th scope="col">Watches for</th><th scope="col">Search</th><th scope="col">Window</th><th scope="col">Last check</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="anomalyBody"></tbody>
+                </table></div></div>
+                <div class="panel" id="anomalyEditor" hidden style="padding:16px;margin-top:12px">
+                    <h4 id="anomalyEditorTitle">New rule</h4>
+                    <div class="st-grid-2">
+                        <div class="form-group"><label for="anomalyName">Name</label><input type="text" id="anomalyName" maxlength="200"></div>
+                        <div class="form-group"><label for="anomalyKind">Watch for</label>
+                            <select id="anomalyKind"><option value="Spike">A spike in count</option><option value="Silence">Something going quiet</option><option value="NewValue">A new value of a field</option><option value="NewPattern">A new kind of line</option></select></div>
+                    </div>
+                    <div class="form-group"><label for="anomalyQuery">Search</label><input type="text" id="anomalyQuery" value="find *" class="mono"></div>
+                    <div class="st-grid-2">
+                        <div class="form-group"><label for="anomalyGroup">Judge each value of (spike, silence)</label><input type="text" id="anomalyGroup" placeholder="host"></div>
+                        <div class="form-group"><label for="anomalyField">Field (new value)</label><input type="text" id="anomalyField" placeholder="user"></div>
+                        <div class="form-group"><label for="anomalyWindow">Window, minutes</label><input type="number" id="anomalyWindow" value="15" min="1" max="1440"></div>
+                        <div class="form-group"><label for="anomalyBaseline">Baseline, windows</label><input type="number" id="anomalyBaseline" value="96" min="2" max="2000"></div>
+                        <div class="form-group"><label for="anomalyThreshold">Spike: standard deviations</label><input type="number" id="anomalyThreshold" value="3" min="0.5" step="0.5"></div>
+                        <div class="form-group"><label for="anomalyMinCount">Fewest events that matter</label><input type="number" id="anomalyMinCount" value="10" min="0"></div>
+                        <div class="form-group"><label for="anomalySeverity">Severity</label>
+                            <select id="anomalySeverity"><option>Info</option><option selected>Warning</option><option>Error</option><option>Critical</option></select></div>
+                        <div class="form-group"><label class="check-label"><input type="checkbox" id="anomalyEnabled" checked> On</label></div>
+                    </div>
+                    <div class="modal-actions" style="justify-content:flex-start">
+                        <button class="btn btn-secondary" data-click="testAnomalyRule">Test on the last window</button>
+                        <button class="btn btn-primary" data-click="saveAnomalyRule">Save</button>
+                        <button class="btn btn-secondary" data-click="closeAnomalyEditor">Cancel</button>
+                    </div>
+                    <div id="anomalyTestResult" aria-live="polite"></div>
                 </div>
             </div>
 
