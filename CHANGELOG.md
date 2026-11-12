@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-11
+
+### Changed
+
+- PostgreSQL full-text search is much faster on large datasets. It used to recompute each line's search vector for every matching row, so a broad search over tens of millions of events could take close to a minute and time out. The vector is now stored in a column, kept current by a trigger, and indexed, so the search reads the index directly.
+  - New databases use it from the first event.
+  - A database upgraded with existing events fills the column in the background on the first start after upgrading, one bounded batch at a time, and searches keep working through the old path until it's done. Only one instance runs the fill, and it resumes if interrupted. When it finishes, searches switch over and the old index is dropped to reclaim space.
+
 ## [2.4.0] - 2026-11-11
 
 ### Added
