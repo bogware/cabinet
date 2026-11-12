@@ -95,7 +95,7 @@ public class DetectionRulesController : ControllerBase
     }
 
     /// <summary>
-    /// Change a rule. Built-in rules can only be turned on and off.
+    /// Change a rule, or add one under this ID. Built-in rules can only be turned on and off.
     /// </summary>
     [HttpPut("{id}")]
     [RequireEveryIndex(Capability.Search)]
@@ -105,13 +105,14 @@ public class DetectionRulesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(string id, [FromBody] DetectionRule rule, CancellationToken cancellationToken = default)
     {
+        // A new ID adds the rule, so rules kept as files keep the IDs they were written with
         var existing = await _rules.GetAsync(id, cancellationToken);
-        if (existing == null)
+        if (existing == null && !System.Text.RegularExpressions.Regex.IsMatch(id, "^[A-Za-z0-9._-]{1,64}$"))
         {
-            return Problem(detail: "Rule not found", statusCode: 404);
+            return Problem(detail: "A rule ID is 1 to 64 letters, digits, '.', '_' or '-'", statusCode: 400);
         }
 
-        if (existing.Builtin)
+        if (existing?.Builtin == true)
         {
             return Problem(detail: "Built-in rules can only be turned on and off. Copy it to a new rule to change it.", statusCode: 400);
         }
@@ -124,7 +125,7 @@ public class DetectionRulesController : ControllerBase
         }
 
         await _rules.SaveAsync(rule, cancellationToken);
-        await AuditAsync(AuditAction.Update, id, $"Changed detection rule {rule.Name}");
+        await AuditAsync(existing == null ? AuditAction.Create : AuditAction.Update, id, $"{(existing == null ? "Added" : "Changed")} detection rule {rule.Name}");
         return Ok(rule);
     }
 
