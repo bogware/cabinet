@@ -726,6 +726,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Anomaly rules: baselines instead of thresholds, checked by the leader as each window ends
     services.AddSingleton<Cabinet.API.Services.AnomalyRuleStore>();
     services.AddSingleton<Cabinet.API.Services.CaseStore>();
+    services.AddSingleton<Cabinet.API.Services.ReportStore>();
+    services.AddSingleton<Cabinet.API.Services.ReportService>();
+    services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.ReportService>());
 
     // Cold storage for events retention removes: a directory, or an S3 bucket
     var archiveType = configuration["Archive:Type"];

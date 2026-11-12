@@ -454,6 +454,92 @@ async function deleteAnomalyRule(id) {
     catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
+/* ===== Reports ===== */
+window.EXTRA_PAGES.reports = { title: 'Reports', load: () => loadReports() };
+
+let reportsById = {};
+let editingReportId = null;
+
+async function loadReports() {
+    const tbody = document.getElementById('reportsBody');
+    if (!tbody) return;
+    try {
+        const reports = await api('GET', '/api/v1/reports');
+        reportsById = Object.fromEntries(reports.map(r => [r.id, r]));
+        tbody.innerHTML = reports.length === 0 ? '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-secondary)">No reports.</td></tr>'
+            : reports.map(r => `<tr><td>${esc(r.name)}${r.enabled ? '' : ' <span class="badge badge-muted">Off</span>'}</td><td class="mono">${esc(r.schedule)}</td>
+                <td>${esc(r.recipients.join(', '))}</td><td>${esc(r.lastSentAt ? fmtTime(r.lastSentAt) + ': ' + (r.lastResult || '') : 'Not yet')}</td>
+                <td><button type="button" class="btn btn-secondary btn-sm" data-click="sendReport" data-args='${esc(JSON.stringify([r.id]))}'>Send now</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-click="editReport" data-args='${esc(JSON.stringify([r.id]))}'>Edit</button>
+                    <button type="button" class="btn btn-danger btn-sm" data-click="deleteReport" data-args='${esc(JSON.stringify([r.id]))}'>Del</button></td></tr>`).join('');
+    } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
+}
+
+function editReport(id) {
+    const r = (typeof id === 'string' && reportsById[id]) || { schedule: '0 8 * * 1', recipients: [], sections: [], attachPdf: true, enabled: true };
+    editingReportId = r.id || null;
+    document.getElementById('rpName').value = r.name || '';
+    document.getElementById('rpSchedule').value = r.schedule;
+    document.getElementById('rpRecipients').value = r.recipients.join(', ');
+    document.getElementById('rpSections').value = r.sections.map(s => `${s.title} | ${s.query}`).join('\n');
+    document.getElementById('rpPdf').checked = r.attachPdf !== false;
+    document.getElementById('rpEnabled').checked = r.enabled !== false;
+    document.getElementById('reportPreview').hidden = true;
+    document.getElementById('reportEditor').hidden = false;
+}
+
+function closeReportEditor() { document.getElementById('reportEditor').hidden = true; }
+
+function reportFromForm() {
+    return {
+        name: document.getElementById('rpName').value.trim(),
+        schedule: document.getElementById('rpSchedule').value.trim(),
+        recipients: document.getElementById('rpRecipients').value.split(',').map(s => s.trim()).filter(Boolean),
+        sections: document.getElementById('rpSections').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+            const at = l.indexOf('|');
+            return at < 0 ? { title: l, query: l } : { title: l.slice(0, at).trim(), query: l.slice(at + 1).trim() };
+        }),
+        attachPdf: document.getElementById('rpPdf').checked,
+        enabled: document.getElementById('rpEnabled').checked,
+    };
+}
+
+async function previewReport() {
+    const box = document.getElementById('reportPreview');
+    box.hidden = false;
+    box.innerHTML = '<span class="spinner"></span>';
+    try {
+        const res = await fetch('/api/v1/reports/preview', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json', Accept: 'text/html' }, body: JSON.stringify(reportFromForm()) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // The server encodes everything from the logs; the report is tables and inline styles
+        box.innerHTML = await res.text();
+    } catch (e) { box.innerHTML = `<p style="color:#cf222e">${esc(e.message)}</p>`; }
+}
+
+async function saveReport() {
+    const id = editingReportId || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    try {
+        await api('PUT', '/api/v1/reports/' + encodeURIComponent(id), reportFromForm());
+        closeReportEditor();
+        toast('Report saved', 'success');
+        loadReports();
+    } catch (e) { toast('Not saved: ' + e.message, 'error'); }
+}
+
+async function sendReport(id) {
+    try {
+        const r = await api('POST', `/api/v1/reports/${encodeURIComponent(id)}/send`);
+        toast(r.lastResult || 'Sent', r.lastResult && r.lastResult.startsWith('Not') ? 'error' : 'success');
+        loadReports();
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function deleteReport(id) {
+    if (!confirm('Delete this report?')) return;
+    try { await api('DELETE', '/api/v1/reports/' + encodeURIComponent(id)); loadReports(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
 /* ===== Connectors ===== */
 window.EXTRA_PAGES.connectors = { title: 'Connectors', load: () => loadConnectors() };
 
