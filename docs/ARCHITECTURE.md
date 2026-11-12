@@ -325,6 +325,7 @@ finally
 
 | Scenario | Backend | Config Value |
 |----------|---------|-------------|
+| One server, large volumes, fast searches and aggregates | Cabinet engine | `Cabinet` |
 | Development, small single-server deployment | SQLite | `SQLite` |
 | Unit tests / CI | In-Memory | `Memory` |
 | External relational database | PostgreSQL | `PostgreSQL` |
@@ -343,7 +344,23 @@ finally
 | RBAC principals | Local `cabinet-rbac.db` |
 | Field extractions, alert history, retention definitions | Process memory |
 
-For PostgreSQL and OpenSearch, the local SQLite store is `Storage:MetadataConnectionString` (default `Data Source=cabinet-metadata.db`). With OpenSearch it holds all of the SQLite-backed metadata above.
+For PostgreSQL, OpenSearch and the Cabinet engine, the local SQLite store is `Storage:MetadataConnectionString` (default `Data Source=cabinet-metadata.db`). With OpenSearch and the Cabinet engine it holds all of the SQLite-backed metadata above, unless `Storage:MetadataPostgresConnectionString` names a PostgreSQL database for it.
+
+### The Cabinet Engine
+
+`Cabinet.Storage.Engine` is Cabinet's own event store, built for one server holding a lot. Each index has a folder under `Storage:DataPath` with:
+
+- **A write-ahead log.** A batch is one record (length, CRC-32, events), synced to disk before `StoreBatchAsync` returns unless `Storage:EngineSyncWrites` is off. At startup the logs are replayed into a segment; a record a crash cut short fails its CRC and is dropped, and it was never acknowledged.
+- **The newest events in memory**, searchable at once, until there are `Storage:EngineFlushEvents` of them or the oldest is `Storage:EngineFlushSeconds` old. Then they're written as a segment and the log is deleted.
+- **Immutable segments**, sorted by time then ID, in blocks of 4,096 events. Each block stores each column (time as varint deltas, ID, host, source type, severity, raw line, other metadata, and one column per field name) compressed separately, so a query decompresses only the columns it reads. The footer summarizes each block: time and severity ranges, its hosts and source types (up to 64 of each), counts by source type and severity, and Bloom filters of its words (`SearchTerms`) and IDs. A segment is written to a `.tmp` file and renamed, so it's whole or absent.
+
+Reads take the in-memory events and the segment list together under the write lock (`IndexShard.Snapshot`), so a flush between the two can't show an event twice or not at all. Filters skip segments by time, then blocks by their summaries, then match rows reading only the columns they need. Results stream from a k-way merge of segments in time order, and a segment joins the merge only when the merge reaches its time range, so the newest 100 matches read a few blocks however much is stored.
+
+Duplicates: a new event's ID is checked against its batch, the in-memory IDs, and each segment's ID filter, then the filters of that segment's blocks, and only then a block's IDs. Every segment is checked, not just those covering the event's time, because a collector can stamp a retry with a new time. ID filters use 16 bits and 7 hashes per ID (about 0.07% false positives), since every new event probes every segment.
+
+Merges: once ten segments of an index are of a size by powers of ten, the oldest of them are merged into one, up to `Storage:EngineMaxSegmentEvents`, so each event is rewritten about once per size. A merge streams sorted rows into the new segment a batch of blocks at a time, in the background; writes carry on, and only swapping the segment in takes the write lock. The new segment's footer lists the segments it replaces, so a merge cut short after writing it is finished at the next start. Purging deletes whole segments, and rewrites one that straddles the cut-off the same way. Replaced segments are deleted at once; open readers keep their handles for ten minutes.
+
+Aggregates (`EngineAggregation.cs`) count blocks every event of which matches from their summaries when nothing else is needed (a count with no grouping, or a timechart bucket that holds the whole block), and read the rest in parallel, each worker with its own groups, merged at the end.
 
 ### Startup
 
@@ -401,6 +418,7 @@ When the first stage after those filters is `stats` or `timechart`, `BqlQueryEng
 |---|---|
 | PostgreSQL | Every aggregate, as SQL over built-in columns and JSON fields |
 | SQLite | All but percentiles and deviations, which SQLite lacks |
+| Cabinet engine | Every aggregate, in parallel over blocks; percentiles exactly up to ten million kept values; `min` and `max` of text alone fall back |
 | OpenSearch | Counts by built-in fields and aligned time buckets |
 
 Decorators decide too: encrypted fields, extracted fields and masking for the caller all refuse, because storage can't see what the caller would. `AggregatePushdownTests` runs the same queries pushed and not pushed on every backend and requires identical answers. A pushed query reports the events it covered in `eventsScanned`, and its trace span has `cabinet.pushed_down`.

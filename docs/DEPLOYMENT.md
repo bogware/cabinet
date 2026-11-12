@@ -31,6 +31,7 @@ This guide covers installing and operating Cabinet. Run a single API instance; s
 
 | Backend | `Storage:Type` | Notes |
 |---------|----------------|-------|
+| Cabinet engine | `Cabinet` | Cabinet's own columnar store in the folder `Storage:DataPath` (default `cabinet-data`). The fastest choice for one server; see below. |
 | SQLite | `SQLite` | Default. Embedded, single file. |
 | In-Memory | `Memory` | Lost on restart. For tests. |
 | PostgreSQL | `PostgreSQL` | CI tests against PostgreSQL 16, and Compose runs it. |
@@ -357,11 +358,13 @@ Set `ASPNETCORE_URLS` or `--urls` to override.
 
 OpenSearch also reads `Storage:IndexPrefix` (default `cabinet-logs`), `Storage:Username`, `Storage:Password` and `Storage:AllowInsecureSsl`.
 
+The Cabinet engine reads `Storage:DataPath`, the folder for its files, one subfolder per index; put it on a fast local disk, not a network share. `Storage:EngineFlushEvents` (default 100,000) and `Storage:EngineFlushSeconds` (default 10) say how long new events stay in memory before going into a compressed segment; memory use grows with the first. `Storage:EngineSyncWrites` (default on) waits for each batch to reach the disk before acknowledging it. `Storage:EngineMaxSegmentEvents` (default 5,000,000) caps how large background merges make segments. Its metadata is kept like OpenSearch's.
+
 There is no fallback backend. A remote backend still unreachable after retries (2, 5 and 10 seconds apart) makes startup fail with a non-zero exit code.
 
 Where non-log data lives:
 
-| Data | SQLite | PostgreSQL | OpenSearch |
+| Data | SQLite | PostgreSQL | OpenSearch or Cabinet engine |
 |------|--------|------------|------------|
 | Dashboards, knowledge objects, saved queries, schedules | Log database | PostgreSQL | Local metadata database |
 | Search jobs, data models | Log database | Local metadata database | Local metadata database |
@@ -721,6 +724,10 @@ curl -X PUT "http://opensearch:9200/_snapshot/cabinet-backups/snapshot-$(date +%
 ```
 
 This path isn't drill-tested. Metadata isn't in OpenSearch, so back that up too: the SQLite file at `Storage:MetadataConnectionString`, or the database at `Storage:MetadataPostgresConnectionString`.
+
+### Cabinet engine
+
+Segments never change once written, but background merges add and delete them, so copy the data folder either with Cabinet stopped or from a file-system snapshot (VSS, LVM, ZFS, a cloud disk snapshot). A copy taken that way restores by putting the folder back. Events still in the write-ahead log are replayed at start, and a log record cut short is dropped, having never been acknowledged. Back up the metadata database too, as for OpenSearch. This path isn't drill-tested yet.
 
 ## Scaling
 
