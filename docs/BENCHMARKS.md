@@ -3,6 +3,7 @@
 These are figures from one machine, to show the scale Cabinet works at and how the backends compare. They aren't a promise for your hardware or your logs. To measure your own:
 
 ```bash
+dotnet run -c Release --project benchmarks/Cabinet.Benchmarks -- cabinet 1000000
 dotnet run -c Release --project benchmarks/Cabinet.Benchmarks -- sqlite 1000000
 dotnet run -c Release --project benchmarks/Cabinet.Benchmarks -- postgres 1000000 "Host=...;Database=...;Username=...;Password=..."
 dotnet run -c Release --project benchmarks/Cabinet.Benchmarks -- opensearch 1000000 http://localhost:9200
@@ -28,26 +29,29 @@ The machine was also running other work, and Docker Desktop adds its own overhea
 | Backend | Parse and store, one writer |
 |---|---:|
 | In-memory | 39,988 events/s |
+| Cabinet engine | 30,954 events/s |
 | OpenSearch | 7,308 events/s |
 | PostgreSQL | 6,125 events/s |
 | SQLite | 3,798 events/s |
 
-Parsing alone runs at 25,000 to 39,000 lines a second on one thread. The server parses each request independently, so parsing scales with cores. Storage is the limit for PostgreSQL, OpenSearch and SQLite here, mostly because of index maintenance.
+Parsing alone runs at 25,000 to 42,000 lines a second on one thread. The server parses each request independently, so parsing scales with cores. Storage is the limit for PostgreSQL, OpenSearch and SQLite here, mostly because of index maintenance. For the Cabinet engine, parsing is the limit: storing already-parsed events from one writer ran at 120,649 events a second, each batch on disk (fsync) before it was acknowledged, including writing the compressed segments.
 
 ## Queries
 
-| Query | SQLite | PostgreSQL | OpenSearch | In-memory |
-|---|---:|---:|---:|---:|
-| Newest 100 | 3.1 ms | 11 ms | 36 ms | 331 ms |
-| Newest 100 on one host | 3.9 ms | 14 ms | 49 ms | 260 ms |
-| Text search for a rare word, first 100 | 288 ms | 11 ms | 27 ms | 538 ms |
-| Errors and worse, first 100 | 10 ms | 12 ms | 24 ms | 173 ms |
-| Count everything | 144 ms | 44 ms | 19 ms | 156 ms |
-| Last hour: count by host | 27 ms | 7.4 ms | 29 ms | 212 ms |
-| All events: count by host | 4.6 s | 292 ms | 17 ms | 37 s |
-| All events: hourly timechart | 3.0 s | 720 ms | 29 ms | 30 s |
-| All events: avg and p95 by host | 14 s | 3.8 s | 30 s | 32 s |
-| All events: top 10 paths | 13 s | 15 s | 33 s | 27 s |
+| Query | Cabinet engine | SQLite | PostgreSQL | OpenSearch | In-memory |
+|---|---:|---:|---:|---:|---:|
+| Newest 100 | 2.8 ms | 3.1 ms | 11 ms | 36 ms | 331 ms |
+| Newest 100 on one host | 11 ms | 3.9 ms | 14 ms | 49 ms | 260 ms |
+| Text search for a rare word, first 100 | 531 ms | 288 ms | 11 ms | 27 ms | 538 ms |
+| Errors and worse, first 100 | 15 ms | 10 ms | 12 ms | 24 ms | 173 ms |
+| Count everything | 0.1 ms | 144 ms | 44 ms | 19 ms | 156 ms |
+| Last hour: count by host | 3.1 ms | 27 ms | 7.4 ms | 29 ms | 212 ms |
+| All events: count by host | 107 ms | 4.6 s | 292 ms | 17 ms | 37 s |
+| All events: hourly timechart | 34 ms | 3.0 s | 720 ms | 29 ms | 30 s |
+| All events: avg and p95 by host | 201 ms | 14 s | 3.8 s | 30 s | 32 s |
+| All events: top 10 paths | 5.4 s | 13 s | 15 s | 33 s | 27 s |
+
+The Cabinet engine is Cabinet's own storage (`Storage:Type=Cabinet`): a write-ahead log, then compressed column segments with summaries and word and ID filters per block of 4,096 events. It counts blocks every event of which matches from their summaries, without reading them, and reads the rest in parallel. The rare word appears in about two blocks in five, so finding 100 of them reads most of the text; PostgreSQL and OpenSearch answer it from a full-text index.
 
 In-memory storage sorts every match on each read, so it's for tests rather than volume. The in-memory and OpenSearch `avg and p95` and `top` figures are from the run before aggregates moved into storage, since neither is pushed down there.
 
@@ -67,6 +71,7 @@ SQLite has no percentiles, so the last query still runs in the pipeline there, a
 
 | Backend | Peak process memory, ingest and queries |
 |---|---:|
+| Cabinet engine | 698 MB, mostly the 100,000 newest events it holds before writing a segment |
 | SQLite | 316 MB |
 | OpenSearch | 316 MB |
 | PostgreSQL | 360 MB |
@@ -74,7 +79,7 @@ SQLite has no percentiles, so the last query still runs in the pipeline there, a
 
 The important result is that aggregates over a million events used no more memory than the first page of a search, because they hold what they compute rather than the rows. Before this work, a query read at most 100,000 events and held them all.
 
-The SQLite database for a million events was 838 MB, about 840 bytes an event with indexes.
+The SQLite database for a million events was 838 MB, about 840 bytes an event with indexes. The Cabinet engine's files for the same events were 50 MB, about 52 bytes an event, filters included.
 
 ## Soak
 

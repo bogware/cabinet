@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
-// Usage: Cabinet.Benchmarks <sqlite|memory|postgres|opensearch> <events> [connection]
+// Usage: Cabinet.Benchmarks <cabinet|sqlite|memory|postgres|opensearch> <events> [connection]
 //
 // Generates log lines, parses them with the real parsers, stores them through ILogStorage, then
 // runs queries through the real engine. Prints a Markdown table. Results are in docs/BENCHMARKS.md.
@@ -28,11 +28,13 @@ const int NeedleEvery = 10_000;
 var end = DateTime.UtcNow;
 var span = TimeSpan.FromDays(7);
 var databasePath = Path.Combine(Path.GetTempPath(), $"cabinet-bench-{Guid.NewGuid():N}.db");
+var enginePath = Path.Combine(Path.GetTempPath(), $"cabinet-bench-{Guid.NewGuid():N}");
 var openSearchPrefix = $"cabinet-bench-{Guid.NewGuid():N}";
 
 ILogStorage storage = backend switch
 {
     "memory" => new InMemoryStorage(maxEvents: eventCount + 1),
+    "cabinet" => new Cabinet.Storage.Engine.EngineLogStorage(enginePath),
     "sqlite" => CreateSqlite(databasePath),
     "postgres" => new PostgresLogStorage(connection ?? throw new ArgumentException("Pass a connection string"), NullLogger<PostgresLogStorage>.Instance),
     "opensearch" => new OpenSearchLogStorage(connection ?? throw new ArgumentException("Pass a URL"), NullLogger<OpenSearchLogStorage>.Instance, indexPrefix: openSearchPrefix),
@@ -61,6 +63,7 @@ var parsedPerSecond = parseSample / parseWatch.Elapsed.TotalSeconds;
 
 // Storing, from one writer in batches, including parsing
 var ingestWatch = Stopwatch.StartNew();
+var storeWatch = new Stopwatch();
 var batch = new List<LogEvent>(BatchSize);
 for (var i = 0; i < eventCount; i++)
 {
@@ -69,15 +72,26 @@ for (var i = 0; i < eventCount; i++)
     batch.Add(logEvent);
     if (batch.Count == BatchSize)
     {
+        storeWatch.Start();
         await storage.StoreBatchAsync(batch);
+        storeWatch.Stop();
         batch.Clear();
     }
 }
 
+storeWatch.Start();
 if (batch.Count > 0)
 {
     await storage.StoreBatchAsync(batch);
 }
+
+// Counted as ingest: the last events go from memory into a segment
+if (storage is Cabinet.Storage.Engine.EngineLogStorage engineStorage)
+{
+    await engineStorage.FlushAsync();
+}
+
+storeWatch.Stop();
 
 ingestWatch.Stop();
 var ingestedPerSecond = eventCount / ingestWatch.Elapsed.TotalSeconds;
@@ -110,6 +124,7 @@ Console.WriteLine();
 Console.WriteLine($"| Parse | {parsedPerSecond:N0} lines/s |");
 Console.WriteLine("|---|---|");
 Console.WriteLine($"| Parse and store | {ingestedPerSecond:N0} events/s |");
+Console.WriteLine($"| Store alone, one writer | {eventCount / storeWatch.Elapsed.TotalSeconds:N0} events/s |");
 Console.WriteLine();
 Console.WriteLine("| Query | Median | Events read | Rows |");
 Console.WriteLine("|---|---:|---:|---:|");
@@ -148,6 +163,13 @@ if (backend == "sqlite")
     {
         File.Delete(file);
     }
+}
+else if (storage is Cabinet.Storage.Engine.EngineLogStorage cabinetEngine)
+{
+    var bytes = Directory.EnumerateFiles(enginePath, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length);
+    Console.WriteLine($"Data size: {bytes / (1024 * 1024):N0} MB");
+    cabinetEngine.Dispose();
+    Directory.Delete(enginePath, recursive: true);
 }
 else if (backend != "memory")
 {

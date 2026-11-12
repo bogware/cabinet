@@ -9,7 +9,8 @@ namespace Cabinet.Storage.Engine;
 /// Aggregates where the data is, giving the query engine's answer exactly: an event without a
 /// by-field is left out of <c>stats</c>, groups take the values of their newest event and come
 /// out newest first, timechart buckets come out oldest first, and numbers held as text count as
-/// numbers. Blocks every row of which matches are counted from their summaries, unread.
+/// numbers. Blocks every row of which matches are counted from their summaries, unread, and the
+/// rest are read in parallel, each worker aggregating on its own before the results are merged.
 /// </summary>
 public sealed partial class EngineLogStorage : IAggregatingLogStorage
 {
@@ -17,7 +18,7 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
     public async Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
     {
         if (request.GroupBy.Any(field => !AggregateFields.CanPush(field))
-            || request.Aggregates.Any(spec => spec.Kind == AggregateKind.Percentile || (spec.Field != null && !AggregateFields.CanPush(spec.Field)))
+            || request.Aggregates.Any(spec => spec.Field != null && !AggregateFields.CanPush(spec.Field))
             || request.Bucket is { Ticks: <= 0 }
             || request.Filter.After != null)
         {
@@ -27,6 +28,7 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
         await InitializeAsync(cancellationToken);
         var filter = new RowFilter(request.Filter);
         var aggregation = new Aggregation(request);
+        var blocks = new List<(SegmentReader Segment, BlockInfo Block)>();
         foreach (var shard in ShardsFor(request.Filter))
         {
             var (hot, segments) = shard.Snapshot();
@@ -42,27 +44,49 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
             {
                 foreach (var block in segment.Blocks.Where(filter.MayMatch))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (aggregation.Full)
+                    if (!(filter.WholeBlock(block) && aggregation.TryAddWhole(block)))
                     {
-                        return aggregation.Result();
-                    }
-
-                    if (filter.WholeBlock(block) && aggregation.TryAddWhole(block))
-                    {
-                        continue;
-                    }
-
-                    var rows = new BlockValues(new BlockRows(segment, block), segment.Index);
-                    for (var i = 0; i < rows.Rows.Count; i++)
-                    {
-                        if (filter.Matches(rows.Rows, i))
-                        {
-                            aggregation.Add(rows, i);
-                        }
+                        blocks.Add((segment, block));
                     }
                 }
             }
+        }
+
+        var partials = new List<Aggregation>();
+        Parallel.ForEach(
+            blocks,
+            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Environment.ProcessorCount },
+            () => new Aggregation(request),
+            (work, state, local) =>
+            {
+                if (local.Full || local.Unanswerable)
+                {
+                    state.Stop();
+                    return local;
+                }
+
+                var rows = new BlockValues(new BlockRows(work.Segment, work.Block), work.Segment.Index);
+                for (var i = 0; i < rows.Rows.Count; i++)
+                {
+                    if (filter.Matches(rows.Rows, i))
+                    {
+                        local.Add(rows, i);
+                    }
+                }
+
+                return local;
+            },
+            local =>
+            {
+                lock (partials)
+                {
+                    partials.Add(local);
+                }
+            });
+
+        foreach (var partial in partials)
+        {
+            aggregation.Merge(partial);
         }
 
         return aggregation.Result();
@@ -130,7 +154,11 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
         private readonly Dictionary<(long Bucket, string Key), Group> _groups = [];
         private readonly bool _countsOnly;
         private long _events;
+        private long _retained;
         private bool _unanswerable;
+
+        /// <summary>Most values percentiles and dc may hold in all, past which the pipeline answers instead.</summary>
+        private const long MaxRetainedValues = 10_000_000;
 
         public Aggregation(AggregateRequest request)
         {
@@ -142,6 +170,28 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
 
         /// <summary>Whether there are already more groups than the query may have.</summary>
         public bool Full => _groups.Count > _request.MaxGroups;
+
+        /// <summary>Whether only the pipeline can give the answer, this having kept too many values.</summary>
+        public bool Unanswerable => _unanswerable;
+
+        /// <summary>Adds another worker's groups to these.</summary>
+        public void Merge(Aggregation other)
+        {
+            _events += other._events;
+            _retained += other._retained;
+            _unanswerable |= other._unanswerable || _retained > MaxRetainedValues;
+            foreach (var ((bucket, key), theirs) in other._groups)
+            {
+                if (_groups.TryGetValue((bucket, key), out var ours))
+                {
+                    ours.Merge(theirs);
+                }
+                else
+                {
+                    _groups[(bucket, key)] = theirs;
+                }
+            }
+        }
 
         /// <summary>
         /// Counts a block every row of which matches, from its summary, when the answer doesn't
@@ -222,7 +272,10 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
             group.Observe(ticks, row.Id(i), values);
             for (var a = 0; a < group.Accumulators.Length; a++)
             {
-                group.Accumulators[a].Add(_fields[a] is { } field ? row.Value(field, i) : null);
+                if (group.Accumulators[a].Add(_fields[a] is { } field ? row.Value(field, i) : null) && ++_retained > MaxRetainedValues)
+                {
+                    _unanswerable = true;
+                }
             }
 
             _events++;
@@ -309,6 +362,16 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
 
         public string NewestId { get; private set; } = string.Empty;
 
+        /// <summary>Takes in the same group from another worker.</summary>
+        public void Merge(Group other)
+        {
+            Observe(other.NewestTicks, other.NewestId, other.Values);
+            for (var a = 0; a < Accumulators.Length; a++)
+            {
+                Accumulators[a].Merge(other.Accumulators[a]);
+            }
+        }
+
         /// <summary>Notes a row, whose values become the group's if it's the newest yet.</summary>
         public void Observe(long ticks, string id, object?[]? values)
         {
@@ -332,10 +395,12 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
         private double _max = double.NegativeInfinity;
         private bool _sawText;
         private HashSet<string>? _distinct;
+        private List<double>? _values;
 
         public void AddCount(long rows) => _count += rows;
 
-        public void Add(object? value)
+        /// <summary>Adds a row's value. Returns true when it had to be kept, as for dc or a percentile.</summary>
+        public bool Add(object? value)
         {
             switch (spec.Kind)
             {
@@ -345,21 +410,16 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
                         _count++;
                     }
 
-                    return;
+                    return false;
 
                 case AggregateKind.DistinctCount:
-                    if (value?.ToString() is { } text)
-                    {
-                        (_distinct ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(text);
-                    }
-
-                    return;
+                    return value?.ToString() is { } text && (_distinct ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(text);
             }
 
             if (Number(value) is not { } number)
             {
                 _sawText |= value != null;
-                return;
+                return false;
             }
 
             _count++;
@@ -369,6 +429,48 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
             var delta = number - _mean;
             _mean += delta / _count;
             _squaredDeviations += delta * (number - _mean);
+            if (spec.Kind == AggregateKind.Percentile)
+            {
+                (_values ??= []).Add(number);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Takes in another worker's values for the same group (Chan's method for the deviations).</summary>
+        public void Merge(Accumulator other)
+        {
+            if (other._distinct != null)
+            {
+                (_distinct ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).UnionWith(other._distinct);
+            }
+
+            if (other._values != null)
+            {
+                (_values ??= []).AddRange(other._values);
+            }
+
+            _sawText |= other._sawText;
+            if (spec.Kind is AggregateKind.Count or AggregateKind.DistinctCount)
+            {
+                _count += other._count;
+                return;
+            }
+
+            if (other._count == 0)
+            {
+                return;
+            }
+
+            var count = _count + other._count;
+            var delta = other._mean - _mean;
+            _squaredDeviations += other._squaredDeviations + (delta * delta * _count * other._count / count);
+            _mean += delta * other._count / count;
+            _count = count;
+            _sum += other._sum;
+            _min = Math.Min(_min, other._min);
+            _max = Math.Max(_max, other._max);
         }
 
         /// <summary>The value, or false where only the engine can give it: min or max of text alone.</summary>
@@ -400,11 +502,27 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
                 AggregateKind.PopulationDeviation => Math.Sqrt(_squaredDeviations / _count),
                 AggregateKind.SampleVariance => _count == 1 ? double.NaN : _squaredDeviations / (_count - 1),
                 AggregateKind.PopulationVariance => _squaredDeviations / _count,
+                AggregateKind.Percentile => Percentile(),
                 _ => double.NaN,
             };
 
             value = double.IsFinite(result) ? result : null;
             return true;
+        }
+
+        /// <summary>
+        /// The percentile of every value, interpolated between the nearest two as the pipeline does;
+        /// for the 50th that's the mean of the middle two, its median. The pipeline samples past
+        /// its exact limit, where this stays exact, as PostgreSQL does.
+        /// </summary>
+        private double Percentile()
+        {
+            var sorted = _values!;
+            sorted.Sort();
+            var index = spec.Percentile / 100.0 * (sorted.Count - 1);
+            var lower = Math.Clamp((int)Math.Floor(index), 0, sorted.Count - 1);
+            var upper = Math.Clamp((int)Math.Ceiling(index), 0, sorted.Count - 1);
+            return lower == upper ? sorted[lower] : sorted[lower] + ((index - lower) * (sorted[upper] - sorted[lower]));
         }
 
         /// <summary>A number as the engine reads one: numeric values, or text that parses as a plain number.</summary>

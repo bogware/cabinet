@@ -71,23 +71,29 @@ internal static class StableHash
 /// </summary>
 internal sealed class BloomFilter
 {
-    private const int Hashes = 4;
     private readonly ulong[] _bits;
+    private readonly int _hashes;
 
-    private BloomFilter(ulong[] bits)
+    private BloomFilter(ulong[] bits, int hashes)
     {
         _bits = bits;
+        _hashes = hashes;
     }
 
-    /// <summary>A filter sized for about this many values at roughly a 1% false-positive rate.</summary>
-    public static BloomFilter ForCount(int count)
+    /// <summary>A filter for about this many values: about 1% false positives, or about 0.07% if <paramref name="precise"/>.</summary>
+    /// <remarks>
+    /// Duplicate checks probe every segment's ID filter for every new event, and each false positive
+    /// decodes a block, so ID filters are the precise kind.
+    /// </remarks>
+    public static BloomFilter ForCount(int count, bool precise = false)
     {
-        var bits = Math.Max(512, count * 10);
-        return new BloomFilter(new ulong[(bits + 63) / 64]);
+        var bits = Math.Max(512, count * (precise ? 16 : 10));
+        return new BloomFilter(new ulong[(bits + 63) / 64], precise ? 7 : 4);
     }
 
     public static BloomFilter Read(BinaryReader reader)
     {
+        var hashes = reader.ReadByte();
         var words = reader.ReadInt32();
         var bits = new ulong[words];
         for (var i = 0; i < words; i++)
@@ -95,11 +101,12 @@ internal sealed class BloomFilter
             bits[i] = reader.ReadUInt64();
         }
 
-        return new BloomFilter(bits);
+        return new BloomFilter(bits, hashes);
     }
 
     public void Write(BinaryWriter writer)
     {
+        writer.Write((byte)_hashes);
         writer.Write(_bits.Length);
         foreach (var word in _bits)
         {
@@ -114,7 +121,7 @@ internal sealed class BloomFilter
         var hash = StableHash.Of(value);
         var h1 = (uint)hash;
         var h2 = (uint)(hash >> 32) | 1;
-        for (uint i = 0; i < Hashes; i++)
+        for (uint i = 0; i < _hashes; i++)
         {
             var bit = (int)((h1 + i * h2) % (uint)BitCount);
             _bits[bit >> 6] |= 1UL << (bit & 63);
@@ -126,7 +133,7 @@ internal sealed class BloomFilter
         var hash = StableHash.Of(value);
         var h1 = (uint)hash;
         var h2 = (uint)(hash >> 32) | 1;
-        for (uint i = 0; i < Hashes; i++)
+        for (uint i = 0; i < _hashes; i++)
         {
             var bit = (int)((h1 + i * h2) % (uint)BitCount);
             if ((_bits[bit >> 6] & (1UL << (bit & 63))) == 0)

@@ -50,10 +50,27 @@ internal static class SegmentWriter
         var blocks = new List<BlockInfo>();
         using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
         {
-            for (var start = 0; start < sorted.Count; start += BlockRows)
+            // Blocks are independent, so they're encoded and compressed in parallel, then written in order
+            var built = new (BlockInfo Block, MemoryStream Body)[(sorted.Count + BlockRows - 1) / BlockRows];
+            Parallel.For(0, built.Length, b =>
             {
-                var rows = sorted.GetRange(start, Math.Min(BlockRows, sorted.Count - start));
-                blocks.Add(WriteBlock(file, rows));
+                var start = b * BlockRows;
+                built[b] = BuildBlock(sorted.GetRange(start, Math.Min(BlockRows, sorted.Count - start)));
+            });
+
+            foreach (var (block, body) in built)
+            {
+                var blockStart = file.Position;
+                body.Position = 0;
+                body.CopyTo(file);
+                body.Dispose();
+                foreach (var name in block.Columns.Keys.ToList())
+                {
+                    var (offset, length) = block.Columns[name];
+                    block.Columns[name] = (blockStart + offset, length);
+                }
+
+                blocks.Add(block);
             }
 
             var footerStart = file.Position;
@@ -74,7 +91,7 @@ internal static class SegmentWriter
                 }
 
                 // One filter over every ID, so a duplicate check skips the segment in one probe
-                var ids = BloomFilter.ForCount(sorted.Count);
+                var ids = BloomFilter.ForCount(sorted.Count, precise: true);
                 foreach (var logEvent in sorted)
                 {
                     ids.Add(logEvent.Id);
@@ -92,8 +109,10 @@ internal static class SegmentWriter
         File.Move(temporary, path, overwrite: true);
     }
 
-    private static BlockInfo WriteBlock(FileStream file, List<LogEvent> rows)
+    /// <summary>Encodes a block in memory, its column offsets relative to the block's start.</summary>
+    private static (BlockInfo Block, MemoryStream Body) BuildBlock(List<LogEvent> rows)
     {
+        var file = new MemoryStream();
         var words = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows)
         {
@@ -109,7 +128,7 @@ internal static class SegmentWriter
             wordFilter.Add(word);
         }
 
-        var idFilter = BloomFilter.ForCount(rows.Count);
+        var idFilter = BloomFilter.ForCount(rows.Count, precise: true);
         foreach (var row in rows)
         {
             idFilter.Add(row.Id);
@@ -191,10 +210,10 @@ internal static class SegmentWriter
             });
         }
 
-        return block;
+        return (block, file);
     }
 
-    private static void Column(FileStream file, BlockInfo block, string name, Action<BinaryWriter> write)
+    private static void Column(Stream file, BlockInfo block, string name, Action<BinaryWriter> write)
     {
         using var raw = new MemoryStream();
         using (var writer = new BinaryWriter(raw, Encoding.UTF8, leaveOpen: true))

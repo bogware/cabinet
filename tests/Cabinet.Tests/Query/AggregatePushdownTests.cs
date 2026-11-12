@@ -308,10 +308,9 @@ public sealed class EngineInMemoryAggregatePushdownTests : AggregatePushdownTest
 
     protected override bool IsAvailable => true;
 
-    // Every function but percentiles; min and max of text alone stay in the pipeline
+    // Min and max of text alone stay in the pipeline
     protected override bool PushesDown(string query) =>
-        !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
-        && !query.Contains("where", StringComparison.Ordinal);
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
 
     protected override ILogStorage CreateStorage() => _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path);
 
@@ -331,8 +330,7 @@ public sealed class EngineSegmentAggregatePushdownTests : AggregatePushdownTests
     protected override bool IsAvailable => true;
 
     protected override bool PushesDown(string query) =>
-        !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
-        && !query.Contains("where", StringComparison.Ordinal);
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
 
     protected override ILogStorage CreateStorage() =>
         _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path, new Cabinet.Storage.Engine.EngineOptions { FlushEvents = 1000 });

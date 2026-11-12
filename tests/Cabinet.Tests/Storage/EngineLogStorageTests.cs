@@ -223,6 +223,31 @@ public sealed class EngineLogStorageTests : IDisposable
         byHost.Rows.Sum(r => (int)r["count"]!).Should().Be(2070);
         byHost.Rows.Should().OnlyContain(r => (double)r["max"]! == 500);
         byHost.Rows[0]["host"].Should().Be("host-2", "the newest error, 20690, is on host-2");
+
+        // Spread over blocks read by different workers, then merged
+        var spread = await engine.AggregateAsync(new AggregateRequest
+        {
+            Filter = new QueryContext(),
+            GroupBy = ["path"],
+            Aggregates =
+            [
+                new AggregateSpec(AggregateKind.SampleDeviation, "status", 0, "sd"),
+                new AggregateSpec(AggregateKind.Percentile, "status", 95, "p95"),
+                new AggregateSpec(AggregateKind.Average, "status", 0, "avg"),
+                new AggregateSpec(AggregateKind.DistinctCount, "host", 0, "hosts"),
+            ],
+        });
+        foreach (var row in spread!.Rows)
+        {
+            var statuses = Enumerable.Range(0, 20_700).Where(i => $"/p{i % 4}" == (string)row["path"]!).Select(i => i % 10 == 0 ? 500.0 : 200.0).OrderBy(v => v).ToList();
+            var mean = statuses.Average();
+            ((double)row["sd"]!).Should().BeApproximately(Math.Sqrt(statuses.Sum(v => (v - mean) * (v - mean)) / (statuses.Count - 1)), 1e-9);
+            ((double)row["avg"]!).Should().BeApproximately(mean, 1e-9);
+            var index = 0.95 * (statuses.Count - 1);
+            var (lower, upper) = ((int)Math.Floor(index), (int)Math.Ceiling(index));
+            ((double)row["p95"]!).Should().Be(statuses[lower] + ((index - lower) * (statuses[upper] - statuses[lower])));
+            row["hosts"].Should().Be(3);
+        }
     }
 
     [Fact]
