@@ -110,7 +110,7 @@ public sealed class FileMonitorService : BackgroundService
     private void DiscoverFiles()
     {
         var tracked = new HashSet<string>(_registry.GetTrackedPaths(), FileStateRegistry.PathComparer);
-        foreach (var input in _config.Inputs)
+        foreach (var input in _config.Inputs.Where(input => input.IsFileInput))
         {
             var ignoreBefore = input.IgnoreOlderThanHours > 0
                 ? DateTime.UtcNow.AddHours(-input.IgnoreOlderThanHours)
@@ -177,7 +177,7 @@ public sealed class FileMonitorService : BackgroundService
     /// </summary>
     private void DeleteDeliveredFiles()
     {
-        foreach (var input in _config.Inputs.Where(input => input.DeleteDeliveredAfterDays > 0))
+        foreach (var input in _config.Inputs.Where(input => input.IsFileInput && input.DeleteDeliveredAfterDays > 0))
         {
             var quietSince = DateTime.UtcNow.AddDays(-input.DeleteDeliveredAfterDays);
             foreach (var pattern in input.Paths)
@@ -529,6 +529,20 @@ public sealed class FileMonitorService : BackgroundService
             Event = line.Text,
             LineNumber = line.LineNumber
         };
+
+        if (input.IsKubernetes)
+        {
+            // The runtime wraps each line; send what the container wrote, when it wrote it
+            var entry = KubernetesLogLine.Parse(line.Text);
+            evt.Event = entry.Message;
+            evt.Timestamp = entry.Time ?? evt.Timestamp;
+            evt.Fields = KubernetesLogLine.PodFields(filePath);
+            evt.Fields["k8s.stream"] = entry.Stream;
+            if (string.IsNullOrWhiteSpace(evt.Event))
+            {
+                return;
+            }
+        }
 
         await _forwarder.EnqueueAsync(evt, cancellationToken);
     }

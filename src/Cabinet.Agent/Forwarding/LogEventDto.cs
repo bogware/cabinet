@@ -21,6 +21,22 @@ public sealed class LogEventDto
     public string? FileKey { get; set; }
 
     /// <summary>
+    /// For inputs other than files: which input read this, and where to resume once it's durable,
+    /// such as a journal cursor. Not sent to the server.
+    /// </summary>
+    [JsonIgnore]
+    public string? InputKey { get; set; }
+
+    /// <summary>The resume position for <see cref="InputKey"/>. Not sent to the server.</summary>
+    [JsonIgnore]
+    public string? Checkpoint { get; set; }
+
+    /// <summary>Fields the server stores as they are, such as a pod's name.</summary>
+    [JsonPropertyName("fields")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Fields { get; set; }
+
+    /// <summary>
     /// Offset where this event starts in its file.
     /// </summary>
     [JsonIgnore]
