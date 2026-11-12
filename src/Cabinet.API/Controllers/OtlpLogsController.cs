@@ -114,7 +114,7 @@ public class OtlpLogsController : ControllerBase
         foreach (var record in records)
         {
             var logEvent = await ToEventAsync(record, headerIndex, cancellationToken);
-            if (_indexScope?.Principal != null && !_indexScope.Can(Capability.Ingest, logEvent.Index))
+            if (_indexScope != null && !_indexScope.Can(Capability.Ingest, logEvent.Index))
             {
                 return Problem(detail: $"Not allowed to ingest into index '{logEvent.Index}'", statusCode: 403);
             }
@@ -180,10 +180,10 @@ public class OtlpLogsController : ControllerBase
             logEvent.Severity = named;
         }
 
-        logEvent.Id = StableId(record);
         logEvent.SourceType = record.Attribute("service.name") ?? "otlp";
         logEvent.Host = record.Attribute("host.name") ?? logEvent.Host;
         logEvent.Index = headerIndex ?? record.Attribute("cabinet.index") ?? record.DefaultIndex;
+        logEvent.Id = SenderEventId.For(User, StableId(record, logEvent.Index));
         foreach (var (key, value) in record.Attributes)
         {
             logEvent.SetField(key, value);
@@ -214,9 +214,10 @@ public class OtlpLogsController : ControllerBase
     };
 
     /// <summary>From the record's content, so that an exporter's retry can't store it twice.</summary>
-    private static string StableId(OtlpLogRecord record)
+    private static string StableId(OtlpLogRecord record, string index)
     {
         var material = new StringBuilder()
+            .Append(index).Append('|')
             .Append(record.TimeUnixNano).Append('|')
             .Append(record.ObservedTimeUnixNano).Append('|')
             .Append(record.TraceId).Append('|')

@@ -697,7 +697,7 @@ curl -X POST "http://localhost:5000/services/collector/raw?host=web-01&sourcetyp
 2026-01-15 10:30:02 INFO Connection restored'
 ```
 
-An event can include an `id`: 16 to 64 letters, digits, hyphens or underscores. An event whose `id` is already stored is ignored, so a sender can safely retry. Without one, or with an invalid one, the server assigns an ID.
+An event can include an `id`: 16 to 64 letters, digits, hyphens or underscores. An event whose `id` this sender already stored is ignored, so a sender can safely retry. The stored ID is derived from the `id` and the sending key, so one sender can't block another's events by using their IDs first, and an event's stored ID isn't the `id` it was sent with. Without one, or with an invalid one, the server assigns an ID.
 
 #### GET /services/collector/health: HEC health check
 
