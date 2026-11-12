@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-11-11
+
+### Fixed
+
+- The PostgreSQL search memory (2.5.3) is now set on the database (`ALTER DATABASE ... SET work_mem`) instead of per connection, because a plain `SET` is wiped when a pooled connection is reused, so broad searches fell back to slow after the first query.
+- The Windows in-app updater no longer rolls back a good update. A large single-file service can take longer than Windows' 30-second service-control start timeout to come up; the updater treated that timeout as a failure and restored the previous version. It now checks the health endpoint to decide, and starts the service again if the first start reports a timeout.
+
 ## [2.5.3] - 2026-11-11
 
 ### Changed

@@ -29,22 +29,15 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private volatile bool _initialized;
 
+    private readonly int _workMemMb;
+
     public PostgresLogStorage(string connectionString, ILogger<PostgresLogStorage> logger, int workMemMb = 256)
     {
         _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _workMemMb = Math.Clamp(workMemMb, 4, 4096);
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
-
-        // A full-text search builds a bitmap of the matching rows. The default work_mem (4 MB) is far
-        // too little for a large match set, so the bitmap turns lossy and Postgres rechecks by
-        // recomputing the text vector for every row on each matched page, which made broad searches
-        // take close to a minute. More work_mem keeps the bitmap exact, so there is no recheck.
-        var workMem = Math.Clamp(workMemMb, 4, 4096);
-        dataSourceBuilder.UsePhysicalConnectionInitializer(
-            connection => connection.Execute($"SET work_mem = '{workMem}MB'"),
-            async connection => await connection.ExecuteAsync($"SET work_mem = '{workMem}MB'"));
-
         _dataSource = dataSourceBuilder.Build();
     }
 
@@ -120,6 +113,20 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
             await conn.ExecuteAsync("DROP INDEX IF EXISTS idx_log_events_fts");
 
             await schemaLock.CommitAsync(cancellationToken);
+
+            // Give every connection to this database enough work_mem that a full-text search keeps
+            // an exact match bitmap (see the note above). Set on the database, not per connection,
+            // so it survives connection pooling; a plain SET is wiped when a connection is reused.
+            try
+            {
+                var database = conn.Database.Replace("\"", "\"\"");
+                await conn.ExecuteAsync($"ALTER DATABASE \"{database}\" SET work_mem = '{_workMemMb}MB'");
+            }
+            catch (PostgresException ex)
+            {
+                _logger.LogWarning("Couldn't set work_mem on the database ({Message}); broad searches may be slow. Set it by hand with ALTER DATABASE ... SET work_mem.", ex.MessageText);
+            }
+
             _initialized = true;
             _logger.LogInformation("PostgreSQL storage initialized");
         }

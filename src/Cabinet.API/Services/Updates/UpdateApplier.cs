@@ -130,15 +130,24 @@ public sealed class UpdateApplier
         $keep = @("appsettings.Production.json", "logs")
 
         function Wait-Healthy {
-            for ($i = 0; $i -lt 90; $i++) {
+            for ($i = 0; $i -lt 120; $i++) {
                 try {
                     if ((Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) { return $true }
                 }
-                catch {
-                    Start-Sleep -Seconds 1
-                }
+                catch { }
+                Start-Sleep -Seconds 1
             }
             return $false
+        }
+
+        # A large single-file service can take longer than the 30-second service-control start
+        # timeout to come up, so Start-Service may report a timeout though the process is starting.
+        # Health is the real test: start it, ignore that timeout, and start once more if needed.
+        function Start-AndWait {
+            Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            if (Wait-Healthy) { return $true }
+            Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            return (Wait-Healthy)
         }
 
         function Copy-Program([string]$From, [string]$To) {
@@ -161,8 +170,7 @@ public sealed class UpdateApplier
             $cli = Join-Path $InstallDirectory "cli"
             if ((Test-Path (Join-Path $Staged "cli")) -and (Test-Path $cli)) { Copy-Item (Join-Path $Staged "cli\*") $cli -Recurse -Force }
 
-            Start-Service -Name $ServiceName
-            if (Wait-Healthy) {
+            if (Start-AndWait) {
                 Say "Updated to $Version"
                 exit 0
             }
@@ -174,8 +182,7 @@ public sealed class UpdateApplier
                 Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
                 (Get-Service -Name $ServiceName).WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60))
                 if (Test-Path $backup) { Copy-Program $backup $ApiDirectory }
-                Start-Service -Name $ServiceName
-                Say "Restored the previous version"
+                if (Start-AndWait) { Say "Restored the previous version" } else { Say "Restored the previous version, but it isn't healthy yet; check $ServiceName." }
             }
             catch {
                 Say "Restoring failed too: $($_.Exception.Message). Copy $backup into $ApiDirectory and start $ServiceName."
