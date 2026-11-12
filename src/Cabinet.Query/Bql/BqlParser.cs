@@ -861,36 +861,62 @@ public sealed class BqlParser : IQueryParser
         };
     }
 
-    private AppendStage ParseAppendStage()
+    /// <summary>
+    /// Reads a bracketed subquery, starting at its "[", and returns its text exactly as written:
+    /// re-joining tokens would change spacing (host=l4d2-dev) and lose escaped quotes.
+    /// </summary>
+    private string ReadBracketed(bool skipSearchKeyword = false)
     {
-        // append [<subsearch>] — consume everything up to the next pipe or EOF as the subsearch text
-        var sb = new StringBuilder();
-        // Expect opening bracket for subsearch
-        if (Current.Kind == BqlTokenKind.OpenBracket)
+        Advance(); // skip "["
+        if (skipSearchKeyword && Current.IsAnyKeyword("search", "find"))
         {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
-            // No brackets — consume tokens until pipe or EOF
-            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
-            {
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
+            Advance();
         }
 
-        return new AppendStage { SubsearchQuery = sb.ToString() };
+        var start = Current.Kind == BqlTokenKind.Eof ? -1 : Current.Position;
+        var depth = 1;
+        while (Current.Kind != BqlTokenKind.Eof)
+        {
+            if (Current.Kind == BqlTokenKind.OpenBracket)
+            {
+                depth++;
+            }
+            else if (Current.Kind == BqlTokenKind.CloseBracket && --depth == 0)
+            {
+                var text = SourceText(start, Current);
+                Advance(); // skip "]"
+                return text;
+            }
+
+            Advance();
+        }
+
+        throw new QueryParseException("Missing ']' to close the subsearch");
+    }
+
+    /// <summary>Reads the rest of the stage, up to the next pipe, exactly as written.</summary>
+    private string ReadUntilPipe()
+    {
+        var start = Current.Kind == BqlTokenKind.Eof ? -1 : Current.Position;
+        while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
+        {
+            Advance();
+        }
+
+        return SourceText(start, Current);
+    }
+
+    private string SourceText(int start, BqlToken end)
+    {
+        var stop = end.Kind == BqlTokenKind.Eof || end.Position < 0 || end.Position > _source.Length ? _source.Length : end.Position;
+        return start < 0 || stop <= start ? string.Empty : _source[start..stop].Trim();
+    }
+
+    private AppendStage ParseAppendStage()
+    {
+        // append [<subsearch>], or the rest of the stage without brackets
+        var text = Current.Kind == BqlTokenKind.OpenBracket ? ReadBracketed() : ReadUntilPipe();
+        return new AppendStage { SubsearchQuery = text };
     }
 
     private JoinStage ParseJoinStage()
@@ -910,36 +936,13 @@ public sealed class BqlParser : IQueryParser
 
         var joinField = ExpectIdentifier();
 
-        // Parse subsearch
-        var sb = new StringBuilder();
-        if (Current.Kind == BqlTokenKind.OpenBracket)
-        {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket) { depth--; if (depth == 0) { Advance(); break; } }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
-            while (Current.Kind != BqlTokenKind.Eof && Current.Kind != BqlTokenKind.Pipe)
-            {
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
+        var subsearch = Current.Kind == BqlTokenKind.OpenBracket ? ReadBracketed() : ReadUntilPipe();
 
         return new JoinStage
         {
             JoinField = joinField,
             JoinType = joinType,
-            SubsearchQuery = sb.ToString()
+            SubsearchQuery = subsearch
         };
     }
 
@@ -990,34 +993,14 @@ public sealed class BqlParser : IQueryParser
     private SubsearchStage ParseSubsearchStage()
     {
         // subsearch [<inner_query>]
-        var sb = new StringBuilder();
-
-        if (Current.Kind == BqlTokenKind.OpenBracket)
-        {
-            Advance(); // skip "["
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket)
-                {
-                    depth--;
-                    if (depth == 0) { Advance(); break; }
-                }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-        }
-        else
-        {
+        if (Current.Kind != BqlTokenKind.OpenBracket)
             throw new QueryParseException("Expected '[' after 'subsearch'", $"position {Current.Position}");
-        }
 
-        if (string.IsNullOrWhiteSpace(sb.ToString()))
+        var text = ReadBracketed();
+        if (string.IsNullOrWhiteSpace(text))
             throw new QueryParseException("Subsearch query cannot be empty");
 
-        return new SubsearchStage(sb.ToString());
+        return new SubsearchStage(text);
     }
 
     // ─── MULTISEARCH stage ──────────────────────────────────────
@@ -1030,31 +1013,7 @@ public sealed class BqlParser : IQueryParser
 
         while (Current.Kind == BqlTokenKind.OpenBracket)
         {
-            Advance(); // skip "["
-            var sb = new StringBuilder();
-
-            // Expect "search" keyword inside brackets
-            if (Current.IsAnyKeyword("search", "find"))
-            {
-                Advance(); // skip "search"/"find"
-            }
-
-            // Consume the search query text until closing bracket
-            var depth = 1;
-            while (Current.Kind != BqlTokenKind.Eof && depth > 0)
-            {
-                if (Current.Kind == BqlTokenKind.OpenBracket) depth++;
-                if (Current.Kind == BqlTokenKind.CloseBracket)
-                {
-                    depth--;
-                    if (depth == 0) { Advance(); break; }
-                }
-                if (sb.Length > 0) sb.Append(' ');
-                sb.Append(Current.Kind == BqlTokenKind.StringLiteral ? $"\"{Current.Value}\"" : Current.Value);
-                Advance();
-            }
-
-            var query = sb.ToString().Trim();
+            var query = ReadBracketed(skipSearchKeyword: true);
             if (!string.IsNullOrWhiteSpace(query))
             {
                 searchQueries.Add(query);
@@ -2970,7 +2929,7 @@ internal sealed class LegacyInputLookupOperator : QueryOperator
     {
         var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
         if (lookup == null)
-            return Enumerable.Empty<dynamic>();
+            throw new QueryExecutionException($"There's no lookup table named '{_lookupName}'");
 
         var results = new List<dynamic>();
         foreach (var row in lookup.Rows)
@@ -3011,7 +2970,7 @@ internal sealed class LegacyLookupOperator : QueryOperator
     {
         var lookup = await _storage.GetLookupByNameAsync(_lookupName, ct);
         if (lookup == null)
-            return input; // No lookup found, pass through unchanged
+            throw new QueryExecutionException($"There's no lookup table named '{_lookupName}'");
 
         // Build index: key field value → lookup row (first match wins)
         var index = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);

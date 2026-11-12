@@ -46,6 +46,18 @@ public sealed class QueryLimitExceededException : QueryParseException
     }
 }
 
+/// <summary>
+/// Part of a query failed in a way that would make its answer wrong, such as a subsearch, join or
+/// macro that couldn't run. Reported to the caller instead of returning a quietly different answer.
+/// </summary>
+public sealed class QueryExecutionException : QueryParseException
+{
+    public QueryExecutionException(string message)
+        : base(message)
+    {
+    }
+}
+
 /// <summary>What one query has used so far.</summary>
 internal sealed class QueryBudget
 {

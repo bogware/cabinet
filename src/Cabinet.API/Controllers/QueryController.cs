@@ -21,7 +21,7 @@ namespace Cabinet.API.Controllers;
 public class QueryController : ControllerBase
 {
     private static string QueryErrorDetail(QueryParseException ex) =>
-        ex is Cabinet.Query.Bql.QueryLimitExceededException ? ex.Message : $"Invalid query syntax: {ex.Message}";
+        ex is Cabinet.Query.Bql.QueryLimitExceededException or Cabinet.Query.Bql.QueryExecutionException ? ex.Message : $"Invalid query syntax: {ex.Message}";
 
     private readonly IQueryEngine _queryEngine;
     private readonly IQueryParser _queryParser;

@@ -55,6 +55,9 @@ public sealed class TimeAndHyphenTests
     [InlineData("find host=\"l4d2-dev\"")]
     [InlineData("find * | where host = \"l4d2-dev\"")]
     [InlineData("find * | search host=l4d2-dev")]
+    [InlineData("find * | subsearch [find host=l4d2-dev | fields host]")]
+    [InlineData("find * | join type=inner host [find host=l4d2-dev | stats count by host]")]
+    [InlineData("find * | append [find host=nothing] | where host = \"l4d2-dev\"")]
     public async Task HostWithAHyphen_IsFound(string query)
     {
         (await RunAsync(query)).Should().HaveCount(2);
