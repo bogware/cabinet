@@ -5,7 +5,7 @@ namespace Cabinet.API.Services.Settings;
 /// <summary>Where events are kept and how much room is left, for the settings screen.</summary>
 public sealed class StorageInfo
 {
-    /// <summary>SQLite, PostgreSQL, OpenSearch or Memory.</summary>
+    /// <summary>SQLite, PostgreSQL, OpenSearch, Cabinet or Memory.</summary>
     public required string Type { get; init; }
 
     /// <summary>The database file, or the host and database. Never credentials.</summary>
@@ -62,6 +62,11 @@ public static class StorageInfoService
                 location = PostgresTarget(connection);
                 size = stats.StorageSizeBytes > 0 ? stats.StorageSizeBytes : null;
                 break;
+            case "Cabinet":
+                location = Cabinet.API.Services.Storage.StorageBackends.EngineDataPath(configuration);
+                size = stats.StorageSizeBytes;
+                (free, total) = Disk(location);
+                break;
             case "OpenSearch":
                 location = UrlHost(connection);
                 size = stats.StorageSizeBytes > 0 ? stats.StorageSizeBytes : null;
@@ -91,12 +96,13 @@ public static class StorageInfoService
         "POSTGRESQL" or "POSTGRES" => "PostgreSQL",
         "OPENSEARCH" or "ELASTICSEARCH" => "OpenSearch",
         "MEMORY" or "INMEMORY" => "Memory",
+        "CABINET" or "ENGINE" => "Cabinet",
         _ => "SQLite",
     };
 
     private static string? MetadataLocation(IConfiguration configuration, string type, string? location)
     {
-        if (type != "OpenSearch")
+        if (type is not ("OpenSearch" or "Cabinet"))
         {
             return location == null ? null : $"The same database ({location})";
         }

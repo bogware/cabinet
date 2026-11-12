@@ -473,7 +473,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     if (!string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase))
     {
         if (storageType.Equals("SQLite", StringComparison.OrdinalIgnoreCase))
-            Log.Warning("SQLite storage is not recommended for production. Consider PostgreSQL or OpenSearch.");
+            Log.Warning("SQLite storage is not recommended for production. Consider the Cabinet engine, PostgreSQL or OpenSearch.");
         if (storageType.Equals("Memory", StringComparison.OrdinalIgnoreCase))
             Log.Warning("In-Memory storage is ephemeral. Data will be lost on restart.");
     }
@@ -481,7 +481,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Configure options
     services.Configure<Cabinet.Core.Configuration.CabinetConfiguration>(configuration);
 
-    // Storage — supports SQLite, Memory, PostgreSQL, and OpenSearch.
+    // Storage — supports SQLite, Memory, PostgreSQL, OpenSearch and the Cabinet engine.
     // The "base" store is everything below detection. Detection events are written to it directly,
     // so they're stored, encrypted and searchable but never fed back into the detection engine.
     services.AddKeyedSingleton<ILogStorage>("base", (sp, _) =>
@@ -850,7 +850,7 @@ void ValidateConfiguration(IConfiguration configuration)
 {
     var validStorageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch"
+        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch", "Cabinet", "Engine"
     };
 
     var storageType = configuration["Storage:Type"] ?? "SQLite";

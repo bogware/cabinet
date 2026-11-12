@@ -377,6 +377,68 @@ public sealed class ApiStartupTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Api_WithCabinetEngine_KeepsEventsAcrossAKill_AndStoresARetryOnce()
+    {
+        var dataPath = Path.Combine(_workingDirectory, "engine-data");
+
+        async Task<int> RunAsync(Func<HttpClient, Task<int>> work)
+        {
+            var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");
+            var startInfo = CreateStartInfo(baseAddress.ToString().TrimEnd('/'));
+            startInfo.Environment["Storage__Type"] = "Cabinet";
+            startInfo.Environment["Storage__DataPath"] = dataPath;
+            startInfo.Environment["Storage__MetadataConnectionString"] = $"Data Source={Path.Combine(_workingDirectory, "metadata.db")}";
+            startInfo.Environment["ApiKeys__Keys__0__Key"] = "engine-test-key";
+            startInfo.Environment["ApiKeys__Keys__0__Tier"] = "Enterprise";
+            startInfo.Environment["ApiKeys__Keys__0__Name"] = "Engine test";
+
+            using var process = Process.Start(startInfo)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            try
+            {
+                using var client = new HttpClient { BaseAddress = baseAddress };
+                client.DefaultRequestHeaders.Add("X-API-Key", "engine-test-key");
+                await WaitUntilReadyAsync(client, process);
+                return await work(client);
+            }
+            finally
+            {
+                // A hard kill: what was acknowledged must already be in the write-ahead log
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+                await Task.WhenAll(stdout, stderr);
+            }
+        }
+
+        async Task<int> CountAsync(HttpClient client)
+        {
+            var query = await client.PostAsJsonAsync("/api/v1/query/execute", new { query = "find enginemarker | stats count" });
+            query.StatusCode.Should().Be(HttpStatusCode.OK);
+            using var body = JsonDocument.Parse(await query.Content.ReadAsStringAsync());
+            return body.RootElement.GetProperty("results")[0].GetProperty("count").GetInt32();
+        }
+
+        await RunAsync(async client =>
+        {
+            var ingest = await client.PostAsJsonAsync("/api/v1/logs/ingest", new { Logs = new[] { "enginemarker one", "enginemarker two" } });
+            ingest.StatusCode.Should().Be(HttpStatusCode.OK);
+            var hec = await client.PostAsJsonAsync("/services/collector/event", new { id = "fedcba9876543210fedcba9876543210", @event = "enginemarker three" });
+            hec.StatusCode.Should().Be(HttpStatusCode.OK);
+            return await CountAsync(client);
+        });
+
+        var afterRestart = await RunAsync(async client =>
+        {
+            await client.PostAsJsonAsync("/services/collector/event", new { id = "fedcba9876543210fedcba9876543210", @event = "enginemarker three" });
+            return await CountAsync(client);
+        });
+
+        afterRestart.Should().Be(3, "events survive the kill, and the retried one is stored once");
+        Directory.EnumerateFiles(dataPath, "*", SearchOption.AllDirectories).Should().NotBeEmpty();
+    }
+
+    [Fact]
     public async Task Api_SettingsAndKeys_WorkEndToEnd()
     {
         var baseAddress = new Uri($"http://127.0.0.1:{GetFreePort()}");

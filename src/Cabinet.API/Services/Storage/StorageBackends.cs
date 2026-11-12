@@ -22,6 +22,7 @@ public static class StorageBackends
         "POSTGRESQL" or "POSTGRES" => "PostgreSQL",
         "OPENSEARCH" or "ELASTICSEARCH" => "OpenSearch",
         "MEMORY" => "Memory",
+        "CABINET" or "ENGINE" => "Cabinet",
         _ => null,
     };
 
@@ -57,9 +58,22 @@ public static class StorageBackends
                 replicas: configuration.GetValue<int?>("Storage:OpenSearchReplicas"),
                 fieldLimit: configuration.GetValue("Storage:OpenSearchFieldLimit", 10_000)),
             "Memory" => new InMemoryStorage(),
+            "Cabinet" => new Cabinet.Storage.Engine.EngineLogStorage(
+                EngineDataPath(configuration),
+                new Cabinet.Storage.Engine.EngineOptions
+                {
+                    FlushEvents = configuration.GetValue("Storage:EngineFlushEvents", 100_000),
+                    FlushSeconds = configuration.GetValue("Storage:EngineFlushSeconds", 10),
+                    SyncWrites = configuration.GetValue("Storage:EngineSyncWrites", true),
+                },
+                loggers.CreateLogger<Cabinet.Storage.Engine.EngineLogStorage>()),
             _ => new SqliteLogStorage(Options.Create(Bind(configuration)), loggers.CreateLogger<SqliteLogStorage>()),
         };
     }
+
+    /// <summary>The folder the Cabinet engine keeps its files in.</summary>
+    public static string EngineDataPath(IConfiguration configuration) =>
+        Path.GetFullPath(configuration["Storage:DataPath"] is { Length: > 0 } path ? path : "cabinet-data");
 
     /// <summary>The metadata stores for a configuration: documents, dashboards, knowledge, schedules, saved queries.</summary>
     public static ServiceProvider CreateMetadata(IConfiguration configuration, ILoggerFactory loggers)
@@ -106,6 +120,8 @@ public static class StorageBackends
                     return "PostgreSQL";
                 }
 
+            case "Cabinet":
+                return Path.GetFullPath(connectionString);
             case "OpenSearch":
                 return Uri.TryCreate(connectionString, UriKind.Absolute, out var uri) ? $"{uri.Scheme}://{uri.Host}:{uri.Port}" : "OpenSearch";
             default:

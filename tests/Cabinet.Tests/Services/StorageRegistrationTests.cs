@@ -56,10 +56,12 @@ public sealed class StorageRegistrationTests : IDisposable
         provider.GetRequiredService<ILeaderLease>().Should().BeOfType<PostgresLeaderLease>();
     }
 
-    [Fact]
-    public async Task OpenSearch_KeepsDocumentsOnMetadataDatabase()
+    [Theory]
+    [InlineData("OpenSearch")]
+    [InlineData("Cabinet")]
+    public async Task EventOnlyBackends_KeepDocumentsOnMetadataDatabase(string storageType)
     {
-        using var provider = BuildProvider("OpenSearch", "https://search.invalid:9200");
+        using var provider = BuildProvider(storageType, "https://search.invalid:9200");
 
         await provider.GetRequiredService<ISearchJobStorage>().InitializeAsync();
         await provider.GetRequiredService<IDataModelStorage>().InitializeAsync();
