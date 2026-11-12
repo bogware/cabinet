@@ -6,7 +6,13 @@ using Xunit;
 
 namespace Cabinet.Tests.Storage;
 
+/// <summary>
+/// Opens many instances' connections at once, so it runs on its own: alongside the other
+/// PostgreSQL tests it can exceed the server's connection limit.
+/// </summary>
 [Trait("Category", "Integration")]
+[Collection(nameof(PostgresSchemaConcurrencyTests))]
+[CollectionDefinition(nameof(PostgresSchemaConcurrencyTests), DisableParallelization = true)]
 public class PostgresSchemaConcurrencyTests
 {
     private const int Instances = 8;
