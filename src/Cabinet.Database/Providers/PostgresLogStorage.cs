@@ -398,7 +398,11 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
                     }
                 }
             }
-            catch { /* fields deserialization is best-effort */ }
+            catch (JsonException)
+            {
+                // A row whose fields aren't valid JSON still has its line; leave the fields off
+                evt.SetField("_fields_unreadable", true);
+            }
         }
 
         if (row.tags != null)

@@ -81,7 +81,8 @@ public class WebhookAlertChannel : IAlertChannel
 
                 if (response.IsSuccessStatusCode)
                 {
-                    _logger.LogInformation("Alert sent successfully to webhook: {Url} (attempt {Attempt})", _config.Url, attempt + 1);
+                    // The URL often holds a token (Slack, Teams, Discord), so only its host is logged
+                    _logger.LogInformation("Alert sent successfully to webhook at {Host} (attempt {Attempt})", Uri.TryCreate(_config.Url, UriKind.Absolute, out var sent) ? sent.Host : "(invalid URL)", attempt + 1);
                     return; // Success — no retry needed
                 }
 

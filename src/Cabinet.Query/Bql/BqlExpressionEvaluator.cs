@@ -156,6 +156,8 @@ public static class BqlExpressionEvaluator
 
     private const int MaxCachedLikePatterns = 1000;
 
+    private static readonly IDictionary<string, object?> EmptyContext = new Dictionary<string, object?>();
+
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> LikePatterns = new(StringComparer.Ordinal);
 
     private static object EvaluateLike(LikeExpression expr, IDictionary<string, object?> context)
@@ -350,9 +352,7 @@ public static class BqlExpressionEvaluator
         var pattern = args.ElementAtOrDefault(1)?.ToString() ?? "";
         if (pattern.Length > 10_000) return false; // Guard against excessively long patterns
         // SQL-like LIKE: % = any chars, _ = single char
-        var regex = "^" + Regex.Escape(pattern).Replace("%", ".*").Replace("_", ".") + "$";
-        try { return Regex.IsMatch(str, regex, RegexOptions.IgnoreCase, RegexTimeout); }
-        catch { return false; }
+        return EvaluateLike(new LikeExpression(new LiteralExpression(str), pattern), EmptyContext) is true;
     }
 
     private static object? EvalSigfig(List<object?> args)
@@ -545,7 +545,11 @@ public static class BqlExpressionEvaluator
         var val = args.FirstOrDefault();
         if (val == null) return "null";
         try { return JsonSerializer.Serialize(val); }
-        catch { return val.ToString(); }
+        catch (NotSupportedException)
+        {
+            // A value JSON can't represent, such as a delegate, shows as text
+            return val.ToString();
+        }
     }
 
     private static object? EvalFromJson(List<object?> args)

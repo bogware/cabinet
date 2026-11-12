@@ -483,7 +483,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         // Outermost, so that rules see what arrived rather than what was encrypted
         new Cabinet.API.Services.DetectingLogStorage(
             sp.GetRequiredKeyedService<ILogStorage>("base"),
-            sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>()));
+            sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>(),
+            sp.GetService<Cabinet.API.Services.QueryCacheService>()));
 
     services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
 

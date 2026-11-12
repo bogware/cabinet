@@ -81,14 +81,51 @@ public class QueryCacheServiceTests
     [Fact]
     public void InvalidateIndex_RemovesOnlyMatchingEntries()
     {
-        _cache.Set("q1", new QueryResult(), index: "idx1");
-        _cache.Set("q2", new QueryResult(), index: "idx2");
+        _cache.Set("q1", new QueryResult(), index: "idx1", dataIndex: "idx1");
+        _cache.Set("q2", new QueryResult(), index: "idx2", dataIndex: "idx2");
         _cache.Count.Should().Be(2);
 
         _cache.InvalidateIndex("idx1");
-        _cache.Count.Should().Be(1);
         _cache.TryGet("q1", index: "idx1").Should().BeNull();
         _cache.TryGet("q2", index: "idx2").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AWrite_MakesQueriesOfEveryIndexStale_WhateverTheyreKeyedBy()
+    {
+        // The controller keys entries by the caller's access, which is never an index name
+        _cache.Set("find *", new QueryResult(), index: "Admin||main|||100");
+
+        _cache.InvalidateIndex("main");
+
+        _cache.TryGet("find *", index: "Admin||main|||100").Should().BeNull();
+    }
+
+    [Fact]
+    public void AWrite_DuringTheQuery_MakesItsResultStale()
+    {
+        var started = QueryCacheService.Now();
+        _cache.InvalidateIndex("main");
+        _cache.Set("find *", new QueryResult(), createdAt: started);
+
+        _cache.TryGet("find *").Should().BeNull();
+    }
+
+    [Fact]
+    public void Rows_AreCapped()
+    {
+        var cache = new QueryCacheService(NullLogger<QueryCacheService>.Instance, maxRows: 100);
+        QueryResult Rows(int n) => new() { Events = Enumerable.Range(0, n).Select(i => (dynamic)i).ToList() };
+
+        cache.Set("big", Rows(26));
+        cache.TryGet("big").Should().BeNull("one result of over a quarter of the cap isn't kept");
+
+        for (var i = 0; i < 10; i++)
+        {
+            cache.Set($"q{i}", Rows(20));
+        }
+
+        cache.Rows.Should().BeLessThanOrEqualTo(100);
     }
 
     [Fact]
