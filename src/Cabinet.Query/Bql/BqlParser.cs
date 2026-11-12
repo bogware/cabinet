@@ -262,6 +262,7 @@ public sealed class BqlParser : IQueryParser
         if (Current.IsKeyword("untable")) { Advance(); return ParseUntableStage(); }
         if (Current.IsKeyword("convert")) { Advance(); return ParseConvertStage(); }
         if (Current.IsKeyword("iplocation")) { Advance(); return ParseIplocationStage(); }
+        if (Current.IsKeyword("cluster")) { Advance(); return ParseClusterStage(); }
 
         // SPL-style keywords
         if (Current.IsKeyword("eventstats")) { Advance(); return ParseEventStatsStage(); }
@@ -1642,7 +1643,40 @@ public sealed class BqlParser : IQueryParser
             "fillnull", "bucket", "bin", "makeresults", "mvexpand",
             "chart", "filldown", "addcoltotals", "inputlookup",
             "rare", "regex", "fieldsummary", "xyseries", "untable", "convert",
-            "macro", "subsearch", "multisearch", "iplocation");
+            "macro", "subsearch", "multisearch", "iplocation", "cluster");
+
+    private ClusterStage ParseClusterStage()
+    {
+        // cluster [t=0.5] [field=RawLine] [labelonly=true|false]
+        double similarity = 0.5;
+        var field = "RawLine";
+        var labelOnly = false;
+        while (Current.Kind == BqlTokenKind.Identifier && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            var name = Current.Value.ToLowerInvariant();
+            Advance();
+            Advance();
+            var value = Current.Value;
+            Advance();
+            switch (name)
+            {
+                case "t":
+                    if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out similarity) || similarity <= 0 || similarity > 1)
+                        throw new QueryParseException($"cluster t= is between 0 and 1, not '{value}'");
+                    break;
+                case "field":
+                    field = value;
+                    break;
+                case "labelonly":
+                    labelOnly = value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1";
+                    break;
+                default:
+                    throw new QueryParseException($"cluster doesn't take {name}=; it takes t=, field= and labelonly=");
+            }
+        }
+
+        return new ClusterStage { Similarity = similarity, Field = field, LabelOnly = labelOnly };
+    }
 
     private IplocationStage ParseIplocationStage()
     {
@@ -1695,6 +1729,7 @@ public sealed class BqlParser : IQueryParser
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
         IplocationStage ip => new LegacyIplocationOperator(ip),
+        ClusterStage cl => new LegacyClusterOperator(cl),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),

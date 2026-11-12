@@ -79,7 +79,7 @@ public sealed class BqlOptimizer
         // to produce correct results — a truncated input yields wrong aggregates.
         // Use QueryContext.MaxLimit as the ceiling since the Limit setter clamps to it.
         var maxFetchLimit = QueryContext.MaxLimit;
-        var hasAggregation = remainingStages.Any(s => s is StatsStage or TimechartStage or ChartStage or EventStatsStage or StreamStatsStage or FieldSummaryStage or RareStage);
+        var hasAggregation = remainingStages.Any(s => s is StatsStage or TimechartStage or ChartStage or EventStatsStage or StreamStatsStage or FieldSummaryStage or RareStage or ClusterStage);
         var hasLimitStage = remainingStages.Any(s => s is LimitStage or TailStage or TopStage);
 
         int computedLimit;

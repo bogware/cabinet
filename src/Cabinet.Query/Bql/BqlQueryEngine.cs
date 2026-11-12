@@ -698,6 +698,7 @@ public sealed class BqlQueryEngine : IQueryEngine
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
         IplocationStage ip => new LegacyIplocationOperator(ip),
+        ClusterStage cl => new LegacyClusterOperator(cl),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),
