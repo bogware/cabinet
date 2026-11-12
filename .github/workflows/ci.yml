@@ -101,7 +101,9 @@ jobs:
     - name: Test
       env:
         TZ: America/Chicago
-        CABINET_TEST_POSTGRES_CONNSTR: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Database=cabinet;Username=cabinet;Password=cabinet-ci
+        # Tests run in parallel and each makes its own pools; smaller pools that drop idle
+        # connections quickly keep them under the service's default of 100 connections
+        CABINET_TEST_POSTGRES_CONNSTR: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Database=cabinet;Username=cabinet;Password=cabinet-ci;Maximum Pool Size=20;Connection Idle Lifetime=10;Connection Pruning Interval=5
         CABINET_TEST_OPENSEARCH_URL: http://localhost:${{ job.services.opensearch.ports['9200'] }}
       run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
 
