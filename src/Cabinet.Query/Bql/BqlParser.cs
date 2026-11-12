@@ -1656,23 +1656,13 @@ public sealed class BqlParser : IQueryParser
 
 internal sealed class LegacySearchOperator : QueryOperator
 {
-    private readonly IReadOnlyList<string> _terms;
+    private readonly BqlTextSearch _search;
     public override string Name => "search";
 
-    public LegacySearchOperator(string pattern) { _terms = SearchTerms.Parse(pattern); }
+    public LegacySearchOperator(string pattern) { _search = BqlTextSearch.Parse(pattern); }
 
-    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
-    {
-        if (_terms.Count == 0) return Task.FromResult(input);
-
-        var result = input.Where(evt =>
-        {
-            var dict = (IDictionary<string, object?>)evt;
-            return SearchTerms.Matches(dict.TryGetValue("RawLine", out var line) ? line?.ToString() : null, _terms);
-        });
-
-        return Task.FromResult(result);
-    }
+    public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default) =>
+        Task.FromResult<IEnumerable<dynamic>>(((IEnumerable<object>)input).Where(evt => _search.Matches((IDictionary<string, object?>)evt)));
 }
 
 internal sealed class LegacyWhereOperator : QueryOperator

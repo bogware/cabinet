@@ -191,6 +191,17 @@ public sealed class BqlOptimizer
         if (stage is not SearchStage search || search.SearchText.Length > MaxSearchFilterLength)
             return stage;
 
+        // Words would read as field names in a where; the search evaluates them itself
+        try
+        {
+            if (BqlTextSearch.Parse(search.SearchText).HasText)
+                return stage;
+        }
+        catch (QueryParseException)
+        {
+            return stage;
+        }
+
         var withoutQuotedText = QuotedText.Replace(search.SearchText, "\"\"");
         if (!FieldComparison.IsMatch(withoutQuotedText))
             return stage;
@@ -242,16 +253,15 @@ public sealed class BqlOptimizer
 
     private static bool TryPushSearch(SearchStage search, QueryContext ctx)
     {
-        var text = search.SearchText.Trim();
-        if (text == "*")
-            return true;
+        // Storage finds lines with all of some words. That narrows any search whose words are all
+        // required; the pipeline checks the rest (OR, NOT, phrases, wildcards, fields).
+        var parsed = BqlTextSearch.Parse(search.SearchText);
+        if (parsed.RequiredWords != null)
+        {
+            ctx.SearchText = ctx.SearchText == null ? parsed.RequiredWords : $"{ctx.SearchText} {parsed.RequiredWords}";
+        }
 
-        // A second search term can't share the single storage search slot
-        if (ctx.SearchText != null)
-            return false;
-
-        ctx.SearchText = text.Trim('"');
-        return true;
+        return parsed.IsPlainWords;
     }
 
     /// <summary>
