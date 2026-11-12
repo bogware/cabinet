@@ -147,7 +147,7 @@ public sealed class DetectionEngine : BackgroundService
     private readonly TimeSpan RuleReloadInterval;
 
     private readonly DetectionRuleStore _rules;
-    private readonly AlertDispatcher _dispatcher;
+    private readonly DetectionActionExecutor _executor;
     private readonly ILogger<DetectionEngine> _logger;
     private readonly IClusterCoordinator _coordinator;
     private readonly Channel<IReadOnlyList<LogEvent>> _pending = Channel.CreateBounded<IReadOnlyList<LogEvent>>(
@@ -159,13 +159,13 @@ public sealed class DetectionEngine : BackgroundService
     private long _pendingBatches;
     private long _processedBatches;
 
-    public DetectionEngine(DetectionRuleStore rules, AlertDispatcher dispatcher, ILogger<DetectionEngine> logger, IClusterCoordinator? coordinator = null, Infrastructure.ServerLimits? limits = null)
+    public DetectionEngine(DetectionRuleStore rules, DetectionActionExecutor executor, ILogger<DetectionEngine> logger, IClusterCoordinator? coordinator = null, Infrastructure.ServerLimits? limits = null)
     {
         limits ??= new Infrastructure.ServerLimits();
         MaxRegexTimeouts = limits.DetectionMaxRegexTimeouts;
         RuleReloadInterval = TimeSpan.FromSeconds(limits.DetectionRuleReloadSeconds);
         _rules = rules;
-        _dispatcher = dispatcher;
+        _executor = executor;
         _logger = logger;
         _coordinator = coordinator ?? new InMemoryClusterCoordinator();
     }
@@ -310,48 +310,8 @@ public sealed class DetectionEngine : BackgroundService
     private Task FireAsync(DetectionRule rule, string groupValue, int count, LogEvent logEvent, CancellationToken cancellationToken)
     {
         var subject = string.IsNullOrEmpty(groupValue) ? string.Empty : $" for {rule.GroupBy}={groupValue}";
-        var message = rule.Threshold > 1
-            ? $"{count} matching events within {rule.WindowSeconds} seconds{subject}. {rule.Description}"
-            : $"Matched{subject}: {logEvent.RawLine[..Math.Min(500, logEvent.RawLine.Length)]}";
-
-        var alert = new Alert
-        {
-            Severity = Enum.TryParse<AlertSeverity>(rule.Severity, ignoreCase: true, out var severity) ? severity : AlertSeverity.Warning,
-            Title = $"Detection: {rule.Name}",
-            Message = message,
-            Source = $"Detection/{rule.Id}",
-            Metadata = new Dictionary<string, object>
-            {
-                ["rule_id"] = rule.Id,
-                ["rule_name"] = rule.Name,
-                ["event_id"] = logEvent.Id,
-                ["index"] = logEvent.Index,
-                ["host"] = logEvent.Host ?? string.Empty,
-                ["match_count"] = count,
-                ["group"] = groupValue,
-                ["technique"] = rule.Technique ?? string.Empty,
-            },
-        };
-
         _logger.LogInformation("Detection {Rule} fired{Subject}", rule.Name, subject);
-        return _dispatcher.DispatchAsync(
-            alert,
-            new AlertRecord
-            {
-                Message = rule.Threshold > 1
-                    ? $"{count} matching events within {rule.WindowSeconds} seconds{subject}."
-                    : $"Matched{subject}. See event {logEvent.Id} in index {logEvent.Index}.",
-                SearchName = rule.Name,
-                Query = rule.Condition ?? rule.Pattern ?? string.Empty,
-                ResultCount = count,
-                Channel = "detection",
-                RuleId = rule.Id,
-                EventId = logEvent.Id,
-                Index = logEvent.Index,
-                GroupValue = groupValue,
-                Technique = rule.Technique,
-            },
-            cancellationToken);
+        return _executor.ExecuteAsync(new DetectionFiring(rule, groupValue, count, logEvent), cancellationToken);
     }
 
     private async Task ReloadRulesIfDueAsync(CancellationToken cancellationToken)

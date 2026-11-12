@@ -49,4 +49,10 @@ public sealed class DetectionRule
 
     /// <summary>The MITRE ATT&amp;CK technique this relates to, such as T1110.</summary>
     public string? Technique { get; set; }
+
+    /// <summary>
+    /// What to do when the rule fires. Empty or null notifies through every configured channel, as
+    /// before. Otherwise each action runs in order: notify, write an event, or call a webhook.
+    /// </summary>
+    public List<DetectionAction>? Actions { get; set; }
 }

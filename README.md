@@ -95,6 +95,7 @@ search error | sort -timestamp | head 10
 | Search in the dashboard | Available | Time picker, timeline with drag-to-zoom, fields sidebar with top values and one-click filters, query highlighting and autocomplete, shareable links, CSV and JSON export. |
 | Settings in the dashboard | Available | Every server setting described and editable, with defaults, limits and where each value comes from; API keys; restart. |
 | Importing existing logs | Available | `cabinet-agent import` sends a folder, file or glob once, from any machine, or the history an agent skips. Repeating it stores nothing twice. |
+| Detection actions | Available | When a rule fires: notify, write a searchable `detections` event, or call a webhook — templated and configurable per rule in the dashboard or API. |
 | Storage management | Available | Where the database is, its size and span; move to another file or drive, switch to PostgreSQL, or start empty, from the dashboard, API or Windows installer, with ingest paused only for the switch. |
 | Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
 | Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |

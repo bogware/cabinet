@@ -125,8 +125,8 @@ public sealed class SecurityReviewTests
     {
         var history = new InMemoryAlertHistoryStorage();
         var rules = new DetectionRuleStore(new InMemoryDocumentStore(), new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
-        var dispatcher = new AlertDispatcher(history, Mock.Of<Cabinet.Alerts.IAlertService>(), NullLogger<AlertDispatcher>.Instance);
-        var engine = new DetectionEngine(rules, dispatcher, NullLogger<DetectionEngine>.Instance);
+        var executor = new DetectionActionExecutor(history, Mock.Of<Cabinet.Alerts.IAlertService>(), new Cabinet.Storage.InMemoryStorage(), new HttpClient(), NullLogger<DetectionActionExecutor>.Instance);
+        var engine = new DetectionEngine(rules, executor, NullLogger<DetectionEngine>.Instance);
         await rules.SaveAsync(new DetectionRule { Name = "Password", Pattern = "password", Severity = "Warning" });
         engine.InvalidateRules();
 

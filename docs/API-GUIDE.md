@@ -574,6 +574,31 @@ curl -X POST http://localhost:5000/api/v1/rules/backtest -H "X-API-Key: $KEY" -H
 
 Send `ruleId` instead of `rule` to try a saved rule. The result has `eventsScanned`, `matches`, `wouldFire`, the groups that would fire most (`topGroups`) and sample firings. It stops at `maxEvents` (default 1,000,000) and sets `truncated`.
 
+#### Actions
+
+Every firing is saved to alert history. A rule's `actions` say what else happens; with none, it notifies through every configured channel, as before. Each action is one of:
+
+- `notify` — send through the configured channels (email, webhook, console, file).
+- `event` — write a new event into an index (`target`, default `detections`), searchable like any log and able to feed dashboards and even other detections. `fields` adds fields to it.
+- `webhook` — POST the firing as JSON to `target` (an http/https URL).
+
+`severity` overrides the rule's severity for that action. `message` and each `fields` value fill in placeholders: `{rule} {group} {count} {window} {severity} {host} {index} {event_id} {technique} {time} {line}`.
+
+```bash
+curl -X POST http://localhost:5000/api/v1/rules -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{
+  "name": "Offensive chat",
+  "condition": "match(ChatMessage, \"(?i)\\\\bslur\\\\b\")",
+  "groupBy": "SteamId",
+  "severity": "Warning",
+  "actions": [
+    { "type": "event", "target": "moderation", "message": "{group} flagged: {line}", "fields": { "offender": "{group}" } },
+    { "type": "webhook", "target": "https://example.com/mod-hook" }
+  ]
+}'
+```
+
+Emitted events carry source type `detection` and are written below the detection layer, so they never trigger detection again.
+
 ### Alerts
 
 `GET /api/v1/alerts`, `GET /api/v1/alerts/{id}` and `POST /api/v1/alerts/{id}/acknowledge` read the history that detections and scheduled searches write, newest first. Callers limited to some indexes see only alerts about those, and acknowledging needs `Alerts`. Each alert names the event that caused it (`eventId`, `index`), rather than repeating its line.

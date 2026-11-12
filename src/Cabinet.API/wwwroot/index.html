@@ -1144,6 +1144,10 @@
                 <div class="form-group"><label for="ruleCooldown">Quiet for seconds after firing</label><input type="number" id="ruleCooldown" min="0" value="300"></div>
             </div>
             <div class="form-group"><label for="ruleDescription">Description</label><textarea id="ruleDescription"></textarea></div>
+            <h4 class="modal-subhead">When it fires</h4>
+            <p class="page-note">With nothing here, it notifies through every configured channel. Add actions to also write a searchable event or call a webhook. Placeholders: <code>{rule} {group} {count} {host} {event_id} {line}</code>.</p>
+            <div id="ruleActions"></div>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="addRuleAction">Add action</button>
             <h4 class="modal-subhead">Try it</h4>
             <div class="form-group"><label for="ruleTestLine">A log line</label><input type="text" id="ruleTestLine"></div>
             <button type="button" class="btn btn-secondary btn-sm" data-click="testRule">Test</button>

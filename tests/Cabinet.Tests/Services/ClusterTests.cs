@@ -148,7 +148,7 @@ public sealed class PostgresClusterCoordinatorTests : ClusterCoordinatorTests, I
 
         DetectionEngine Instance() => new(
             rules,
-            new AlertDispatcher(history, Mock.Of<IAlertService>(), NullLogger<AlertDispatcher>.Instance),
+            new DetectionActionExecutor(history, Mock.Of<IAlertService>(), new Cabinet.Storage.InMemoryStorage(), new HttpClient(), NullLogger<DetectionActionExecutor>.Instance),
             NullLogger<DetectionEngine>.Instance,
             CreateInstance());
         var first = Instance();

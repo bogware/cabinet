@@ -464,7 +464,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.Configure<Cabinet.Core.Configuration.CabinetConfiguration>(configuration);
 
     // Storage — supports SQLite, Memory, PostgreSQL, and OpenSearch.
-    services.AddSingleton<ILogStorage>(sp =>
+    // The "base" store is everything below detection. Detection events are written to it directly,
+    // so they're stored, encrypted and searchable but never fed back into the detection engine.
+    services.AddKeyedSingleton<ILogStorage>("base", (sp, _) =>
     {
         // Built the same way a storage migration builds it, so the two can't disagree
         var backend = Cabinet.API.Services.Storage.StorageBackends.CreateLogStorage(configuration, sp.GetRequiredService<ILoggerFactory>());
@@ -474,11 +476,22 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             backend = new EncryptingLogStorage(backend, sp.GetRequiredService<EncryptionService>(), configuration.GetValue<bool>("Encryption:EncryptRawLine"));
         }
 
-        // Outermost, so that rules see what arrived rather than what was encrypted
-        return new Cabinet.API.Services.DetectingLogStorage(backend, sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());
+        return backend;
     });
 
+    services.AddSingleton<ILogStorage>(sp =>
+        // Outermost, so that rules see what arrived rather than what was encrypted
+        new Cabinet.API.Services.DetectingLogStorage(
+            sp.GetRequiredKeyedService<ILogStorage>("base"),
+            sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>()));
+
     services.AddSingleton<Cabinet.API.Services.AlertDispatcher>();
+    services.AddSingleton<Cabinet.API.Services.DetectionActionExecutor>(sp => new Cabinet.API.Services.DetectionActionExecutor(
+        sp.GetRequiredService<IAlertHistoryStorage>(),
+        sp.GetRequiredService<Cabinet.Alerts.IAlertService>(),
+        sp.GetRequiredKeyedService<ILogStorage>("base"),
+        new HttpClient { Timeout = TimeSpan.FromSeconds(10) },
+        sp.GetRequiredService<ILogger<Cabinet.API.Services.DetectionActionExecutor>>()));
     services.AddSingleton<Cabinet.API.Services.DetectionRuleStore>();
     services.AddSingleton<Cabinet.API.Services.DetectionEngine>();
     services.AddHostedService(sp => sp.GetRequiredService<Cabinet.API.Services.DetectionEngine>());

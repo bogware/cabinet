@@ -227,6 +227,25 @@ public class DetectionRulesController : ControllerBase
             return Problem(detail: "Severity must be Info, Warning, Error or Critical", statusCode: 400);
         }
 
+        foreach (var action in rule.Actions ?? [])
+        {
+            var type = action.Type?.ToLowerInvariant();
+            if (type is not ("notify" or "event" or "webhook"))
+            {
+                return Problem(detail: $"Action type must be notify, event or webhook, not '{action.Type}'", statusCode: 400);
+            }
+
+            if (type == "webhook" && (!Uri.TryCreate(action.Target, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")))
+            {
+                return Problem(detail: "A webhook action needs an http or https URL in Target", statusCode: 400);
+            }
+
+            if (action.Severity != null && !Enum.TryParse<Cabinet.Alerts.AlertSeverity>(action.Severity, ignoreCase: true, out _))
+            {
+                return Problem(detail: "An action's severity must be Info, Warning, Error or Critical", statusCode: 400);
+            }
+        }
+
         try
         {
             _ = new BqlEventMatcher(rule.Pattern, rule.Condition, rule.Extract);

@@ -22,6 +22,7 @@ public sealed class DetectionEngineTests
     private readonly InMemoryDocumentStore _documents = new();
     private readonly InMemoryAlertHistoryStorage _history = new();
     private readonly Mock<IAlertService> _alerts = new();
+    private readonly InMemoryStorage _emitted = new();
     private readonly DetectionRuleStore _rules;
     private readonly DetectionEngine _engine;
 
@@ -29,8 +30,8 @@ public sealed class DetectionEngineTests
     {
         var configuration = new ConfigurationBuilder().Build();
         _rules = new DetectionRuleStore(_documents, configuration);
-        var dispatcher = new AlertDispatcher(_history, _alerts.Object, NullLogger<AlertDispatcher>.Instance);
-        _engine = new DetectionEngine(_rules, dispatcher, NullLogger<DetectionEngine>.Instance);
+        var executor = new DetectionActionExecutor(_history, _alerts.Object, _emitted, new HttpClient(), NullLogger<DetectionActionExecutor>.Instance);
+        _engine = new DetectionEngine(_rules, executor, NullLogger<DetectionEngine>.Instance);
     }
 
     private static LogEvent Event(string line, int seconds = 0) => new() { RawLine = line, Timestamp = Start.AddSeconds(seconds) };

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-11
+
+### Added
+
+- Detection rules can now carry **actions** that run when they fire, configurable in the dashboard (Detections) or through the API. A rule with no actions notifies as before. The actions are:
+  - **notify** — through every configured channel.
+  - **event** — write a new event into an index (default `detections`), searchable like any log and able to feed dashboards or even other detections. Extra fields are templated.
+  - **webhook** — POST the firing as JSON to a URL.
+  Each action can override severity and template its message and fields with `{rule} {group} {count} {host} {event_id} {line}` and more. Emitted events are written below the detection layer, so a detection can raise an event without re-triggering detection.
+
 ## [2.3.6] - 2026-11-10
 
 ### Added

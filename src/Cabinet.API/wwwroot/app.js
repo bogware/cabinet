@@ -578,7 +578,10 @@ async function loadRules() {
             const firesOn = rule.threshold > 1
                 ? `${fmt(rule.threshold)} matches in ${fmt(rule.windowSeconds)}s${rule.groupBy ? ' by ' + esc(rule.groupBy) : ''}`
                 : 'Each match';
-            tr.innerHTML = `<td><div style="font-weight:500">${esc(rule.name)}</div><div class="chart-note">${esc(rule.description || '')}</div></td>
+            const actionSummary = (rule.actions && rule.actions.length)
+                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
+                : 'notify';
+            tr.innerHTML = `<td><div style="font-weight:500">${esc(rule.name)}</div><div class="chart-note">${esc(rule.description || '')}</div><div class="chart-note">On fire: ${actionSummary}</div></td>
                 <td>${sevBadge(rule.severity)}</td>
                 <td>${firesOn}</td>
                 <td>${esc(rule.technique || '-')}</td>
@@ -625,6 +628,7 @@ function showRuleModal(id) {
     document.getElementById('ruleWindow').value = rule.windowSeconds || 300;
     document.getElementById('ruleCooldown').value = rule.cooldownSeconds ?? 300;
     document.getElementById('ruleDescription').value = rule.description || '';
+    renderRuleActions(rule.actions);
     document.getElementById('ruleTestResult').textContent = '';
     openModal('ruleModal');
 }
@@ -642,7 +646,72 @@ function readRuleForm() {
         windowSeconds: Number(document.getElementById('ruleWindow').value),
         cooldownSeconds: Number(document.getElementById('ruleCooldown').value),
         description: text('ruleDescription'),
+        actions: readRuleActions(),
     };
+}
+
+const SEVERITIES = ['Info', 'Warning', 'Error', 'Critical'];
+
+function renderRuleActions(actions) {
+    document.getElementById('ruleActions').innerHTML = '';
+    (actions || []).forEach(addRuleAction);
+}
+
+function addRuleAction(action) {
+    action = (action && typeof action === 'object' && 'type' in action) ? action : { type: 'notify' };
+    const row = document.createElement('div');
+    row.className = 'rule-action';
+    row.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;margin:6px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+    const sevOptions = ['<option value="">(rule severity)</option>'].concat(SEVERITIES.map(s => `<option${action.severity === s ? ' selected' : ''}>${s}</option>`)).join('');
+    row.innerHTML = `
+        <select class="ra-type" style="width:auto">
+            <option value="notify"${action.type === 'notify' ? ' selected' : ''}>Notify channels</option>
+            <option value="event"${action.type === 'event' ? ' selected' : ''}>Write an event</option>
+            <option value="webhook"${action.type === 'webhook' ? ' selected' : ''}>Call a webhook</option>
+        </select>
+        <input class="ra-target" style="flex:1;min-width:160px" value="${esc(action.target || '')}">
+        <select class="ra-sev" style="width:auto">${sevOptions}</select>
+        <input class="ra-msg" style="flex:1;min-width:160px" placeholder="Message (optional)" value="${esc(action.message || '')}">
+        <textarea class="ra-fields" style="width:100%;min-height:40px" placeholder="Event fields: field={group} per line">${esc(fieldsToText(action.fields))}</textarea>
+        <button type="button" class="btn btn-danger btn-sm ra-del">Remove</button>`;
+    document.getElementById('ruleActions').appendChild(row);
+    const type = row.querySelector('.ra-type');
+    const apply = () => {
+        const t = type.value;
+        row.querySelector('.ra-target').style.display = t === 'notify' ? 'none' : '';
+        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : 'Index for the event (default detections)';
+        row.querySelector('.ra-fields').style.display = t === 'event' ? '' : 'none';
+    };
+    type.addEventListener('change', apply);
+    row.querySelector('.ra-del').addEventListener('click', () => row.remove());
+    apply();
+}
+
+function fieldsToText(fields) {
+    return fields ? Object.entries(fields).map(([k, v]) => `${k}=${v}`).join('\n') : '';
+}
+
+function readRuleActions() {
+    const rows = [...document.querySelectorAll('#ruleActions .rule-action')];
+    return rows.map(row => {
+        const type = row.querySelector('.ra-type').value;
+        const action = { type };
+        const target = row.querySelector('.ra-target').value.trim();
+        const sev = row.querySelector('.ra-sev').value;
+        const msg = row.querySelector('.ra-msg').value.trim();
+        if (type !== 'notify' && target) action.target = target;
+        if (sev) action.severity = sev;
+        if (msg) action.message = msg;
+        if (type === 'event') {
+            const fields = {};
+            row.querySelector('.ra-fields').value.split('\n').forEach(line => {
+                const i = line.indexOf('=');
+                if (i > 0) fields[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+            });
+            if (Object.keys(fields).length) action.fields = fields;
+        }
+        return action;
+    });
 }
 
 async function testRule() {
