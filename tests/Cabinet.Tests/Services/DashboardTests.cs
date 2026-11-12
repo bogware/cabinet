@@ -226,6 +226,42 @@ public sealed class DashboardTests
         drawn.Should().AllSatisfy(svg => svg.Should().NotContain("<img"));
     }
 
+    private static Engine Tail()
+    {
+        var engine = new Engine();
+        engine.Execute("var window = {};");
+        engine.Execute(Asset("v3.js"));
+        return engine;
+    }
+
+    [Theory]
+    [InlineData("disk full on web-1", "disk", "<mark>disk</mark> full on web-1", true)]
+    [InlineData("Disk FULL", "full disk", "<mark>Disk</mark> <mark>FULL</mark>", true)]
+    [InlineData("nothing here", "disk", "nothing here", false)]
+    [InlineData("a.b(c) a.b", "a.b(c)", "<mark>a.b(c)</mark> a.b", true)]
+    public void LiveTail_HighlightsTheWords_AsPlainText(string line, string words, string html, bool matched)
+    {
+        var engine = Tail();
+        engine.SetValue("line", line);
+        engine.SetValue("words", words);
+
+        engine.Execute("var result = highlightHtml(line, highlightTerms(words));");
+
+        engine.Evaluate("result.html").AsString().Should().Be(html);
+        engine.Evaluate("result.matched").AsBoolean().Should().Be(matched);
+    }
+
+    [Fact]
+    public void LiveTail_EscapesTheLine_AroundAndInsideMatches()
+    {
+        var engine = Tail();
+        engine.SetValue("line", "<img src=x onerror=alert(1)> img");
+
+        var html = engine.Evaluate("highlightHtml(line, highlightTerms('img')).html").AsString();
+
+        html.Should().NotContain("<img").And.Contain("&lt;<mark>img</mark>");
+    }
+
     [Fact]
     public void Charts_ExplainThemselves_ToScreenReaders()
     {

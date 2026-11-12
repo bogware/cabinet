@@ -1318,6 +1318,8 @@ function toggleTail() {
     document.getElementById('tailStartBtn').textContent = 'Stop';
     document.getElementById('tailStartBtn').classList.remove('btn-primary');
     document.getElementById('tailStartBtn').classList.add('btn-danger');
+    document.getElementById('tailPauseBtn').disabled = false;
+    setTailPaused(false);
 
     // SSE connection with API key via query param not supported; use fetch streaming instead
     const controller = new AbortController();
@@ -1341,21 +1343,8 @@ function toggleTail() {
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         try {
-                            const evt = JSON.parse(line.slice(6));
-                            tailCount++;
-                            const div = document.createElement('div');
-                            div.style.cssText = 'padding:2px 0;border-bottom:1px solid rgba(48,54,61,0.3)';
-                            const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
-                            const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE','DEBUG','INFO','WARN','ERROR','CRIT','FATAL'][Math.min(parseInt(evt.severity)||0, 6)]}</span>` : '';
-                            const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
-                            div.innerHTML = `<span style="color:var(--text-muted);margin-right:8px">${esc(ts)}</span>${sev}<span>${esc(raw)}</span>`;
-                            output.appendChild(div);
-                            // Auto-scroll to bottom
-                            output.scrollTop = output.scrollHeight;
-                            // Limit DOM nodes to prevent memory issues
-                            while (output.children.length > 2000) output.removeChild(output.firstChild);
-                            document.getElementById('tailCount').textContent = tailCount + ' events';
-                        } catch {}
+                            receiveTailEvent(JSON.parse(line.slice(6)));
+                        } catch (parseError) { console.warn('Skipped a live tail line', parseError); }
                     }
                 }
             }
@@ -1368,6 +1357,8 @@ function toggleTail() {
             }
         }
         // Clean up
+        document.getElementById('tailPauseBtn').disabled = true;
+        setTailPaused(false);
         document.getElementById('tailDot').style.display = 'none';
         document.getElementById('tailStartBtn').textContent = 'Start';
         document.getElementById('tailStartBtn').classList.remove('btn-danger');
@@ -1378,6 +1369,7 @@ function toggleTail() {
 
 function clearTail() {
     document.getElementById('tailOutput').innerHTML = '';
+    tailBuffer = [];
     tailCount = 0;
     document.getElementById('tailCount').textContent = '0 events';
 }
