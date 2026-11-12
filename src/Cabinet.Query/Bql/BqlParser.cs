@@ -261,6 +261,7 @@ public sealed class BqlParser : IQueryParser
         if (Current.IsKeyword("xyseries")) { Advance(); return ParseXyseriesStage(); }
         if (Current.IsKeyword("untable")) { Advance(); return ParseUntableStage(); }
         if (Current.IsKeyword("convert")) { Advance(); return ParseConvertStage(); }
+        if (Current.IsKeyword("iplocation")) { Advance(); return ParseIplocationStage(); }
 
         // SPL-style keywords
         if (Current.IsKeyword("eventstats")) { Advance(); return ParseEventStatsStage(); }
@@ -1641,7 +1642,22 @@ public sealed class BqlParser : IQueryParser
             "fillnull", "bucket", "bin", "makeresults", "mvexpand",
             "chart", "filldown", "addcoltotals", "inputlookup",
             "rare", "regex", "fieldsummary", "xyseries", "untable", "convert",
-            "macro", "subsearch", "multisearch");
+            "macro", "subsearch", "multisearch", "iplocation");
+
+    private IplocationStage ParseIplocationStage()
+    {
+        // iplocation [prefix=x] field
+        var prefix = string.Empty;
+        if (Current.IsKeyword("prefix") && Peek(1).Kind == BqlTokenKind.Equals)
+        {
+            Advance();
+            Advance();
+            prefix = Current.Value;
+            Advance();
+        }
+
+        return new IplocationStage { Field = ExpectIdentifier(), Prefix = prefix };
+    }
 
     // ─── Legacy QueryPlan conversion ─────────────────────────
 
@@ -1678,6 +1694,7 @@ public sealed class BqlParser : IQueryParser
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
+        IplocationStage ip => new LegacyIplocationOperator(ip),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),

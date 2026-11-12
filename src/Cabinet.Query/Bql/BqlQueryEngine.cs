@@ -395,7 +395,7 @@ public sealed class BqlQueryEngine : IQueryEngine
 
     /// <summary>Stages that handle each row on its own, so they can run a batch at a time.</summary>
     private static bool IsRowStage(BqlStage stage) => stage is
-        SearchStage or WhereStage or EvalStage or RexStage or RenameStage or RegexStage
+        SearchStage or WhereStage or EvalStage or RexStage or RenameStage or RegexStage or IplocationStage
         or FieldAliasStage or FillNullStage or BucketStage or TableStage;
 
     private async Task<long> FeedAsync(
@@ -697,6 +697,7 @@ public sealed class BqlQueryEngine : IQueryEngine
         StreamStatsStage ss => new LegacyStreamStatsOperator(ss.Aggregations, ss.GroupByFields, ss.Window),
         FillNullStage fn => new LegacyFillNullOperator(fn.DefaultValue, fn.Fields),
         BucketStage bk => new LegacyBucketOperator(bk.Field, bk.Span, bk.NumericSpan, bk.Alias),
+        IplocationStage ip => new LegacyIplocationOperator(ip),
         MakeResultsStage mr => new LegacyMakeResultsOperator(mr.Count),
         MvExpandStage mv => new LegacyMvExpandOperator(mv.Field, mv.Limit),
         ChartStage ch => new LegacyChartOperator(ch.Aggregations, ch.OverField, ch.ByField),

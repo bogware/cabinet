@@ -93,6 +93,20 @@ try
     builder.Services.AddSingleton(serverLimits);
     Cabinet.Query.Bql.BqlEventMatcher.RegexTimeout = TimeSpan.FromMilliseconds(serverLimits.DetectionRegexTimeoutMs);
     Cabinet.Query.Bql.QueryRegex.PerEventTimeout = TimeSpan.FromMilliseconds(serverLimits.QueryRegexTimeoutMs);
+
+    // iplocation reads a MaxMind GeoLite2 or GeoIP2 City database, which people download themselves
+    if (builder.Configuration["GeoIp:DatabasePath"] is { Length: > 0 } geoIpPath)
+    {
+        try
+        {
+            Cabinet.Query.Bql.BqlGeoIp.Lookup = new Cabinet.Query.Bql.MaxMindGeoIpLookup(geoIpPath);
+            Log.Information("GeoIP database loaded from {Path}", geoIpPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or MaxMind.Db.InvalidDatabaseException)
+        {
+            Log.Error(ex, "Couldn't open the GeoIP database {Path}; iplocation won't work until it's fixed", geoIpPath);
+        }
+    }
     builder.WebHost.ConfigureKestrel(options =>
     {
         options.Limits.MaxRequestBodySize = serverLimits.MaxRequestBodyMB * ServerLimits.Megabyte;

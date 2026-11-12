@@ -387,7 +387,7 @@ function stopDashboardRefresh() {
     if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
 }
 
-const PANEL_VIZ = { Table: 'table', LineChart: 'line', AreaChart: 'area', BarChart: 'bar', SingleValue: 'stat' };
+const PANEL_VIZ = { Table: 'table', LineChart: 'line', AreaChart: 'area', BarChart: 'bar', SingleValue: 'stat', PieChart: 'pie', Gauge: 'gauge', Heatmap: 'heatmap', Map: 'map' };
 
 async function renderPanel(panel, body) {
     if (!panel.query) { body.innerHTML = '<p class="chart-note">No query defined.</p>'; return; }
@@ -434,7 +434,7 @@ function addPanelRow(panel) {
     const data = panel && panel.title !== undefined ? panel : { title: '', query: '', type: 'LineChart', width: 6 };
     const row = document.createElement('div');
     row.className = 'panel-row';
-    const options = [['LineChart', 'Line'], ['AreaChart', 'Stacked area'], ['BarChart', 'Bars'], ['SingleValue', 'Single value'], ['Table', 'Table']]
+    const options = [['LineChart', 'Line'], ['AreaChart', 'Stacked area'], ['BarChart', 'Bars'], ['PieChart', 'Pie'], ['SingleValue', 'Single value'], ['Gauge', 'Gauge'], ['Heatmap', 'Heatmap'], ['Map', 'Map'], ['Table', 'Table']]
         .map(([value, label]) => `<option value="${value}"${data.type === value ? ' selected' : ''}>${label}</option>`).join('');
     const widths = [[12, 'Full'], [6, 'Half'], [4, 'Third'], [3, 'Quarter']]
         .map(([value, label]) => `<option value="${value}"${Number(data.width) === value ? ' selected' : ''}>${label}</option>`).join('');

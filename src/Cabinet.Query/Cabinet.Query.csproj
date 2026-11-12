@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="MaxMind.Db" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Cabinet.Core\Cabinet.Core.csproj" />
     <ProjectReference Include="..\Cabinet.Storage\Cabinet.Storage.csproj" />
   </ItemGroup>

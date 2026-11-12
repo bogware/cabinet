@@ -178,6 +178,55 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public void Pie_FoldsSmallSlicesIntoOther_AndDropsNonPositive()
+    {
+        var shaped = Evaluate("""
+            CabinetCharts.shape(Array.from({ length: 12 }, (_, i) => ({ host: 'h' + i, count: 12 - i })).concat([{ host: 'neg', count: -5 }]), 'pie').slices.map(s => s.label)
+            """);
+
+        shaped.Should().Be("""["h0","h1","h2","h3","h4","h5","h6","Other"]""");
+    }
+
+    [Fact]
+    public void Gauge_UsesAMaxColumn_OrARoundNumberAboveTheValue()
+    {
+        Evaluate("CabinetCharts.shape([{ used: 70, max: 200 }], 'gauge')").Should().Contain("\"max\":200");
+        Evaluate("CabinetCharts.shape([{ used: 73 }], 'gauge')").Should().Contain("\"kind\":\"gauge\"").And.Contain("\"max\":80");
+    }
+
+    [Fact]
+    public void Map_NeedsCoordinates()
+    {
+        Evaluate("CabinetCharts.shape([{ lat: 51.5, lon: -0.1, City: 'London', count: 3 }], 'map')")
+            .Should().Contain("\"kind\":\"map\"").And.Contain("\"label\":\"London\"");
+        Evaluate("CabinetCharts.shape([{ host: 'a', count: 3 }], 'map')").Should().Contain("\"kind\":\"table\"");
+    }
+
+    [Fact]
+    public void Heatmap_IsGroupsOverTime()
+    {
+        Evaluate("""CabinetCharts.shape([{ _time: "2026-03-04T01:00:00Z", host: "a", count: 1 }, { _time: "2026-03-04T02:00:00Z", host: "b", count: 2 }], 'heatmap')""")
+            .Should().Contain("\"kind\":\"heatmap\"");
+    }
+
+    [Fact]
+    public void NewCharts_EscapeLogContent()
+    {
+        var engine = Charts();
+        engine.SetValue("payload", "<img src=x onerror=alert(1)>");
+
+        var drawn = new[]
+        {
+            "CabinetCharts.pieSvg(CabinetCharts.shape([{ host: payload, count: 1 }, { host: 'b', count: 2 }], 'pie'), 200)",
+            "CabinetCharts.gaugeSvg(Object.assign(CabinetCharts.shape([{ x: 1 }], 'gauge'), { label: payload }), 300)",
+            "CabinetCharts.heatmapSvg(CabinetCharts.shape([{ _time: '2026-03-04T01:00:00Z', host: payload, count: 1 }], 'heatmap'), 600)",
+            "CabinetCharts.mapSvg(CabinetCharts.shape([{ lat: 1, lon: 2, City: payload, count: 1 }], 'map'), 600)",
+        }.Select(script => engine.Evaluate(script).AsString());
+
+        drawn.Should().AllSatisfy(svg => svg.Should().NotContain("<img"));
+    }
+
+    [Fact]
     public void Charts_ExplainThemselves_ToScreenReaders()
     {
         var svg = Charts().Evaluate("""

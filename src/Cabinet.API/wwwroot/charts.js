@@ -41,11 +41,37 @@ const CabinetCharts = (() => {
 
         const table = { kind: 'table', columns: columns.filter(c => !c.startsWith('_') || c === '_time'), rows };
         if (viz === 'table') return table;
+
+        // A map needs coordinates, such as from iplocation then stats count by lat, lon
+        if (viz === 'map') {
+            const latKey = columns.find(c => /^(lat|latitude)$/i.test(c));
+            const lonKey = columns.find(c => /^(lon|lng|long|longitude)$/i.test(c));
+            if (!latKey || !lonKey) return table;
+            const valueKey = numeric.find(c => c !== latKey && c !== lonKey);
+            const labelKey = labels.find(c => c !== latKey && c !== lonKey);
+            const points = rows
+                .map(r => ({ lat: Number(r[latKey]), lon: Number(r[lonKey]), value: valueKey ? Number(r[valueKey]) || 0 : 1, label: labelKey ? String(r[labelKey] ?? '') : '' }))
+                .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180);
+            return points.length ? { kind: 'map', points, valueKey: valueKey || 'count', rows } : table;
+        }
         if (isEvents && !viz) return table;
         if (numeric.length === 0) return table;
 
+        if (viz === 'gauge') {
+            const label = numeric[0];
+            const value = Number(rows[0][label]) || 0;
+            const maxKey = numeric.find(c => /^(max|limit|target)$/i.test(c));
+            const max = maxKey ? Number(rows[0][maxKey]) || 0 : 0;
+            return { kind: 'gauge', label, value, max: max > 0 ? max : niceTicks(Math.abs(value) || 1).slice(-1)[0] };
+        }
+
         const wantsStat = viz === 'stat' || (!viz && rows.length === 1 && numeric.length === 1 && labels.length === 0 && !timeKey);
         if (wantsStat) return { kind: 'stat', label: numeric[0], value: rows[0][numeric[0]] };
+
+        if (viz === 'heatmap') {
+            if (!timeKey || !labels[0]) return table;
+            return { ...timeSeries(rows, timeKey, numeric, labels[0]), kind: 'heatmap' };
+        }
 
         if (timeKey && viz !== 'bar') {
             return { ...timeSeries(rows, timeKey, numeric, labels[0]), kind: viz === 'area' ? 'area' : 'line' };
@@ -59,6 +85,14 @@ const CabinetCharts = (() => {
         const sorted = rows
             .map(r => ({ label: r[labelKey] === null || r[labelKey] === undefined || r[labelKey] === '' ? '(empty)' : String(r[labelKey]), value: Number(r[valueKey]) || 0 }))
             .sort((a, b) => b.value - a.value);
+        if (viz === 'pie') {
+            // A pie of negative parts means nothing; slices past what can be told apart fold into Other
+            const positive = sorted.filter(s => s.value > 0);
+            const slices = positive.slice(0, MAX_SERIES - 1);
+            const rest = positive.slice(MAX_SERIES - 1).reduce((sum, s) => sum + s.value, 0);
+            if (rest > 0) slices.push({ label: 'Other', value: rest });
+            return slices.length ? { kind: 'pie', labelKey, valueKey, slices, rows } : table;
+        }
         return { kind: 'bar', labelKey, valueKey, bars: sorted.slice(0, MAX_BARS), hidden: Math.max(0, sorted.length - MAX_BARS), rows };
     }
 
@@ -201,6 +235,95 @@ const CabinetCharts = (() => {
         return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${escapeText(summary)}" tabindex="0">${parts.join('')}<g class="chart-hover"></g></svg>`;
     }
 
+    /** A donut: each slice's share of the total. */
+    function pieSvg(data, size) {
+        const total = data.slices.reduce((sum, s) => sum + s.value, 0) || 1;
+        const r = size / 2 - 4;
+        const inner = r * 0.58;
+        const c = size / 2;
+        let angle = -Math.PI / 2;
+        const point = (radius, a) => `${(c + radius * Math.cos(a)).toFixed(2)},${(c + radius * Math.sin(a)).toFixed(2)}`;
+        const parts = data.slices.map((s, n) => {
+            const sweep = (s.value / total) * Math.PI * 2;
+            const end = angle + Math.min(sweep, Math.PI * 2 - 1e-4);
+            const large = sweep > Math.PI ? 1 : 0;
+            const path = `M${point(r, angle)} A${r},${r} 0 ${large} 1 ${point(r, end)} L${point(inner, end)} A${inner},${inner} 0 ${large} 0 ${point(inner, angle)} Z`;
+            angle += sweep;
+            const share = ((s.value / total) * 100).toFixed(1);
+            return `<path d="${path}" fill="var(--series-${n + 1})" stroke="var(--chart-surface)" stroke-width="2"><title>${escapeText(`${s.label}: ${formatNumber(s.value)} (${share}%)`)}</title></path>`;
+        });
+        const summary = `${data.valueKey} by ${data.labelKey}: ${data.slices.map(s => `${s.label} ${((s.value / total) * 100).toFixed(1)}%`).join(', ')}`;
+        return `<svg class="chart-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${escapeText(summary)}">${parts.join('')}` +
+            `<text x="${c}" y="${c + 6}" text-anchor="middle" class="chart-stat-value" style="font-size:${Math.round(size / 9)}px">${escapeText(formatNumber(total))}</text></svg>`;
+    }
+
+    /** A half-circle gauge from zero to max. */
+    function gaugeSvg(data, width) {
+        const height = Math.round(width * 0.62);
+        const r = width / 2 - 12;
+        const cx = width / 2;
+        const cy = height - 16;
+        const fraction = Math.max(0, Math.min(1, data.max > 0 ? data.value / data.max : 0));
+        const at = f => {
+            const a = Math.PI * (1 - f);
+            return `${(cx + r * Math.cos(a)).toFixed(2)},${(cy - r * Math.sin(a)).toFixed(2)}`;
+        };
+        const track = `M${at(0)} A${r},${r} 0 0 1 ${at(1)}`;
+        const filled = fraction > 0 ? `<path d="M${at(0)} A${r},${r} 0 0 1 ${at(fraction)}" fill="none" stroke="var(--series-1)" stroke-width="18" stroke-linecap="butt"/>` : '';
+        const summary = `${data.label}: ${formatNumber(data.value)} of ${formatNumber(data.max)}`;
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${escapeText(summary)}">` +
+            `<path d="${track}" fill="none" stroke="var(--chart-grid)" stroke-width="18"/>${filled}` +
+            `<text x="${cx}" y="${cy - 8}" text-anchor="middle" class="chart-stat-value">${escapeText(formatNumber(data.value))}</text>` +
+            `<text x="${cx - r}" y="${cy + 14}" text-anchor="middle" class="chart-axis">0</text>` +
+            `<text x="${cx + r}" y="${cy + 14}" text-anchor="middle" class="chart-axis">${escapeText(formatNumber(data.max))}</text></svg>`;
+    }
+
+    /** One row per group and one column per time; darker is more. */
+    function heatmapSvg(data, width) {
+        const labelWidth = 120;
+        const cell = Math.max(4, Math.min(28, (width - labelWidth - 8) / Math.max(1, data.times.length)));
+        const rowHeight = 22;
+        const height = data.series.length * rowHeight + 24;
+        const max = Math.max(1, ...data.series.flatMap(s => s.values.map(v => v || 0)));
+        const span = data.times.length > 1 ? data.times[data.times.length - 1] - data.times[0] : 0;
+        const parts = [];
+        data.series.forEach((s, row) => {
+            const y = row * rowHeight;
+            parts.push(`<text x="${labelWidth - 6}" y="${y + rowHeight / 2 + 4}" text-anchor="end" class="chart-axis">${escapeText(s.name.length > 18 ? s.name.slice(0, 17) + '…' : s.name)}</text>`);
+            s.values.forEach((v, i) => {
+                const opacity = v ? 0.12 + 0.88 * (v / max) : 0;
+                parts.push(`<rect x="${(labelWidth + i * cell).toFixed(1)}" y="${y + 1}" width="${Math.max(1, cell - 1).toFixed(1)}" height="${rowHeight - 2}" fill="var(--series-1)" fill-opacity="${opacity.toFixed(3)}" stroke="var(--chart-grid)" stroke-width="0.5">` +
+                    `<title>${escapeText(`${s.name}, ${new Date(data.times[i]).toLocaleString()}: ${formatNumber(v || 0)}`)}</title></rect>`);
+            });
+        });
+        const ticks = Math.min(6, data.times.length);
+        for (let t = 0; t < ticks; t++) {
+            const i = ticks === 1 ? 0 : Math.round((t / (ticks - 1)) * (data.times.length - 1));
+            parts.push(`<text x="${(labelWidth + i * cell + cell / 2).toFixed(1)}" y="${height - 6}" text-anchor="middle" class="chart-axis">${escapeText(formatTime(data.times[i], span))}</text>`);
+        }
+        const summary = `Heatmap of ${data.valueKey} for ${data.series.length} groups over ${data.times.length} time periods`;
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${escapeText(summary)}">${parts.join('')}</svg>`;
+    }
+
+    /** Points by latitude and longitude, sized by value, on a 30-degree grid. */
+    function mapSvg(data, width) {
+        const height = Math.round(width / 2);
+        const x = lon => ((lon + 180) / 360) * width;
+        const y = lat => ((90 - lat) / 180) * height;
+        const max = Math.max(1, ...data.points.map(p => p.value));
+        const parts = [`<rect x="0" y="0" width="${width}" height="${height}" fill="var(--chart-surface)" stroke="var(--chart-grid)"/>`];
+        for (let lon = -150; lon <= 150; lon += 30) parts.push(`<line x1="${x(lon)}" x2="${x(lon)}" y1="0" y2="${height}" stroke="var(--chart-grid)" stroke-width="${lon === 0 ? 1.5 : 0.5}"/>`);
+        for (let lat = -60; lat <= 60; lat += 30) parts.push(`<line x1="0" x2="${width}" y1="${y(lat)}" y2="${y(lat)}" stroke="var(--chart-grid)" stroke-width="${lat === 0 ? 1.5 : 0.5}"/>`);
+        [...data.points].sort((a, b) => b.value - a.value).forEach(p => {
+            const radius = 3 + 14 * Math.sqrt(p.value / max);
+            const name = p.label ? `${p.label}: ` : '';
+            parts.push(`<circle cx="${x(p.lon).toFixed(1)}" cy="${y(p.lat).toFixed(1)}" r="${radius.toFixed(1)}" fill="var(--series-1)" fill-opacity="0.55" stroke="var(--series-1)">` +
+                `<title>${escapeText(`${name}${formatNumber(p.value)} (${p.lat.toFixed(2)}, ${p.lon.toFixed(2)})`)}</title></circle>`);
+        });
+        const summary = `Map of ${data.points.length} locations by ${data.valueKey}`;
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${escapeText(summary)}">${parts.join('')}</svg>`;
+    }
+
     function legendHtml(series) {
         if (series.length < 2) return '';
         return `<ul class="chart-legend">${series.map((s, n) => `<li><span class="chart-swatch" style="background:var(--series-${n + 1})"></span>${escapeText(s.name)}</li>`).join('')}</ul>`;
@@ -284,7 +407,7 @@ const CabinetCharts = (() => {
         void span;
     }
 
-    /** Draws a result into an element. viz can be line, area, bar, stat or table, or left out to choose. */
+    /** Draws a result into an element. viz can be line, area, bar, pie, stat, gauge, heatmap, map or table, or left out to choose. */
     function render(container, rows, options = {}) {
         const data = shape(rows, options.viz);
         const height = options.height || 240;
@@ -317,10 +440,31 @@ const CabinetCharts = (() => {
         }
 
         const width = Math.max(320, Math.round(container.clientWidth || 640));
+        if (data.kind === 'pie') {
+            const size = Math.min(height, width);
+            container.innerHTML = `<div class="chart-plot" style="display:flex;justify-content:center">${pieSvg(data, size)}</div>${legendHtml(data.slices.map(s => ({ name: s.label })))}${dataTable}`;
+            return data;
+        }
+
+        if (data.kind === 'gauge') {
+            container.innerHTML = `<div class="chart-plot" style="max-width:${Math.max(240, height * 1.6)}px;margin:0 auto">${gaugeSvg(data, 320)}<p class="chart-note" style="text-align:center">${escapeText(data.label)}</p></div>`;
+            return data;
+        }
+
+        if (data.kind === 'heatmap') {
+            container.innerHTML = `<div class="chart-plot">${heatmapSvg(data, width)}</div>${dataTable}`;
+            return data;
+        }
+
+        if (data.kind === 'map') {
+            container.innerHTML = `<div class="chart-plot">${mapSvg(data, width)}</div>${dataTable}`;
+            return data;
+        }
+
         container.innerHTML = `<div class="chart-plot">${timeSvg(data, width, height, title)}<div class="chart-tooltip" hidden></div></div>${legendHtml(data.series)}${dataTable}`;
         addHover(container, data, height);
         return data;
     }
 
-    return { shape, render, timeSvg, niceTicks, formatNumber, escapeText, tableHtml, barsHtml, legendHtml };
+    return { shape, render, timeSvg, pieSvg, gaugeSvg, heatmapSvg, mapSvg, niceTicks, formatNumber, escapeText, tableHtml, barsHtml, legendHtml };
 })();
