@@ -208,6 +208,29 @@ internal static class FieldValues
         }
     }
 
+    /// <summary>Moves past one value without making it.</summary>
+    public static void Skip(BinaryReader reader)
+    {
+        var tag = reader.ReadByte();
+        var stream = reader.BaseStream;
+        switch (tag)
+        {
+            case Text:
+                stream.Seek(reader.Read7BitEncodedInt(), SeekOrigin.Current);
+                break;
+            case Integer or Real:
+                stream.Seek(8, SeekOrigin.Current);
+                break;
+            case Time:
+                stream.Seek(9, SeekOrigin.Current);
+                break;
+            case Absent or Null or True or False:
+                break;
+            default:
+                throw new InvalidDataException($"Unknown field tag {tag}");
+        }
+    }
+
     /// <summary>Reads a value after its tag. Returns false for an absent field.</summary>
     public static bool Read(BinaryReader reader, out object? value)
     {

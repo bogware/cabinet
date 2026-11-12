@@ -280,14 +280,11 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         {
             var (hot, segments) = shard.Snapshot();
             count += hot.Count(filter.Matches);
-            foreach (var segment in segments.Where(filter.MayMatch))
-            {
-                foreach (var block in segment.Blocks.Where(filter.MayMatch))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    count += filter.WholeBlock(block) ? block.Rows : filter.CountIn(new BlockRows(segment, block));
-                }
-            }
+            var blocks = segments.Where(filter.MayMatch).SelectMany(segment => segment.Blocks.Where(filter.MayMatch).Select(block => (segment, block))).ToList();
+            long counted = 0;
+            Parallel.ForEach(blocks, new ParallelOptions { CancellationToken = cancellationToken }, work =>
+                Interlocked.Add(ref counted, filter.WholeBlock(work.block) ? work.block.Rows : filter.CountIn(new BlockRows(work.segment, work.block))));
+            count += counted;
         }
 
         return count;
@@ -425,6 +422,12 @@ internal sealed class RowFilter
 
     public EventCursor? After => _context.After;
 
+    /// <summary>
+    /// How many blocks the next scan reads ahead. Shared by a query's segments, so once a search
+    /// has shown it reads far, later segments start at full width rather than one block.
+    /// </summary>
+    public int ScanWindow { get; set; } = 1;
+
     /// <summary>Whether matching rows costs more than reading times: text, fields or tags to check.</summary>
     public bool Expensive => _terms.Count > 0 || _context.FieldFilters is { Count: > 0 } || _context.Tags is { Count: > 0 };
 
@@ -501,7 +504,7 @@ internal sealed class RowFilter
             return false;
         }
 
-        if (_terms.Count > 0 && !SearchTerms.Matches(rows.Raw[i], _terms))
+        if (_terms.Count > 0 && !rows.TermMatches(_terms)[i])
         {
             return false;
         }
@@ -632,11 +635,11 @@ internal sealed class RowSource
         var blocks = (descending ? Enumerable.Reverse(segment.Blocks) : segment.Blocks)
             .Where(block => filter.MayMatch(block) && !(cursor is { } c && (descending ? block.MinTicks > c : block.MaxTicks < c)));
         using var pending = blocks.GetEnumerator();
-        var most = filter.Expensive ? Environment.ProcessorCount : 1;
-        var window = 1;
+        var most = filter.Expensive ? Environment.ProcessorCount * 2 : 1;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var window = Math.Min(filter.ScanWindow, most);
             var batch = new List<BlockInfo>(window);
             while (batch.Count < window && pending.MoveNext())
             {
@@ -666,7 +669,7 @@ internal sealed class RowSource
                 }
             }
 
-            window = Math.Min(window * 2, most);
+            filter.ScanWindow = Math.Min(window * 4, most);
         }
     }
 
@@ -684,6 +687,7 @@ internal sealed class RowSource
             }
         }
 
+        rows.Matched = matches.Count;
         return (rows, matches);
     }
 
@@ -753,3 +757,4 @@ internal sealed class RowSource
         return descending ? source.Last >= top.Ticks : source.First <= top.Ticks;
     }
 }
+

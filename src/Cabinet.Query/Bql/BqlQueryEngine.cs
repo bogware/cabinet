@@ -470,11 +470,16 @@ public sealed class BqlQueryEngine : IQueryEngine
     {
         EventCursor? after = null;
 
+        // With filters ahead of a sink that needs few rows, pages start near that many and grow,
+        // so "find x | search ... | head 100" doesn't read 10,000 matches to keep 100
+        var growing = plan.Sink.Remaining is { } needed ? Math.Clamp(needed, 100, PageSize) : PageSize;
+
         while (true)
         {
             // Without filters ahead of it, a sink needing few rows needs only that many events.
             var wanted = plan.RowOperators.Count == 0 ? plan.Sink.Remaining : null;
-            var pageSize = wanted is { } remaining ? Math.Clamp(remaining, 1, PageSize) : PageSize;
+            var pageSize = wanted is { } remaining ? Math.Clamp(remaining, 1, PageSize) : growing;
+            growing = Math.Min(PageSize, growing * 4);
 
             var page = template.Clone();
             page.Limit = pageSize;

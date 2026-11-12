@@ -250,6 +250,32 @@ public sealed class EngineLogStorageTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("needle")]
+    [InlineData("NEEDLE")]
+    [InlineData("café")]
+    [InlineData("x")]
+    public async Task WordSearch_InStoredBytes_MatchesTheWordRule(string term)
+    {
+        string[] lines =
+        [
+            "a needle here", "NEEDLE at start", "the needles", "xneedle", "needle—dash", "naïveneedle", "needleé", "é needle", "needle.",
+            "(needle)", "café open", "Café", "cafés", "x marks", "x", "box", "日本 needle 日本", "needle space", "",
+        ];
+        var engine = Open();
+        var reference = new Cabinet.Storage.InMemoryStorage();
+        var events = lines.Select((line, i) => new LogEvent { Id = $"w{i:D3}", RawLine = line, Timestamp = Start.AddSeconds(i) }).ToList();
+        await engine.StoreBatchAsync(events);
+        await engine.FlushAsync();
+        await reference.StoreBatchAsync(events);
+
+        var found = await engine.QueryAsync(new QueryContext { SearchText = term, Limit = 100 }).Select(e => e.RawLine).ToListAsync();
+        var expected = await reference.QueryAsync(new QueryContext { SearchText = term, Limit = 100 }).Select(e => e.RawLine).ToListAsync();
+
+        found.Should().BeEquivalentTo(expected);
+        (await engine.GetCountAsync(new QueryContext { SearchText = term })).Should().Be(expected.Count);
+    }
+
     private int SegmentFiles() => Directory.EnumerateFiles(_path, "*.seg", SearchOption.AllDirectories).Count();
 
     [Fact]

@@ -42,16 +42,16 @@ Parsing alone runs at 25,000 to 42,000 lines a second on one thread. The server 
 |---|---:|---:|---:|---:|---:|
 | Newest 100 | 2.8 ms | 3.1 ms | 11 ms | 36 ms | 331 ms |
 | Newest 100 on one host | 11 ms | 3.9 ms | 14 ms | 49 ms | 260 ms |
-| Text search for a rare word, first 100 | 531 ms | 288 ms | 11 ms | 27 ms | 538 ms |
+| Text search for a rare word, first 100 | 217 ms | 288 ms | 11 ms | 27 ms | 538 ms |
 | Errors and worse, first 100 | 15 ms | 10 ms | 12 ms | 24 ms | 173 ms |
 | Count everything | 0.1 ms | 144 ms | 44 ms | 19 ms | 156 ms |
 | Last hour: count by host | 3.1 ms | 27 ms | 7.4 ms | 29 ms | 212 ms |
 | All events: count by host | 107 ms | 4.6 s | 292 ms | 17 ms | 37 s |
 | All events: hourly timechart | 34 ms | 3.0 s | 720 ms | 29 ms | 30 s |
 | All events: avg and p95 by host | 201 ms | 14 s | 3.8 s | 30 s | 32 s |
-| All events: top 10 paths | 186 ms | 13 s | 15 s | 33 s | 27 s |
+| All events: top 10 paths | 144 ms | 13 s | 15 s | 33 s | 27 s |
 
-The Cabinet engine is Cabinet's own storage (`Storage:Type=Cabinet`): a write-ahead log, then compressed column segments with summaries and word and ID filters per block of 4,096 events. It counts blocks every event of which matches from their summaries, without reading them, and reads the rest in parallel. The rare word appears in about two blocks in five, so finding 100 of them reads most of the text; PostgreSQL and OpenSearch answer it from a full-text index.
+The Cabinet engine is Cabinet's own storage (`Storage:Type=Cabinet`): a write-ahead log, then compressed column segments with summaries and word and ID filters per block of 4,096 events. It counts blocks every event of which matches from their summaries, without reading them, and reads the rest in parallel. The rare word appears in about two blocks in five, so finding 100 of them reads most of the text. The engine searches the stored UTF-8 bytes in parallel without decoding lines, and decodes only the lines it returns; PostgreSQL and OpenSearch answer it from a full-text index.
 
 In-memory storage sorts every match on each read, so it's for tests rather than volume. The in-memory and OpenSearch `avg and p95` and `top` figures are from the run before aggregates moved into storage, since neither is pushed down there.
 

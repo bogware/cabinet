@@ -479,6 +479,63 @@ internal sealed class SegmentReader : IDisposable
     public void Dispose() => _handle.Dispose();
 }
 
+/// <summary>Finding a lower-case ASCII word in UTF-8 text, ignoring case, without decoding it.</summary>
+internal static class AsciiWord
+{
+    public const int Absent = 0;
+    public const int Present = 1;
+
+    /// <summary>A match touches a non-ASCII character, so only the decoded text can say.</summary>
+    public const int Unsure = 2;
+
+    public static int Find(ReadOnlySpan<byte> line, byte[] term)
+    {
+        if (term.Length == 0)
+        {
+            return Present;
+        }
+
+        var first = term[0];
+        var upper = first is >= (byte)'a' and <= (byte)'z' ? (byte)(first - 32) : first;
+        var unsure = false;
+        var start = 0;
+        while (start <= line.Length - term.Length)
+        {
+            var offset = line[start..].IndexOfAny(first, upper);
+            if (offset < 0)
+            {
+                break;
+            }
+
+            var found = start + offset;
+            if (found > line.Length - term.Length)
+            {
+                break;
+            }
+
+            if (System.Text.Ascii.EqualsIgnoreCase(line.Slice(found, term.Length), term))
+            {
+                var before = found == 0 ? (byte)' ' : line[found - 1];
+                var after = found + term.Length >= line.Length ? (byte)' ' : line[found + term.Length];
+                if (before >= 0x80 || after >= 0x80)
+                {
+                    unsure = true;
+                }
+                else if (!IsWordByte(before) && !IsWordByte(after))
+                {
+                    return Present;
+                }
+            }
+
+            start = found + 1;
+        }
+
+        return unsure ? Unsure : Absent;
+    }
+
+    private static bool IsWordByte(byte b) => b is >= (byte)'a' and <= (byte)'z' or >= (byte)'A' and <= (byte)'Z' or >= (byte)'0' and <= (byte)'9';
+}
+
 /// <summary>A block's rows, decoded column by column as a query needs them.</summary>
 internal sealed class BlockRows
 {
@@ -508,6 +565,82 @@ internal sealed class BlockRows
     public string[] SourceTypes => _sourceTypes ??= ReadStrings("st");
     public byte[] Severities => _severities ??= ReadBytes("sev");
     public string[] Raw => _raw ??= ReadStrings("raw");
+
+    private bool[]? _termMatches;
+
+    // The raw column as matching decompressed it, for reading a matched line without doing it again
+    private (byte[] Buffer, int Length)? _rawBytes;
+    private IReadOnlyList<string>? _matchedTerms;
+
+    /// <summary>
+    /// Which rows have every search term as a word, as <see cref="SearchTerms.Matches"/> decides.
+    /// ASCII terms are found in the stored UTF-8 bytes without making a string per line; only a
+    /// line where a match sits next to a non-ASCII character is decoded, to judge the boundary
+    /// exactly as the rule does.
+    /// </summary>
+    public bool[] TermMatches(IReadOnlyList<string> terms)
+    {
+        if (_termMatches != null && ReferenceEquals(_matchedTerms, terms))
+        {
+            return _termMatches;
+        }
+
+        var matches = new bool[Count];
+        if (_raw != null || terms.Any(t => !System.Text.Ascii.IsValid(t)))
+        {
+            for (var i = 0; i < Count; i++)
+            {
+                matches[i] = SearchTerms.Matches(Raw[i], terms);
+            }
+        }
+        else
+        {
+            using var reader = _segment.Column(_block, "raw")!;
+            var stream = (MemoryStream)reader.BaseStream;
+            _rawBytes = (stream.GetBuffer(), (int)stream.Length);
+            var bytes = _rawBytes.Value.Buffer.AsSpan(0, _rawBytes.Value.Length);
+            var termBytes = terms.Select(t => Encoding.ASCII.GetBytes(t)).ToArray();
+            var at = 0;
+            for (var i = 0; i < Count; i++)
+            {
+                // A BinaryWriter string: a 7-bit encoded byte length, then UTF-8
+                var length = 0;
+                var shift = 0;
+                byte b;
+                do
+                {
+                    b = bytes[at++];
+                    length |= (b & 0x7F) << shift;
+                    shift += 7;
+                }
+                while ((b & 0x80) != 0);
+
+                var line = bytes.Slice(at, length);
+                at += length;
+                var all = true;
+                foreach (var term in termBytes)
+                {
+                    var found = AsciiWord.Find(line, term);
+                    if (found == AsciiWord.Unsure)
+                    {
+                        all = SearchTerms.Matches(Encoding.UTF8.GetString(line), terms);
+                        break;
+                    }
+
+                    if (found == AsciiWord.Absent)
+                    {
+                        all = false;
+                        break;
+                    }
+                }
+
+                matches[i] = all;
+            }
+        }
+
+        _matchedTerms = terms;
+        return _termMatches = matches;
+    }
     private DateTimeKind[] Kinds => _kinds ??= ReadBytes("kind").Select(b => (DateTimeKind)b).ToArray();
 
     private long[] ReadTicks()
@@ -598,8 +731,22 @@ internal sealed class BlockRows
     }
 
     /// <summary>Every row as an event, for returning results.</summary>
+    /// <summary>
+    /// How many of this block's rows a query matched, when it knows. A search whose matches are
+    /// scattered reads a row or two from many blocks, which is cheapest one row at a time; the
+    /// newest 100 read many rows from one block, which is cheapest decoded whole.
+    /// </summary>
+    public int? Matched { get; set; }
+
+    private int _singleReads;
+
     public LogEvent Materialize(int i)
     {
+        if (_raw == null && Matched is <= 2 && ++_singleReads <= 2)
+        {
+            return MaterializeOne(i);
+        }
+
         var logEvent = new LogEvent
         {
             Id = Ids[i],
@@ -666,6 +813,97 @@ internal sealed class BlockRows
     }
 
     private List<(string Name, (bool Present, object? Value)[] Values)>? _allFields;
+
+    /// <summary>One row as an event, skipping over the other rows in each column rather than decoding them.</summary>
+    private LogEvent MaterializeOne(int i)
+    {
+        var logEvent = new LogEvent
+        {
+            Id = Ids[i],
+            RawLine = StringAt("raw", i),
+            Timestamp = new DateTime(Ticks[i], Kinds[i]),
+            Host = NullableAt("host", i),
+            SourceType = StringAt("st", i),
+            Severity = (LogSeverity)Severities[i],
+            Index = _segment.Index,
+        };
+
+        using (var meta = _segment.Column(_block, "meta")!)
+        {
+            for (var k = 0; k < i; k++)
+            {
+                meta.BaseStream.Seek(sizeof(long), SeekOrigin.Current);
+                SkipNullable(meta);
+                meta.BaseStream.Seek(sizeof(long), SeekOrigin.Current);
+                SkipNullable(meta);
+                var tagCount = meta.ReadInt32();
+                for (var t = 0; t < tagCount; t++)
+                {
+                    SkipString(meta);
+                }
+            }
+
+            logEvent.IndexTime = new DateTime(meta.ReadInt64(), DateTimeKind.Utc);
+            logEvent.SourceFile = EventCodec.ReadNullable(meta);
+            logEvent.LineNumber = meta.ReadInt64();
+            logEvent.ParserName = EventCodec.ReadNullable(meta);
+            var tags = meta.ReadInt32();
+            for (var t = 0; t < tags; t++)
+            {
+                logEvent.Tags.Add(meta.ReadString());
+            }
+        }
+
+        foreach (var column in _block.Columns.Keys.Where(c => c.StartsWith("f:", StringComparison.Ordinal)))
+        {
+            using var reader = _segment.Column(_block, column)!;
+            for (var k = 0; k < i; k++)
+            {
+                FieldValues.Skip(reader);
+            }
+
+            if (FieldValues.Read(reader, out var value))
+            {
+                logEvent.Fields[column[2..]] = value;
+            }
+        }
+
+        return logEvent;
+    }
+
+    private string StringAt(string column, int i)
+    {
+        using var reader = column == "raw" && _rawBytes is { } raw
+            ? new BinaryReader(new MemoryStream(raw.Buffer, 0, raw.Length, writable: false), Encoding.UTF8)
+            : _segment.Column(_block, column)!;
+        for (var k = 0; k < i; k++)
+        {
+            SkipString(reader);
+        }
+
+        return reader.ReadString();
+    }
+
+    private string? NullableAt(string column, int i)
+    {
+        using var reader = _segment.Column(_block, column)!;
+        for (var k = 0; k < i; k++)
+        {
+            SkipNullable(reader);
+        }
+
+        return EventCodec.ReadNullable(reader);
+    }
+
+    internal static void SkipString(BinaryReader reader) => reader.BaseStream.Seek(reader.Read7BitEncodedInt(), SeekOrigin.Current);
+
+    private static void SkipNullable(BinaryReader reader)
+    {
+        if (reader.ReadBoolean())
+        {
+            SkipString(reader);
+        }
+    }
 
     private List<(string, (bool, object?)[])> AllFields()
     {
