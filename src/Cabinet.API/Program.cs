@@ -684,6 +684,36 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
             sp.GetRequiredService<ILogger<Cabinet.API.Services.QueryCacheService>>(),
             TimeSpan.FromSeconds(queryResultTtl)));
 
+    // AI investigator: off unless turned on, and a local OpenAI-compatible server unless Claude is chosen
+    var investigatorOptions = configuration.GetSection("Ai").Get<Cabinet.API.Services.Investigator.InvestigatorOptions>() ?? new();
+    if (investigatorOptions.Enabled)
+    {
+        services.AddSingleton(investigatorOptions);
+        if (investigatorOptions.Provider.Equals("anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<Cabinet.API.Services.Investigator.IInvestigatorModel>(new Cabinet.API.Services.Investigator.ClaudeInvestigatorModel(investigatorOptions));
+        }
+        else
+        {
+            // Not the outbound client: the server is usually on this machine or network, which that one refuses
+            services.AddHttpClient("investigator", client => client.Timeout = TimeSpan.FromSeconds(Math.Clamp(investigatorOptions.TimeoutSeconds, 10, 900)));
+            services.AddSingleton<Cabinet.API.Services.Investigator.IInvestigatorModel>(sp => new Cabinet.API.Services.Investigator.OpenAiCompatibleModel(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("investigator"), investigatorOptions,
+                sp.GetRequiredService<ILogger<Cabinet.API.Services.Investigator.OpenAiCompatibleModel>>()));
+        }
+
+        services.AddScoped(sp => new Cabinet.API.Services.Investigator.InvestigatorService(
+            investigatorOptions,
+            sp.GetRequiredService<Cabinet.API.Services.Investigator.IInvestigatorModel>(),
+            sp.GetRequiredService<ILogStorage>(),
+            sp.GetRequiredService<FieldMaskingService>(),
+            sp.GetRequiredService<Cabinet.Query.Bql.QueryLimits>(),
+            sp.GetRequiredService<IAuditLogger>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetService<Cabinet.API.Services.FieldExtractor>(),
+            sp.GetService<IKnowledgeStorage>()));
+    }
+
     // Async search jobs — background execution for long-running queries
     services.AddHostedService<Cabinet.API.Services.SearchJobService>();
 

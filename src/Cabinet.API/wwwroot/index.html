@@ -442,6 +442,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
                 Saved Queries
             </button>
+            <button type="button" class="nav-item" data-page="investigate">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.68 11.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg>
+                Investigate
+            </button>
             <button type="button" class="nav-item" data-page="jobs">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.379 5.227A.25.25 0 0 0 6 5.442v5.117a.25.25 0 0 0 .379.214l4.264-2.559a.25.25 0 0 0 0-.428Z"/></svg>
                 Search Jobs
@@ -749,6 +753,17 @@
             </div>
 
             <!-- ===== CONNECTORS PAGE ===== -->
+            <div class="page" id="page-investigate">
+                <div class="toolbar"><h3>Investigate</h3></div>
+                <p class="page-note" id="investigateStatus">Ask a question about your logs. A language model answers it by running searches with your access, and shows the searches it ran.</p>
+                <div class="panel" style="padding:16px">
+                    <div class="form-group"><label for="investigateQuestion">Question</label>
+                        <textarea id="investigateQuestion" rows="3" maxlength="2000" placeholder="Why did errors on web-1 jump in the last hour?"></textarea></div>
+                    <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary" id="investigateButton" data-click="runInvestigation">Investigate</button></div>
+                    <div id="investigateResult" aria-live="polite"></div>
+                </div>
+            </div>
+
             <div class="page" id="page-connectors">
                 <div class="toolbar">
                     <h3>Connectors</h3>

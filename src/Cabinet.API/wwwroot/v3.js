@@ -85,6 +85,49 @@ function showTailEvent(evt, pauseOnMatch) {
     if (matched && pauseOnMatch) setTailPaused(true);
 }
 
+/* ===== Investigate ===== */
+window.EXTRA_PAGES.investigate = { title: 'Investigate', load: () => loadInvestigatorStatus() };
+
+async function loadInvestigatorStatus() {
+    const note = document.getElementById('investigateStatus');
+    const button = document.getElementById('investigateButton');
+    try {
+        const status = await api('GET', '/api/v1/investigate/status');
+        button.disabled = !status.enabled;
+        note.textContent = status.enabled
+            ? `Ask a question about your logs. ${status.model} answers it by running searches with your access, seeing values masked, and shows the searches it ran. Check its conclusions against them.`
+            : 'The AI investigator is off. An administrator can turn it on in Settings, under AI investigator.';
+    } catch (e) { note.textContent = e.message; }
+}
+
+async function runInvestigation() {
+    const question = document.getElementById('investigateQuestion').value.trim();
+    const out = document.getElementById('investigateResult');
+    const button = document.getElementById('investigateButton');
+    if (!question) return;
+    button.disabled = true;
+    out.innerHTML = '<p class="page-note"><span class="spinner"></span> Investigating. This can take a minute.</p>';
+    try {
+        const r = await api('POST', '/api/v1/investigate', { question });
+        const steps = (r.steps || []).map(s => `<li><code>${esc(s.query)}</code> <span style="color:var(--text-secondary)">${s.error ? 'failed: ' + esc(s.error) : esc(String(s.rows)) + ' rows'}</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="openInvestigationSearch" data-args='${esc(JSON.stringify([s.query]))}'>Open</button></li>`).join('');
+        out.innerHTML = `<h4 style="margin-top:16px">Answer</h4><div style="white-space:pre-wrap">${esc(r.answer)}</div>` +
+            `<h4 style="margin-top:16px">Searches it ran</h4>${steps ? `<ol>${steps}</ol>` : '<p class="page-note">None.</p>'}` +
+            `<p class="page-note">${esc(r.model)}</p>`;
+    } catch (e) {
+        out.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+/** Opens one of the investigator's searches on the search page. */
+function openInvestigationSearch(query) {
+    const input = document.getElementById('searchQuery') || document.getElementById('queryInput');
+    if (input) input.value = query;
+    navigate('search');
+}
+
 /* ===== Connectors ===== */
 window.EXTRA_PAGES.connectors = { title: 'Connectors', load: () => loadConnectors() };
 
