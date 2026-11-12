@@ -132,8 +132,8 @@ try
             Description = "Log ingestion, search and alerting API",
             License = new OpenApiLicense
             {
-                Name = "Apache-2.0",
-                Url = new Uri("https://www.apache.org/licenses/LICENSE-2.0")
+                Name = "AGPL-3.0-only",
+                Url = new Uri("https://www.gnu.org/licenses/agpl-3.0.html")
             }
         });
 

@@ -2,7 +2,7 @@
 
 [![.NET 10.0](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
 [![Build](https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg)](https://github.com/bogware/cabinet/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 
 Cabinet is a self-hosted log search system built on .NET 10. It accepts logs over a REST API, OpenTelemetry (OTLP/HTTP), the Splunk HTTP Event Collector (HEC) protocol, syslog and a forwarding agent, stores them in SQLite, PostgreSQL or OpenSearch, and searches them with a pipeline query language called BQL. It also has a web dashboard, saved queries, and scheduled searches that send alerts.
 
@@ -188,4 +188,6 @@ k8s/                  Kubernetes manifests (starting point)
 
 ## License
 
-Cabinet is licensed under the [Apache License 2.0](LICENSE).
+Cabinet is licensed under the [GNU Affero General Public License v3.0](LICENSE), except the forwarding agent (`src/Cabinet.Agent`), which is under the [Apache License 2.0](src/Cabinet.Agent/LICENSE) so it can run anywhere without conditions.
+
+Using Cabinet, including running it for your own organization, carries no obligations. If you modify the server and let others use it over a network, the AGPL asks you to offer them your modified source. Releases before 3.0 remain under Apache-2.0.

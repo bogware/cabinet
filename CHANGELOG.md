@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Planned as 3.0.0. It has breaking changes to search semantics, listed under Changed.
 
+**License:** from 3.0, Cabinet is licensed under the AGPL-3.0, except the forwarding agent, which stays Apache-2.0. Running Cabinet for your own organization carries no obligations; offering a modified server to others over a network means offering them the modified source. Earlier releases remain Apache-2.0.
+
 ### Added
 
 - **Search syntax as in SPL**: OR, AND, NOT or a leading `-`, parentheses, `"quoted phrases"` that must appear in order, `wild*cards` that start at a word, and `field=value` terms (with `!=`, `<`, `>` and wildcards) mixed with words, as in `find error OR host=web-1`. Storage still does the AND of plain words; the rest runs in the pipeline. `earliest=-1d@d latest=now` in a search sets its time range, and `@`, `:` and `#` are allowed in searches, so `find alice@example.com` works.
