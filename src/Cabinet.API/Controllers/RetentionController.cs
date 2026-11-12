@@ -91,7 +91,7 @@ public class RetentionController : ControllerBase
 
         policy.Index = index;
         await _documents.PutAsync(RetentionService.PoliciesCollection, index, policy, cancellationToken);
-        await AuditAsync(index, $"Set retention to {policy.MaxAgeDays} days");
+        await AuditAsync(index, $"Set retention to {policy.MaxAgeDays} days{(policy.ArchiveBeforeDelete ? ", archiving first" : string.Empty)}");
         return Ok(policy);
     }
 

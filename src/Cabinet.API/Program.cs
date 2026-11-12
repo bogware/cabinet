@@ -721,6 +721,28 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Anomaly rules: baselines instead of thresholds, checked by the leader as each window ends
     services.AddSingleton<Cabinet.API.Services.AnomalyRuleStore>();
     services.AddSingleton<Cabinet.API.Services.CaseStore>();
+
+    // Cold storage for events retention removes: a directory, or an S3 bucket
+    var archiveType = configuration["Archive:Type"];
+    if (string.Equals(archiveType, "Directory", StringComparison.OrdinalIgnoreCase))
+    {
+        var archivePath = configuration["Archive:Path"] ?? "archive";
+        services.AddSingleton<Cabinet.API.Services.Archive.IEventArchive>(_ => new Cabinet.API.Services.Archive.DirectoryEventArchive(archivePath));
+    }
+    else if (string.Equals(archiveType, "S3", StringComparison.OrdinalIgnoreCase) && configuration["Archive:S3Bucket"] is { Length: > 0 } archiveBucket)
+    {
+        services.AddSingleton<Cabinet.API.Services.Archive.IEventArchive>(sp => new Cabinet.API.Services.Archive.S3EventArchive(
+            new Cabinet.AWS.Services.S3ArchiveService(
+                sp.GetService<Amazon.S3.IAmazonS3>() ?? new Amazon.S3.AmazonS3Client(),
+                sp.GetRequiredService<ILogger<Cabinet.AWS.Services.S3ArchiveService>>(),
+                archiveBucket),
+            configuration["Archive:S3Prefix"] ?? "cabinet-events"));
+    }
+
+    if (services.Any(service => service.ServiceType == typeof(Cabinet.API.Services.Archive.IEventArchive)))
+    {
+        services.AddSingleton<Cabinet.API.Services.Archive.EventArchiver>();
+    }
     services.AddHostedService<Cabinet.API.Services.AnomalyDetector>();
 
     // Data model acceleration — pre-aggregated summaries for tstats queries

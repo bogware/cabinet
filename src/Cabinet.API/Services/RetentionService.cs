@@ -11,6 +11,9 @@ public class RetentionPolicyDto
 {
     public string Index { get; set; } = string.Empty;
     public int MaxAgeDays { get; set; } = 90;
+
+    /// <summary>Whether events go to the archive before they're deleted.</summary>
+    public bool ArchiveBeforeDelete { get; set; }
 }
 
 /// <summary>
@@ -28,6 +31,8 @@ public sealed class RetentionService
     private readonly int _retentionDays;
     private readonly TamperEvidentAuditLogger? _auditLog;
     private readonly int _auditRetentionDays;
+    private readonly Archive.EventArchiver? _archiver;
+    private readonly bool _archiveByDefault;
 
     public RetentionService(
         ILogger<RetentionService> logger,
@@ -35,8 +40,11 @@ public sealed class RetentionService
         IDocumentStore documents,
         IOptions<CabinetConfiguration> configuration,
         IConfiguration? settings = null,
-        TamperEvidentAuditLogger? auditLog = null)
+        TamperEvidentAuditLogger? auditLog = null,
+        Archive.EventArchiver? archiver = null)
     {
+        _archiver = archiver;
+        _archiveByDefault = settings?.GetValue("Archive:BeforeRetention", false) ?? false;
         _auditLog = auditLog;
         _auditRetentionDays = settings?.GetValue("Audit:RetentionDays", 365) ?? 365;
         _logger = logger;
@@ -55,7 +63,7 @@ public sealed class RetentionService
             }
 
             var policies = (await _documents.ListAsync<RetentionPolicyDto>(PoliciesCollection, cancellationToken))
-                .ToDictionary(policy => policy.Index, policy => policy.MaxAgeDays, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(policy => policy.Index, StringComparer.OrdinalIgnoreCase);
             if (policies.Count == 0 && _retentionDays <= 0)
             {
                 _logger.LogDebug("No retention configured; keeping all events");
@@ -66,13 +74,34 @@ public sealed class RetentionService
             var total = 0;
             foreach (var index in stats.EventsByIndex.Keys)
             {
-                var days = policies.TryGetValue(index, out var policyDays) ? policyDays : _retentionDays;
+                var policy = policies.GetValueOrDefault(index);
+                var days = policy?.MaxAgeDays ?? _retentionDays;
                 if (days <= 0)
                 {
                     continue;
                 }
 
                 var before = DateTime.UtcNow.AddDays(-days);
+                if (policy?.ArchiveBeforeDelete ?? _archiveByDefault)
+                {
+                    if (_archiver == null)
+                    {
+                        // Deleting what was meant to be kept can't be undone
+                        _logger.LogError("Index {Index} archives before retention, but no archive is set up (Archive:Type); its events weren't deleted", index);
+                        continue;
+                    }
+
+                    try
+                    {
+                        await _archiver.ArchiveAsync(_storage, index, before, cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogError(ex, "Archiving index {Index} failed, so its old events weren't deleted", index);
+                        continue;
+                    }
+                }
+
                 var deleted = await _storage.PurgeIndexEventsAsync(index, before, cancellationToken);
                 total += deleted;
                 if (deleted > 0)
