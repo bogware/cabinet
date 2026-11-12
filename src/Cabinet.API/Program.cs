@@ -720,6 +720,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
 
     // Anomaly rules: baselines instead of thresholds, checked by the leader as each window ends
     services.AddSingleton<Cabinet.API.Services.AnomalyRuleStore>();
+    services.AddSingleton<Cabinet.API.Services.CaseStore>();
     services.AddHostedService<Cabinet.API.Services.AnomalyDetector>();
 
     // Data model acceleration — pre-aggregated summaries for tstats queries

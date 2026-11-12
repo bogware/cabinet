@@ -464,6 +464,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5c-1.736 0-3.369.676-4.596 1.903A6.47 6.47 0 0 0 1.5 8c0 1.736.676 3.369 1.904 4.597A6.47 6.47 0 0 0 8 14.5a6.47 6.47 0 0 0 4.596-1.903A6.47 6.47 0 0 0 14.5 8a6.47 6.47 0 0 0-1.904-4.597A6.47 6.47 0 0 0 8 1.5ZM8 9.5a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5A.75.75 0 0 1 8 9.5Zm1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>
                 Alerts
             </button>
+            <button type="button" class="nav-item" data-page="cases">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.75 0h2.5C10.22 0 11 .78 11 1.75V3h3.25c.97 0 1.75.78 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25v-8.5C0 3.78.78 3 1.75 3H5V1.75C5 .78 5.78 0 6.75 0ZM6.5 3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25ZM1.5 4.75v8.5c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/></svg>
+                Cases
+            </button>
             <button type="button" class="nav-item" data-page="rules">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.5 2.5v5c0 3.9 2.7 7.2 6.5 8.5 3.8-1.3 6.5-4.6 6.5-8.5v-5L8 0Zm0 1.6 5 1.9v4c0 3-2 5.6-5 6.8-3-1.2-5-3.8-5-6.8v-4l5-1.9Z"/></svg>
                 Detections
@@ -791,6 +795,22 @@
                     <tbody id="playersBody"></tbody>
                 </table></div></div>
                 <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:12px"></div>
+            </div>
+
+            <div class="page" id="page-cases">
+                <div class="toolbar">
+                    <h3>Cases</h3>
+                    <div class="toolbar-actions">
+                        <select id="caseStatusFilter" data-change="loadCases" aria-label="Status"><option value="">All</option><option>Open</option><option>Investigating</option><option>Resolved</option><option>Closed</option></select>
+                        <button class="btn btn-primary btn-sm" data-click="newCase">+ New Case</button>
+                    </div>
+                </div>
+                <p class="page-note">Investigations that gather alerts, events, searches and notes. A case's timeline shows each reader only the events they may read.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Severity</th><th scope="col">Assignee</th><th scope="col">Updated</th></tr></thead>
+                    <tbody id="casesBody"></tbody>
+                </table></div></div>
+                <div class="panel" id="caseView" hidden style="padding:16px;margin-top:12px"></div>
             </div>
 
             <div class="page" id="page-coverage">

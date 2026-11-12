@@ -172,6 +172,77 @@ async function openPlayer(player) {
     } catch (e) { panel.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
 }
 
+/* ===== Cases ===== */
+window.EXTRA_PAGES.cases = { title: 'Cases', load: () => loadCases() };
+
+async function loadCases() {
+    const tbody = document.getElementById('casesBody');
+    if (!tbody) return;
+    const status = document.getElementById('caseStatusFilter').value;
+    try {
+        const cases = await api('GET', '/api/v1/cases' + (status ? '?status=' + encodeURIComponent(status) : ''));
+        tbody.innerHTML = cases.length === 0
+            ? '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-secondary)">No cases.</td></tr>'
+            : cases.map(c => `<tr><td><button type="button" class="btn btn-secondary btn-sm" data-click="openCase" data-args='${esc(JSON.stringify([c.id]))}'>${esc(c.title)}</button></td>
+                <td>${esc(c.status)}</td><td>${esc(c.severity)}</td><td>${esc(c.assignee || '')}</td><td>${esc(fmtTime(c.updatedAt))}</td></tr>`).join('');
+    } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
+}
+
+async function newCase() {
+    const title = prompt('Case title');
+    if (!title) return;
+    try {
+        const c = await api('POST', '/api/v1/cases', { title });
+        await loadCases();
+        openCase(c.id);
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function openCase(id) {
+    const view = document.getElementById('caseView');
+    view.hidden = false;
+    view.innerHTML = '<span class="spinner"></span>';
+    try {
+        const [c, timeline] = await Promise.all([api('GET', '/api/v1/cases/' + encodeURIComponent(id)), api('GET', `/api/v1/cases/${encodeURIComponent(id)}/timeline`)]);
+        const items = timeline.map(t => `<li style="padding:6px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text-muted)">${esc(fmtTime(t.time))}</span>
+            <span class="badge badge-muted">${esc(t.kind)}</span>${t.host ? ` <span class="mono">${esc(t.host)}</span>` : ''}
+            <div style="white-space:pre-wrap;${t.kind === 'event' ? 'font-family:monospace;font-size:12px' : ''}">${esc(t.text)}</div>${t.by ? `<span style="color:var(--text-secondary);font-size:11px">${esc(t.by)}</span>` : ''}</li>`).join('');
+        const statuses = ['Open', 'Investigating', 'Resolved', 'Closed'].map(s => `<option${s === c.status ? ' selected' : ''}>${s}</option>`).join('');
+        view.innerHTML = `<h4>${esc(c.title)}</h4>
+            <div class="st-grid-2">
+                <div class="form-group"><label for="caseStatus">Status</label><select id="caseStatus">${statuses}</select></div>
+                <div class="form-group"><label for="caseAssignee">Assignee</label><input type="text" id="caseAssignee" value="${esc(c.assignee || '')}"></div>
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-secondary btn-sm" data-click="saveCase" data-args='${esc(JSON.stringify([c.id]))}'>Save</button></div>
+            <div class="form-group"><label for="caseNote">Add a note, event IDs or a search</label><textarea id="caseNote" rows="3" placeholder="What you found"></textarea></div>
+            <div class="st-grid-2">
+                <div class="form-group"><input type="text" id="caseEventIds" placeholder="Event IDs, comma-separated" aria-label="Event IDs"></div>
+                <div class="form-group"><input type="text" id="caseSearch" placeholder="A search to keep" aria-label="Search" class="mono"></div>
+            </div>
+            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary btn-sm" data-click="addToCase" data-args='${esc(JSON.stringify([c.id]))}'>Add</button></div>
+            <h4 style="margin-top:16px">Timeline</h4><ul style="list-style:none;padding:0">${items || '<li class="page-note">Nothing yet.</li>'}</ul>`;
+    } catch (e) { view.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
+async function saveCase(id) {
+    try {
+        await api('PATCH', '/api/v1/cases/' + encodeURIComponent(id), { status: document.getElementById('caseStatus').value, assignee: document.getElementById('caseAssignee').value.trim() || null });
+        loadCases();
+        openCase(id);
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function addToCase(id) {
+    const note = document.getElementById('caseNote').value.trim();
+    const search = document.getElementById('caseSearch').value.trim();
+    const eventIds = document.getElementById('caseEventIds').value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!note && !search && eventIds.length === 0) return;
+    try {
+        await api('POST', `/api/v1/cases/${encodeURIComponent(id)}/items`, { note: note || null, search: search || null, eventIds });
+        openCase(id);
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
 /* ===== ATT&CK coverage and Sigma import ===== */
 window.EXTRA_PAGES.coverage = { title: 'ATT&CK Coverage', load: () => loadCoverage() };
 
