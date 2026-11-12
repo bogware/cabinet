@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Planned as 3.0.0. It has breaking changes to search semantics, listed under Changed.
+
+### Added
+
+- **Search syntax as in SPL**: OR, AND, NOT or a leading `-`, parentheses, `"quoted phrases"` that must appear in order, `wild*cards` that start at a word, and `field=value` terms (with `!=`, `<`, `>` and wildcards) mixed with words, as in `find error OR host=web-1`. Storage still does the AND of plain words; the rest runs in the pipeline. `earliest=-1d@d latest=now` in a search sets its time range, and `@`, `:` and `#` are allowed in searches, so `find alice@example.com` works.
+- **stats functions**: `values`, `list`, `first`, `last`, `earliest`, `latest`, `range` and `mode`, and any aggregate of an expression, as in `count(eval(status >= 500))`. **eval functions**: `in()`, `cidrmatch()`, `mvzip()`, `mvrange()` and `json_keys()`.
+- **`cluster`**: groups lines into patterns with the Drain algorithm, one row per pattern with its count and a sample, or `labelonly=true` to label every event.
+- **`iplocation`**: City, Region, Country, lat and lon from a MaxMind GeoLite2 or GeoIP2 City database you point `GeoIp:DatabasePath` at.
+- **Charts**: dashboard panels can be pie, gauge, heatmap or map (points on a latitude and longitude grid).
+- **Live tail**: highlight words, pause, and pause automatically on a highlighted line, with events kept while paused.
+- **Browser sign-in with OIDC, SAML or LDAP**: the dashboard signs people in with their organization's account (OIDC authorization code with PKCE, SAML 2.0 as service provider, or an LDAP or Active Directory bind), mapping groups to roles through `Sso:RoleMappings`. The session cookie is HttpOnly and SameSite=Strict, and cookie requests that change anything need the page's own header.
+- **AI investigator** (off by default): ask a question; a language model answers by running searches with your access and shows every search it ran. Local first: by default it uses an OpenAI-compatible server such as Ollama; Claude is optional. What the model sees is masked as for a Viewer, at most 50 rows per search and 8 searches per question, and every question and search is audited.
+- **Anomaly rules**: spikes against a learned baseline, something going quiet, a value never seen before, and a kind of log line never seen before, checked as each window ends.
+- **Connectors**: Slack, Teams, Discord, PagerDuty, Opsgenie, Jira, ServiceNow, email and webhooks, used by detection rules' "Send to connector" action, with secrets write-only.
+- **Sigma import and ATT&CK coverage**: Sigma rules convert to detection rules (selections, filters, value modifiers, `1 of`/`all of`, and `count() by`), added turned off. The ATT&CK Coverage page shows which techniques the rules cover and where the gaps are.
+- **Cases**: investigations that gather alerts, events, searches and notes, with a timeline that shows each reader only the events they may read.
+- **Archive and rehydrate**: retention can archive an index's events to a directory or S3 before deleting them (the retention dialog's "Archive Before Delete" now works), and archived events can be brought back into an index to search.
+- **Detection rules as code**: rules as YAML files with tests in them; `cabinet rules test`, `cabinet rules push` and `cabinet rules pull`.
+- **Ingest pipeline**: rules that drop, sample (by event ID, so resends agree), route or redact events before they're stored or detected, with how much they kept out of storage.
+- **Agent inputs**: the systemd journal, Windows event logs (EventData values become fields, as Sigma rules expect) and Kubernetes container logs (CRI and Docker formats, with pod, namespace and container fields), all checkpointed only once a batch is durable.
+- **Scheduled reports**: searches emailed on a schedule as HTML with a PDF copy.
+- **Player moderation** (gaming extension): player profiles with chat, toxicity, admin history and a suggested action with the SourceMod command to type. Cabinet never runs RCON commands.
+- `cabinet query --server` runs a query on a Cabinet server, with the key from `CABINET_API_KEY`.
+
+### Changed
+
+- **Breaking: comparisons with a missing value are false**, for `!=` too, as in SPL: `where x != "a"` drops events without `x`. Use `isnull()` to find those.
+- **Breaking: `stats ... by` leaves out events missing a by-field**, as in SPL, both in the pipeline and when storage aggregates.
+- **Breaking: quoted search text is a phrase**, matching its words in order, as in SPL, rather than its words anywhere.
+- **Breaking: a subsearch, join, multisearch leg, macro, lookup or unknown stage that fails is an error** instead of quietly giving a different answer. Subsearch rows mean "all of these fields", OR'd across rows, as in SPL.
+- `if`, `case`, `validate` and `coalesce` evaluate only the branch they take, and `"false"` and `"0"` from a log are false in a condition.
+- `find error host=web` searches for both instead of for the text `host=web`. timechart uses `_time` when eval or bin changed it. `where _time` comparisons narrow what storage reads.
+- Detection actions run off the ingest path on a bounded queue, each with a timeout, so a slow webhook can't hold up ingest.
+- Ingest into an index is refused unless the caller may ingest there, even without a principal. Event IDs a sender supplies are kept apart per sending key.
+- `PUT /api/v1/rules/{id}` adds a rule under a new ID instead of answering 404.
+- OpenSearch indexes get one shard, replicas only with several nodes, and a 10,000 field limit, all settings; several node URLs share requests.
+- PostgreSQL retention and index deletes run 10,000 rows at a time.
+
+### Fixed
+
+- Webhook actions and connectors can't reach private, loopback or link-local addresses unless allowed, and never follow redirects. Actions see events masked as for a Viewer, and an action that writes an event needs ingest on that index. Rule changes are audited.
+- Data-model acceleration divided by zero for buckets under an hour, read at most 100,000 events silently, and instances that weren't the leader overwrote its summaries.
+- The leader lease loop ended on an unexpected error and never led again, and a hung connection kept leadership.
+- The query cache was never invalidated by writes, and had no size cap. Searches answered from it are audited.
+- streamstats without a window rescanned every earlier row for each row. Stages after the first stateful one ignored the query's limits. A number too large for `head` crashed the query.
+- CloudWatch timestamps were read in the server's time zone.
+- The webhook channel logged URLs, which often hold tokens.
+
 ## [2.5.4] - 2026-11-11
 
 ### Fixed

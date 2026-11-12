@@ -36,7 +36,22 @@ Field names ignore case, so `host` and `Host` are the same field. `source_type`,
 
 `search status=500` and `search a=1 OR b=2` filter on fields, as `where` does, with unquoted values read as text. Other search text is a text search.
 
-A text search means the same on every backend. The text splits into words at anything that isn't a letter or digit, case doesn't matter, and every word has to appear in the line as a whole word. `connection failed` finds `failed: Connection reset`, but not `reconnection failed`, and `app` finds `/var/log/app.log`. There's no stemming, so `request` doesn't find `requests`.
+A word means the same on every backend. Text splits into words at anything that isn't a letter or digit, case doesn't matter, and a word has to appear in the line as a whole word. `connection failed` finds `failed: Connection reset`, but not `reconnection failed`, and `app` finds `/var/log/app.log`. There's no stemming, so `request` doesn't find `requests`.
+
+A search combines terms as SPL does:
+
+| Syntax | Matches |
+|--------|---------|
+| `error timeout` or `error AND timeout` | Lines with both words |
+| `error OR warn` | Lines with either |
+| `error NOT disk`, `error -disk` | Lines with `error` and without `disk` |
+| `(alice OR bob) failed` | Grouping |
+| `"connection refused"` | The words in that order, next to each other |
+| `fail*`, `*timeout*` | Words starting with `fail`; anything containing `timeout` |
+| `host=web-1`, `status!=200`, `bytes>1000`, `user=adm*` | A field's value; a missing field never matches, `!=` included |
+| `earliest=-1d@d latest=now` | The search's time range, as in SPL (`-24h`, `-7d@d`, `@h`, `now`, `0`, or a date) |
+
+`OR`, `AND` and `NOT` are operators only in capitals. Storage finds lines with all of a search's plain words; phrases, wildcards, `OR`, `NOT` and fields are checked after, so a search with at least one plain word stays fast.
 
 ### Time Ranges
 
@@ -111,7 +126,15 @@ An aggregate's column is named after its alias, or `count` or `avg(duration)` wi
 | `stdev(field)` / `stdevp(field)` | Standard deviation (sample/population) |
 | `variance(field)` / `varp(field)` | Variance (sample/population) |
 | `perc95(field)` / `p99(field)` | Percentile (any: perc50, p75, etc.) |
+| `values(field)` | Distinct values, sorted |
+| `list(field)` | Every value, in order, up to 100 |
+| `first(field)` / `last(field)` | The first / last value seen |
+| `earliest(field)` / `latest(field)` | The value at the earliest / latest `_time` |
+| `range(field)` | `max - min` |
+| `mode(field)` | The most common value |
+| `count(eval(expr))` | Rows where `expr` is true; any function takes `eval(expr)` in place of a field, and needs `as name` |
 
+`stats ... by` leaves out events without a value for every by-field, as in SPL.
 #### `eventstats` — Append aggregations to each event
 
 ```
@@ -429,6 +452,15 @@ Times are in UTC. Epochs are in seconds. Formats use `%Y %y %m %d %H %I %M %S %p
 | `mvsort(mv)` | Sort values | `eval sorted = mvsort(tags)` |
 | `mvfind(mv, regex)` | Find matching index | `eval i = mvfind(tags, "error")` |
 | `mvfilter(mv, expr)` | Keep values where `expr` is true; `expr` sees each value under the field's name and as `mv` | `eval filtered = mvfilter(tags, match(tags, "err"))` |
+| `mvzip(a, b, delim)` | Pair up two fields' values | `eval pairs = mvzip(names, ids, "=")` |
+| `mvrange(start, end, step)` | Numbers from start up to, not including, end | `eval hours = mvrange(0, 24)` |
+| `json_keys(json)` | Top-level keys of a JSON object | `eval keys = json_keys(payload)` |
+| `in(field, v1, v2, ...)` | Whether the field is one of the values | `where in(host, "web-1", "web-2")` |
+| `cidrmatch(cidr, ip)` | Whether an address is in a network | `where cidrmatch("10.0.0.0/8", src)` |
+
+### Comparisons and missing values
+
+As in SPL, a comparison with a missing value is false, whatever the operator: `where status != 200` leaves out events with no `status`. Use `isnull(status)` to find those. In a condition, `"false"`, `"0"` and empty text are false. `if`, `case`, `validate` and `coalesce` only evaluate the branch they take.
 
 ### Utility Functions
 
@@ -437,6 +469,27 @@ Times are in UTC. Epochs are in seconds. Formats use `%Y %y %m %d %H %I %M %S %p
 | `memk(s)` | Memory string → KB | `eval kb = memk("1.5GB")` |
 | `rmunit(s)` | Remove unit suffix | `eval n = rmunit("100ms")` |
 | `rmcomma(s)` | Remove commas | `eval n = rmcomma("1,234,567")` |
+
+## Patterns and Places
+
+#### `cluster` — Group lines into patterns
+
+```
+find * earliest=-1h | cluster
+find * | cluster t=0.7 field=message
+find * | cluster labelonly=true | stats count by cluster_pattern
+```
+
+One row per pattern, most common first: `cluster_pattern` (the line with `<*>` where lines differ), `cluster_count`, `cluster_label` and a `sample` line. Numbers, IPs, IDs, hex and times count as the same from the start, so `took 35ms` and `took 41ms` agree. `t=` (0.5) is how alike lines must be; `labelonly=true` labels every event instead.
+
+#### `iplocation` — Where an address is
+
+```
+find * | iplocation clientip | stats count by Country
+find * | iplocation prefix=src_ src | stats count by src_lat, src_lon
+```
+
+Adds `City`, `Region`, `Country`, `country_code`, `lat` and `lon`. It needs a MaxMind GeoLite2-City or GeoIP2-City `.mmdb` file in `GeoIp:DatabasePath`; GeoLite2 is free from maxmind.com with an account. A panel shown as a map uses `lat` and `lon`.
 
 ## SPL Compatibility
 
