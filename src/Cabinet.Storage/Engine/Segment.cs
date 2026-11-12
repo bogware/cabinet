@@ -46,67 +46,115 @@ internal static class SegmentWriter
     public static void Write(string path, string index, IReadOnlyList<LogEvent> events, IReadOnlyList<string>? replaces = null)
     {
         var sorted = events.OrderBy(e => e.Timestamp.Ticks).ThenBy(e => e.Id, StringComparer.Ordinal).ToList();
+        WriteSorted(path, index, sorted, sorted.Count, replaces);
+    }
+
+    /// <summary>
+    /// Writes events already in (time, ID) order, holding only a batch of blocks at a time, so a
+    /// merge of large segments needs no more memory than a small one. Returns how many it wrote.
+    /// </summary>
+    /// <param name="atMost">An upper bound on the count, which sizes the segment's ID filter.</param>
+    public static int WriteSorted(
+        string path,
+        string index,
+        IEnumerable<LogEvent> sorted,
+        int atMost,
+        IReadOnlyList<string>? replaces = null,
+        CancellationToken cancellationToken = default)
+    {
+        const int BlocksPerBatch = 32;
         var temporary = path + ".tmp";
         var blocks = new List<BlockInfo>();
-        using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        var ids = BloomFilter.ForCount(atMost, precise: true);
+        var count = 0;
+        try
         {
-            // Blocks are independent, so they're encoded and compressed in parallel, then written in order
-            var built = new (BlockInfo Block, MemoryStream Body)[(sorted.Count + BlockRows - 1) / BlockRows];
-            Parallel.For(0, built.Length, b =>
+            using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
             {
-                var start = b * BlockRows;
-                built[b] = BuildBlock(sorted.GetRange(start, Math.Min(BlockRows, sorted.Count - start)));
-            });
+                var pending = new List<List<LogEvent>>();
+                var current = new List<LogEvent>(BlockRows);
 
-            foreach (var (block, body) in built)
-            {
-                var blockStart = file.Position;
-                body.Position = 0;
-                body.CopyTo(file);
-                body.Dispose();
-                foreach (var name in block.Columns.Keys.ToList())
+                // Blocks are independent, so a batch is encoded and compressed in parallel, then written in order
+                void WritePending()
                 {
-                    var (offset, length) = block.Columns[name];
-                    block.Columns[name] = (blockStart + offset, length);
+                    var built = new (BlockInfo Block, MemoryStream Body)[pending.Count];
+                    Parallel.For(0, built.Length, b => built[b] = BuildBlock(pending[b]));
+                    foreach (var (block, body) in built)
+                    {
+                        var blockStart = file.Position;
+                        body.Position = 0;
+                        body.CopyTo(file);
+                        body.Dispose();
+                        foreach (var name in block.Columns.Keys.ToList())
+                        {
+                            var (offset, length) = block.Columns[name];
+                            block.Columns[name] = (blockStart + offset, length);
+                        }
+
+                        blocks.Add(block);
+                    }
+
+                    pending.Clear();
                 }
 
-                blocks.Add(block);
-            }
-
-            var footerStart = file.Position;
-            using (var footer = new BinaryWriter(file, Encoding.UTF8, leaveOpen: true))
-            {
-                footer.Write(index);
-                footer.Write(sorted.Count);
-                footer.Write(replaces?.Count ?? 0);
-                foreach (var name in replaces ?? [])
-                {
-                    footer.Write(name);
-                }
-
-                footer.Write(blocks.Count);
-                foreach (var block in blocks)
-                {
-                    WriteBlockInfo(footer, block);
-                }
-
-                // One filter over every ID, so a duplicate check skips the segment in one probe
-                var ids = BloomFilter.ForCount(sorted.Count, precise: true);
                 foreach (var logEvent in sorted)
                 {
                     ids.Add(logEvent.Id);
+                    count++;
+                    current.Add(logEvent);
+                    if (current.Count == BlockRows)
+                    {
+                        pending.Add(current);
+                        current = new List<LogEvent>(BlockRows);
+                        if (pending.Count == BlocksPerBatch)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            WritePending();
+                        }
+                    }
                 }
 
-                ids.Write(footer);
+                if (current.Count > 0)
+                {
+                    pending.Add(current);
+                }
 
-                footer.Write(file.Position - footerStart + sizeof(long) + Magic.Length);
-                footer.Write(Encoding.ASCII.GetBytes(Magic));
+                WritePending();
+
+                var footerStart = file.Position;
+                using (var footer = new BinaryWriter(file, Encoding.UTF8, leaveOpen: true))
+                {
+                    footer.Write(index);
+                    footer.Write(count);
+                    footer.Write(replaces?.Count ?? 0);
+                    foreach (var name in replaces ?? [])
+                    {
+                        footer.Write(name);
+                    }
+
+                    footer.Write(blocks.Count);
+                    foreach (var block in blocks)
+                    {
+                        WriteBlockInfo(footer, block);
+                    }
+
+                    // One filter over every ID, so a duplicate check skips the segment in one probe
+                    ids.Write(footer);
+                    footer.Write(file.Position - footerStart + sizeof(long) + Magic.Length);
+                    footer.Write(Encoding.ASCII.GetBytes(Magic));
+                }
+
+                file.Flush(flushToDisk: true);
             }
 
-            file.Flush(flushToDisk: true);
+            File.Move(temporary, path, overwrite: true);
+            return count;
         }
-
-        File.Move(temporary, path, overwrite: true);
+        catch
+        {
+            File.Delete(temporary);
+            throw;
+        }
     }
 
     /// <summary>Encodes a block in memory, its column offsets relative to the block's start.</summary>

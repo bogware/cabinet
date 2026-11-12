@@ -22,8 +22,10 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
     private readonly ConcurrentDictionary<string, IndexShard> _shards = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _shardLock = new(1, 1);
+    private readonly CancellationTokenSource _stopping = new();
     private volatile bool _initialized;
     private Timer? _flushTimer;
+    private int _compacting;
 
     public EngineLogStorage(string dataPath, EngineOptions? options = null, ILogger<EngineLogStorage>? logger = null)
     {
@@ -84,6 +86,45 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
                 _logger.LogError(ex, "Writing index {Index} to a segment failed; its events are still in the log", shard.Index);
             }
         }
+
+        // One merge pass at a time, in the background
+        if (Interlocked.CompareExchange(ref _compacting, 1, 0) == 0)
+        {
+            try
+            {
+                await CompactAsync(_stopping.Token);
+            }
+            catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+            {
+                _logger.LogDebug("Merging segments stopped for shutdown");
+            }
+            finally
+            {
+                Volatile.Write(ref _compacting, 0);
+            }
+        }
+    }
+
+    /// <summary>Merges segments until none are due, in every index. Returns how many merges ran.</summary>
+    public async Task<int> CompactAsync(CancellationToken cancellationToken = default)
+    {
+        var merges = 0;
+        foreach (var shard in _shards.Values)
+        {
+            try
+            {
+                while (await shard.CompactAsync(cancellationToken))
+                {
+                    merges++;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                _logger.LogError(ex, "Merging segments of index {Index} failed; its segments are unchanged", shard.Index);
+            }
+        }
+
+        return merges;
     }
 
     /// <summary>Writes every index's in-memory events to segments now.</summary>
@@ -352,6 +393,7 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
     public void Dispose()
     {
         _flushTimer?.Dispose();
+        _stopping.Cancel();
         foreach (var shard in _shards.Values)
         {
             shard.Dispose();

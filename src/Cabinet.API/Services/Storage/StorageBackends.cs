@@ -65,6 +65,7 @@ public static class StorageBackends
                     FlushEvents = configuration.GetValue("Storage:EngineFlushEvents", 100_000),
                     FlushSeconds = configuration.GetValue("Storage:EngineFlushSeconds", 10),
                     SyncWrites = configuration.GetValue("Storage:EngineSyncWrites", true),
+                    MaxSegmentEvents = configuration.GetValue("Storage:EngineMaxSegmentEvents", 5_000_000),
                 },
                 loggers.CreateLogger<Cabinet.Storage.Engine.EngineLogStorage>()),
             _ => new SqliteLogStorage(Options.Create(Bind(configuration)), loggers.CreateLogger<SqliteLogStorage>()),

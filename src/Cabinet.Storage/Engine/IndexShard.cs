@@ -1,4 +1,5 @@
 using System.Text;
+using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +19,12 @@ public sealed class EngineOptions
     /// writes the server accepted; a crash of the process alone can't.
     /// </summary>
     public bool SyncWrites { get; set; } = true;
+
+    /// <summary>
+    /// Segments are merged until they hold about this many events. Larger segments mean fewer
+    /// files and duplicate checks, but more to rewrite when a purge cuts through one.
+    /// </summary>
+    public int MaxSegmentEvents { get; set; } = 5_000_000;
 }
 
 /// <summary>
@@ -31,6 +38,13 @@ internal sealed class IndexShard : IDisposable
     private readonly EngineOptions _options;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+
+    // Held by whatever replaces segments (merges, purges, deleting the index), so they take turns.
+    // Taken before the write lock, never after it.
+    private readonly SemaphoreSlim _maintenanceLock = new(1, 1);
+
+    /// <summary>Segments merged at once, and how many of a size there must be before they are.</summary>
+    private const int MergeWidth = 10;
     private readonly List<(SegmentReader Segment, DateTime RetiredAt)> _retired = [];
 
     private List<LogEvent> _hot = [];
@@ -370,7 +384,7 @@ internal sealed class IndexShard : IDisposable
         var path = Path.Combine(_directory, $"seg-{first:D19}-{Guid.NewGuid():N}.seg");
         SegmentWriter.Write(path, Index, events, replaces);
         var reader = SegmentReader.Open(path);
-        _segments = _segments.Append(reader).OrderBy(s => s.MinTicks).ToArray();
+        AddSegment(reader);
         return reader;
     }
 
@@ -380,49 +394,146 @@ internal sealed class IndexShard : IDisposable
     /// </summary>
     public async Task<int> PurgeAsync(DateTime before, CancellationToken cancellationToken)
     {
-        await _writeLock.WaitAsync(cancellationToken);
+        await _maintenanceLock.WaitAsync(cancellationToken);
         try
         {
-            FlushLocked();
-            var deleted = 0;
-            foreach (var segment in _segments.Where(s => s.MinTicks < before.Ticks).ToList())
+            await _writeLock.WaitAsync(cancellationToken);
+            try
             {
-                if (segment.MaxTicks < before.Ticks)
+                FlushLocked();
+                var deleted = 0;
+                foreach (var segment in _segments.Where(s => s.MinTicks < before.Ticks).ToList())
                 {
-                    deleted += segment.Rows;
-                    Retire(segment);
-                    continue;
-                }
-
-                var kept = new List<LogEvent>();
-                foreach (var block in segment.Blocks)
-                {
-                    var rows = new BlockRows(segment, block);
-                    for (var i = 0; i < rows.Count; i++)
+                    if (segment.MaxTicks < before.Ticks)
                     {
-                        if (rows.Ticks[i] >= before.Ticks)
-                        {
-                            kept.Add(rows.Materialize(i));
-                        }
+                        deleted += segment.Rows;
+                        Retire(segment);
+                        continue;
                     }
+
+                    var kept = segment.Blocks.Where(b => b.MaxTicks >= before.Ticks)
+                        .Sum(b => new BlockRows(segment, b).Ticks.Count(t => t >= before.Ticks));
+                    deleted += segment.Rows - kept;
+                    if (kept > 0)
+                    {
+                        var rows = RowSource.Merge([RowSource.FromSegment(segment, new RowFilter(new QueryContext { StartTime = before }), descending: false)], descending: false, cancellationToken);
+                        AddSegment(WriteSorted(rows.Select(r => r.Materialize()), kept, [segment.Name], cancellationToken));
+                    }
+
+                    Retire(segment);
                 }
 
-                deleted += segment.Rows - kept.Count;
-                if (kept.Count > 0)
-                {
-                    WriteSegment(kept, [segment.Name]);
-                }
-
-                Retire(segment);
+                return deleted;
             }
-
-            return deleted;
+            finally
+            {
+                _writeLock.Release();
+            }
         }
         finally
         {
-            _writeLock.Release();
+            _maintenanceLock.Release();
         }
     }
+
+    /// <summary>
+    /// Merges one set of segments, if any are due: once <see cref="MergeWidth"/> segments are of
+    /// the same size (by powers of ten), the oldest of them become one. Each event is rewritten
+    /// about once per size, and an index settles at a few dozen segments plus full-sized ones.
+    /// Writes carry on meanwhile; only swapping the new segment in waits for them.
+    /// </summary>
+    /// <returns>Whether it merged anything, so the caller can see if more are due.</returns>
+    public async Task<bool> CompactAsync(CancellationToken cancellationToken)
+    {
+        await _maintenanceLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_disposed || PickMerge(_segments) is not { } chosen)
+            {
+                return false;
+            }
+
+            var sources = chosen.Select(segment => RowSource.FromSegment(segment, new RowFilter(new QueryContext()), descending: false)).ToList();
+            var merged = await Task.Run(
+                () => WriteSorted(RowSource.Merge(sources, descending: false, cancellationToken).Select(r => r.Materialize()), chosen.Sum(s => s.Rows), chosen.Select(s => s.Name).ToList(), cancellationToken),
+                cancellationToken);
+
+            await _writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                if (_disposed)
+                {
+                    // The originals are still there, so the merged copy just goes
+                    merged.Dispose();
+                    File.Delete(merged.Path);
+                    return false;
+                }
+
+                AddSegment(merged);
+                foreach (var segment in chosen)
+                {
+                    Retire(segment);
+                }
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
+
+            _logger.LogDebug("Merged {Count} segments of index {Index} into one of {Rows} events", chosen.Count, Index, merged.Rows);
+            return true;
+        }
+        finally
+        {
+            _maintenanceLock.Release();
+        }
+    }
+
+    /// <summary>The segments to merge next, oldest first, or null if none are due.</summary>
+    private List<SegmentReader>? PickMerge(SegmentReader[] segments)
+    {
+        foreach (var tier in segments.Where(s => s.Rows < _options.MaxSegmentEvents)
+                     .GroupBy(s => (int)Math.Log10(Math.Max(1, s.Rows)))
+                     .OrderBy(t => t.Key))
+        {
+            if (tier.Count() < MergeWidth)
+            {
+                continue;
+            }
+
+            var chosen = new List<SegmentReader>();
+            long rows = 0;
+            foreach (var segment in tier.OrderBy(s => s.MinTicks).Take(MergeWidth))
+            {
+                if (chosen.Count > 0 && rows + segment.Rows > _options.MaxSegmentEvents)
+                {
+                    break;
+                }
+
+                chosen.Add(segment);
+                rows += segment.Rows;
+            }
+
+            if (chosen.Count > 1)
+            {
+                return chosen;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Writes sorted events to a new segment file and opens it, without adding it to reads.</summary>
+    private SegmentReader WriteSorted(IEnumerable<LogEvent> sorted, int atMost, IReadOnlyList<string> replaces, CancellationToken cancellationToken)
+    {
+        var first = sorted.First().Timestamp.Ticks;
+        var path = Path.Combine(_directory, $"seg-{first:D19}-{Guid.NewGuid():N}.seg");
+        SegmentWriter.WriteSorted(path, Index, sorted, atMost, replaces, cancellationToken);
+        return SegmentReader.Open(path);
+    }
+
+    private void AddSegment(SegmentReader reader) =>
+        _segments = _segments.Append(reader).OrderBy(s => s.MinTicks).ToArray();
 
     /// <summary>Removes a segment from reads and deletes its file; queries that have it open finish first.</summary>
     private void Retire(SegmentReader segment)
@@ -444,17 +555,25 @@ internal sealed class IndexShard : IDisposable
     /// <summary>Deletes the whole index. Returns how many events it held.</summary>
     public async Task<int> DeleteAllAsync(CancellationToken cancellationToken)
     {
-        await _writeLock.WaitAsync(cancellationToken);
+        await _maintenanceLock.WaitAsync(cancellationToken);
         try
         {
-            var count = _segments.Sum(s => s.Rows) + _hot.Count;
-            CloseLocked();
-            Directory.Delete(_directory, recursive: true);
-            return count;
+            await _writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                var count = _segments.Sum(s => s.Rows) + _hot.Count;
+                CloseLocked();
+                Directory.Delete(_directory, recursive: true);
+                return count;
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
         }
         finally
         {
-            _writeLock.Release();
+            _maintenanceLock.Release();
         }
     }
 
@@ -476,8 +595,11 @@ internal sealed class IndexShard : IDisposable
         _segments = [];
     }
 
+    /// <summary>Closes the index. Cancel any merge first, or this waits for it to finish.</summary>
     public void Dispose()
     {
+        _maintenanceLock.Wait();
+        _maintenanceLock.Release();
         _writeLock.Wait();
         try
         {

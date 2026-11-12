@@ -250,6 +250,84 @@ public sealed class EngineLogStorageTests : IDisposable
         }
     }
 
+    private int SegmentFiles() => Directory.EnumerateFiles(_path, "*.seg", SearchOption.AllDirectories).Count();
+
+    [Fact]
+    public async Task Compaction_MergesSmallSegments_KeepingEveryEventOnceAndInOrder()
+    {
+        var engine = Open(new EngineOptions { FlushEvents = 100 });
+        for (var b = 0; b < 25; b++)
+        {
+            // Interleaved times, so merged segments overlap and must be re-sorted
+            await engine.StoreBatchAsync(Enumerable.Range(0, 100).Select(i => Event((i * 25) + b)));
+        }
+
+        SegmentFiles().Should().Be(25);
+        (await engine.CompactAsync()).Should().BeGreaterThan(0);
+        SegmentFiles().Should().BeLessThan(10);
+
+        (await engine.GetCountAsync()).Should().Be(2500);
+        (await engine.StoreBatchAsync(Enumerable.Range(0, 2500).Select(i => Event(i)))).Should().Be(0, "every ID is still known");
+        var all = await engine.QueryAsync(new QueryContext { Limit = 10_000, SortDescending = false }).ToListAsync();
+        all.Select(e => e.Id).Should().Equal(Enumerable.Range(0, 2500).Select(i => $"evt-{i:D8}"));
+        all[123].GetField<long>("status").Should().Be(200);
+        (await engine.GetByIdAsync("evt-00001234"))!.Host.Should().Be("host-1");
+
+        Close(engine);
+        (await Open().GetCountAsync()).Should().Be(2500);
+    }
+
+    [Fact]
+    public async Task AMergeCutShort_AfterWritingItsSegment_LeavesNoDuplicates()
+    {
+        var engine = Open(new EngineOptions { FlushEvents = 10 });
+        for (var b = 0; b < 10; b++)
+        {
+            await engine.StoreBatchAsync(Enumerable.Range(b * 10, 10).Select(i => Event(i)));
+        }
+
+        var originals = Directory.EnumerateFiles(_path, "*.seg", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+        (await engine.CompactAsync()).Should().Be(1);
+        Close(engine);
+
+        // As if the process died after the merged segment was written, before the others were deleted
+        foreach (var (file, bytes) in originals)
+        {
+            await File.WriteAllBytesAsync(file, bytes);
+        }
+
+        var reopened = Open();
+        (await reopened.GetCountAsync()).Should().Be(100);
+        SegmentFiles().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WritesDuringMerges_AreAllKept()
+    {
+        var engine = Open(new EngineOptions { FlushEvents = 50, SyncWrites = false });
+        await engine.StoreBatchAsync(Enumerable.Range(0, 2000).Select(i => Event(i)));
+
+        var writer = Task.Run(async () =>
+        {
+            for (var b = 0; b < 40; b++)
+            {
+                await engine.StoreBatchAsync(Enumerable.Range(0, 50).Select(i => Event(100_000 + (b * 50) + i)));
+            }
+        });
+        var merger = Task.Run(async () =>
+        {
+            for (var round = 0; round < 10; round++)
+            {
+                await engine.CompactAsync();
+            }
+        });
+        await Task.WhenAll(writer, merger);
+        await engine.CompactAsync();
+
+        (await engine.GetCountAsync()).Should().Be(4000);
+        (await engine.StoreBatchAsync([Event(5), Event(100_005)])).Should().Be(0);
+    }
+
     [Fact]
     public async Task ConcurrentWritersAndReaders_LoseNothing()
     {
