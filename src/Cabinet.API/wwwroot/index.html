@@ -955,6 +955,9 @@
                                     </div>
                                 </div>
                                 <div class="form-group">
+                                    <button class="btn btn-secondary btn-sm" id="signOutButton" data-click="signOut">Sign out</button>
+                                </div>
+                                <div class="form-group">
                                     <label for="settingsServerUrl">Server</label>
                                     <input type="text" id="settingsServerUrl" value="" readonly style="color:var(--text-muted)">
                                 </div>
@@ -1206,6 +1209,16 @@
     <div class="modal-bg" id="loginModal">
         <div class="modal">
             <h3 id="loginTitle">Sign in to Cabinet</h3>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                <button type="button" class="btn btn-primary" id="loginOidc" hidden data-click="signInWith" data-args='["oidc"]'>Sign in with SSO</button>
+                <button type="button" class="btn btn-primary" id="loginSaml" hidden data-click="signInWith" data-args='["saml"]'>Sign in with SAML</button>
+            </div>
+            <div id="loginLdap" hidden>
+                <div class="form-group"><label for="ldapUser">Directory user name</label><input type="text" id="ldapUser" autocomplete="username"></div>
+                <div class="form-group"><label for="ldapPassword">Password</label><input type="password" id="ldapPassword" autocomplete="current-password"></div>
+                <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLdap">Sign in</button></div>
+            </div>
+            <p id="loginSsoDivider" class="page-note" hidden>Or use an API key:</p>
             <form id="loginForm">
                 <div class="form-group"><label for="loginKey">API key</label><input type="password" id="loginKey" autocomplete="current-password" required></div>
                 <div class="form-group"><label class="check-label"><input type="checkbox" id="loginRemember"> Remember on this device</label></div>

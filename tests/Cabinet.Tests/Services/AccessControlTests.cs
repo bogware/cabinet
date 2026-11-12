@@ -647,6 +647,48 @@ public sealed class AccessControlApiTests : IDisposable
         (await QueryWithAsync("not.a.token")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Fact]
+    public async Task DashboardSignIn_WithOidc_RedirectsToTheProvider_WithPkce()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var provider = await OidcTestProvider.StartAsync(new RsaSecurityKey(rsa) { KeyId = "test-key" });
+        await using var api = StartApi(new Dictionary<string, string>
+        {
+            ["Sso__Enabled"] = "true",
+            ["Sso__Oidc__Authority"] = provider.Authority,
+            ["Sso__Oidc__ClientId"] = "cabinet",
+            ["Sso__Oidc__ClientSecret"] = "test-secret",
+        });
+        await api.WaitUntilReadyAsync();
+        using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = api.Client.BaseAddress };
+
+        var providers = await (await noRedirects.GetAsync("/auth/providers")).Content.ReadAsStringAsync();
+        providers.Should().Contain("\"oidc\":true").And.Contain("\"signedIn\":false");
+
+        using var login = await noRedirects.GetAsync("/auth/login/oidc?returnUrl=https://evil.example/");
+        login.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var location = login.Headers.Location!.ToString();
+        location.Should().StartWith($"{provider.Authority}/authorize").And.Contain("code_challenge=").And.Contain("response_type=code");
+
+        // A session cookie someone made up doesn't sign anyone in
+        using var forged = new HttpRequestMessage(HttpMethod.Get, "/api/v1/roles/me");
+        forged.Headers.Add("Cookie", "cabinet_session=forged");
+        (await noRedirects.SendAsync(forged)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task DashboardSignIn_WithoutSso_OffersOnlyApiKeys()
+    {
+        await using var api = StartApi();
+        await api.WaitUntilReadyAsync();
+
+        var providers = await api.Client.GetStringAsync("/auth/providers");
+
+        providers.Should().Contain("\"oidc\":false").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
+        (await api.Client.GetAsync("/auth/login/oidc")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await api.Client.PostAsJsonAsync("/auth/login/ldap", new { username = "a", password = "b" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     /// <summary>A running API process.</summary>
     private sealed class ApiProcess : IAsyncDisposable
     {
@@ -806,7 +848,16 @@ public sealed class AccessControlApiTests : IDisposable
                             },
                         },
                     })
-                    : JsonSerializer.Serialize(new { issuer = Authority, jwks_uri = $"{Authority}/jwks" });
+                    : JsonSerializer.Serialize(new
+                    {
+                        issuer = Authority,
+                        jwks_uri = $"{Authority}/jwks",
+                        authorization_endpoint = $"{Authority}/authorize",
+                        token_endpoint = $"{Authority}/token",
+                        response_types_supported = new[] { "code" },
+                        subject_types_supported = new[] { "public" },
+                        id_token_signing_alg_values_supported = new[] { "RS256" },
+                    });
                 var response = $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\nConnection: close\r\n\r\n{body}";
                 await stream.WriteAsync(Encoding.UTF8.GetBytes(response), cancellationToken);
             }

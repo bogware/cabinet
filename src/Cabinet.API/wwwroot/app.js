@@ -9,6 +9,56 @@ function showLogin(message) {
     openModal('loginModal');
 }
 
+/* With an API key, it identifies every request. Without one, the browser's sign-in session does,
+   and the custom header shows the request came from this page: another site's page can't add it. */
+function authHeaders() {
+    return API_KEY ? { 'X-API-Key': API_KEY } : { 'X-Cabinet-Request': '1' };
+}
+
+/* The ways to sign in this server offers, shown in the sign-in dialog. */
+async function loadSignInOptions() {
+    try {
+        const res = await fetch('/auth/providers', { headers: { Accept: 'application/json' } });
+        if (!res.ok) return null;
+        const p = await res.json();
+        document.getElementById('loginOidc').hidden = !p.oidc;
+        document.getElementById('loginSaml').hidden = !p.saml;
+        document.getElementById('loginLdap').hidden = !p.ldap;
+        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap);
+        const signOut = document.getElementById('signOutButton');
+        if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
+        return p;
+    } catch { return null; }
+}
+
+function signInWith(provider) {
+    window.location.href = `/auth/login/${provider}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+}
+
+async function signInLdap() {
+    const username = document.getElementById('ldapUser').value.trim();
+    const password = document.getElementById('ldapPassword').value;
+    if (!username || !password) return;
+    const res = await fetch('/auth/login/ldap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Cabinet-Request': '1' },
+        body: JSON.stringify({ username, password }),
+    });
+    document.getElementById('ldapPassword').value = '';
+    if (res.ok) { window.location.reload(); return; }
+    let message = 'Sign-in failed';
+    try { message = (await res.json()).message || message; } catch {}
+    document.getElementById('loginError').textContent = message;
+}
+
+async function signOut() {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'X-Cabinet-Request': '1' } });
+    sessionStorage.removeItem('cabinet_api_key');
+    localStorage.removeItem('cabinet_api_key');
+    API_KEY = '';
+    window.location.reload();
+}
+
 function storeApiKey(key, remember) {
     API_KEY = key;
     sessionStorage.setItem('cabinet_api_key', key);
@@ -158,10 +208,11 @@ function navigate(page) {
 
 /* ===== API Helper ===== */
 async function api(method, path, body) {
-    const opts = { method, headers: { 'X-API-Key': API_KEY, 'Accept': 'application/json' } };
+    const opts = { method, headers: { ...authHeaders(), 'Accept': 'application/json' } };
     if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     const res = await fetch(path, opts);
     if (res.status === 401) {
+        loadSignInOptions();
         showLogin(API_KEY ? 'That API key was not accepted.' : '');
     }
     if (!res.ok) {
@@ -1275,7 +1326,7 @@ function toggleTail() {
     (async () => {
         try {
             const res = await fetch(url, {
-                headers: { 'X-API-Key': API_KEY, 'Accept': 'text/event-stream' },
+                headers: { ...authHeaders(), 'Accept': 'text/event-stream' },
                 signal: controller.signal
             });
             const reader = res.body.getReader();
@@ -1609,5 +1660,5 @@ document.querySelectorAll('.modal-bg').forEach(bg => {
 });
 
 initAccessibility();
-if (!API_KEY) showLogin();
+loadSignInOptions().then(p => { if (!API_KEY && !(p && p.signedIn)) showLogin(); });
 

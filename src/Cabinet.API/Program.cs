@@ -165,16 +165,19 @@ try
         options.DefaultChallengeScheme = "MultiAuth";
     })
     .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>("ApiKey", null)
-    .AddPolicyScheme("MultiAuth", "API Key or Bearer", options =>
+    .AddPolicyScheme("MultiAuth", "API Key, Bearer or dashboard session", options =>
     {
         options.ForwardDefaultSelector = context =>
         {
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
                 return "Bearer";
+            if (Cabinet.API.Authentication.BrowserSession.UsesSession(context.Request))
+                return Cabinet.API.Authentication.BrowserSession.Scheme;
             return "ApiKey";
         };
-    });
+    })
+    .AddCabinetBrowserSession(ssoConfig);
 
     if (ssoConfig?.Enabled == true && ssoConfig.Oidc != null)
     {
@@ -719,6 +722,18 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     {
         services.AddSingleton(ssoConfig);
         services.AddSingleton<ClaimRoleMapper>();
+
+        // Dashboard sign-in through the directory or a SAML identity provider
+        if (ssoConfig.Ldap is { } ldap)
+        {
+            services.AddSingleton(sp => new Cabinet.API.Authentication.LdapAuthenticator(ldap, sp.GetRequiredService<ILogger<Cabinet.API.Authentication.LdapAuthenticator>>()));
+        }
+
+        if (ssoConfig.Saml is { } saml)
+        {
+            services.AddSingleton(sp => new Cabinet.API.Authentication.SamlSignIn(
+                saml, sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILogger<Cabinet.API.Authentication.SamlSignIn>>()));
+        }
     }
 
     // Deletes nothing unless Storage:RetentionDays is set to a positive value

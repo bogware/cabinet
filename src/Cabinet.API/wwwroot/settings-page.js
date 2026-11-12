@@ -560,7 +560,7 @@ async function saveSettings() {
     try {
         const response = await fetch('/api/v1/settings', {
             method: 'PUT',
-            headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json' },
+            headers: { ...authHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify({ values: settingsState.edits }),
         });
         const body = await response.json().catch(() => ({}));
