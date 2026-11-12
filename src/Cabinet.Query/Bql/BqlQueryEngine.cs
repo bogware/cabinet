@@ -191,8 +191,12 @@ public sealed class BqlQueryEngine : IQueryEngine
             return null;
         }
 
-        budget.CheckGroupCount(aggregate.Rows.Count);
-        IEnumerable<dynamic> result = aggregate.Rows.Select(values =>
+        // As in the pipeline, stats by leaves out events without a by-field
+        var rows = optimized.RemainingStages[0] is StatsStage { GroupByFields.Count: > 0 } grouped
+            ? aggregate.Rows.Where(values => grouped.GroupByFields.All(f => values.TryGetValue(f, out var v) && v != null)).ToList()
+            : aggregate.Rows;
+        budget.CheckGroupCount(rows.Count);
+        IEnumerable<dynamic> result = rows.Select(values =>
         {
             var row = new BqlRow();
             foreach (var (key, value) in values)
@@ -656,7 +660,18 @@ public sealed class BqlQueryEngine : IQueryEngine
         return expando;
     }
 
-    internal QueryOperator? ConvertStageToOperator(BqlStage stage, QueryBudget budget) => stage switch
+    internal QueryOperator? ConvertStageToOperator(BqlStage stage, QueryBudget budget)
+    {
+        var op = CreateOperator(stage, budget);
+        if (op != null)
+        {
+            op.Budget = budget;
+        }
+
+        return op;
+    }
+
+    private QueryOperator? CreateOperator(BqlStage stage, QueryBudget budget) => stage switch
     {
         SearchStage s => new LegacySearchOperator(s.SearchText),
         WhereStage w => new LegacyWhereOperator(w.Condition),

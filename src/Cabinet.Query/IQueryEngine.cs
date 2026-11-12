@@ -101,4 +101,7 @@ public abstract class QueryOperator
 {
     public abstract string Name { get; }
     public abstract Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken cancellationToken = default);
+
+    /// <summary>The query's limits, so a stage after the first one that holds rows keeps to them too.</summary>
+    internal Cabinet.Query.Bql.QueryBudget? Budget { get; set; }
 }

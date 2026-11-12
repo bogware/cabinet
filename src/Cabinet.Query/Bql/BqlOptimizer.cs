@@ -64,10 +64,8 @@ public sealed class BqlOptimizer
         // Direct mode reads a file rather than storage, so nothing can be pushed.
         var canPush = executionContext?.Mode != QueryMode.Direct;
 
-        foreach (var original in query.Stages)
+        foreach (var stage in query.Stages.SelectMany(SplitTextAndFieldSearch).Select(RewriteFieldSearch))
         {
-            var stage = RewriteFieldSearch(original);
-
             if (canPush && TryPushDown(stage, storageContext))
                 continue;
 
@@ -108,6 +106,79 @@ public sealed class BqlOptimizer
             RemainingStages = remainingStages,
             OriginalQuery = query
         };
+    }
+
+    private static readonly Regex FieldTerm = new(
+        @"^[A-Za-z_][\w.]*(==|!=|>=|<=|=|>|<)\S",
+        RegexOptions.None,
+        RegexTimeout);
+
+    /// <summary>
+    /// Splits <c>search error host=web</c> into a text search for <c>error</c> and a separate
+    /// field search for <c>host=web</c>, which together mean both, as in SPL. Searches with
+    /// OR, NOT or parentheses are left whole.
+    /// </summary>
+    private static IEnumerable<BqlStage> SplitTextAndFieldSearch(BqlStage stage)
+    {
+        if (stage is not SearchStage search || search.SearchText.Length > MaxSearchFilterLength
+            || SplitTerms(search.SearchText) is not { } terms)
+        {
+            return [stage];
+        }
+
+        var fields = terms.Where(term => FieldTerm.IsMatch(term)).ToList();
+        if (fields.Count == 0 || fields.Count == terms.Count)
+        {
+            return [stage];
+        }
+
+        return
+        [
+            new SearchStage(string.Join(' ', terms.Where(term => !FieldTerm.IsMatch(term)))),
+            new SearchStage(string.Join(' ', fields)),
+        ];
+    }
+
+    /// <summary>
+    /// The space-separated terms of a search, keeping quoted text together, or null when it uses
+    /// boolean operators or grouping.
+    /// </summary>
+    private static List<string>? SplitTerms(string text)
+    {
+        var terms = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var quoted = false;
+        foreach (var c in text)
+        {
+            if (c == '"')
+            {
+                quoted = !quoted;
+            }
+            else if (!quoted && c is '(' or ')')
+            {
+                return null;
+            }
+
+            if (!quoted && char.IsWhiteSpace(c))
+            {
+                if (current.Length > 0)
+                {
+                    terms.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(c);
+        }
+
+        if (current.Length > 0)
+        {
+            terms.Add(current.ToString());
+        }
+
+        return quoted || terms.Any(term => term is "OR" or "NOT" or "AND" or "or" or "not" or "and") ? null : terms;
     }
 
     /// <summary>
@@ -210,6 +281,17 @@ public sealed class BqlOptimizer
             return true;
         }
 
+        // A time bound narrows what storage reads. Storage bounds are inclusive and the pipeline
+        // still checks the exact comparison, so the stage stays.
+        if (field is "_time" or "timestamp" && op is ">" or ">=" or "<" or "<=" && TimeLiteral(value) is { } time)
+        {
+            if (op is ">" or ">=")
+                ctx.StartTime = ctx.StartTime is { } start && start > time ? start : time;
+            else
+                ctx.EndTime = ctx.EndTime is { } end && end < time ? end : time;
+            return false;
+        }
+
         if (op is not ("=" or "==") || value is not string text)
             return false;
 
@@ -228,6 +310,15 @@ public sealed class BqlOptimizer
 
         return false;
     }
+
+    /// <summary>A literal as a UTC time: a date string, or epoch seconds as SPL writes them.</summary>
+    private static DateTime? TimeLiteral(object? value) => value switch
+    {
+        DateTime time => time.Kind == DateTimeKind.Local ? time.ToUniversalTime() : DateTime.SpecifyKind(time, DateTimeKind.Utc),
+        int or long or double => BqlTime.FromValue(null, Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture)),
+        string text => BqlTime.Parse(text, null),
+        _ => null,
+    };
 }
 
 /// <summary>

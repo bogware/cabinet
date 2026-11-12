@@ -1531,7 +1531,8 @@ public sealed class BqlParser : IQueryParser
     {
         if (Current.Kind != BqlTokenKind.NumberLiteral)
             throw new QueryParseException($"Expected number but got '{Current.Value}'", $"position {Current.Position}");
-        var num = int.Parse(Current.Value, CultureInfo.InvariantCulture);
+        if (!int.TryParse(Current.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var num))
+            throw new QueryParseException($"'{Current.Value}' isn't a whole number between {int.MinValue} and {int.MaxValue}", $"position {Current.Position}");
         Advance();
         return num;
     }
@@ -1707,7 +1708,7 @@ internal sealed class LegacyStatsOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = new StatsSink(_aggregations, _groupByFields, new QueryBudget(new QueryLimits()));
+        var sink = new StatsSink(_aggregations, _groupByFields, Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -1845,7 +1846,7 @@ internal sealed class LegacyTopOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2021,7 +2022,7 @@ internal sealed class LegacyTimechartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2279,6 +2280,35 @@ internal sealed class LegacyStreamStatsOperator : QueryOperator
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
         var events = input.ToList();
+        if (_window <= 0)
+        {
+            // Without a window, running totals: each row costs one update, not a pass over all before it
+            var budget = Budget ?? new QueryBudget(new QueryLimits());
+            var running = new Dictionary<string, AggregateAccumulator[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in events)
+            {
+                var dict = (IDictionary<string, object?>)evt;
+                var groupKey = _groupByFields.Count > 0 ? BqlGroupKey.For(dict, _groupByFields) : "";
+                if (!running.TryGetValue(groupKey, out var accumulators))
+                {
+                    accumulators = _aggregations.Select(agg => new AggregateAccumulator(agg, budget)).ToArray();
+                    running[groupKey] = accumulators;
+                }
+
+                foreach (var accumulator in accumulators)
+                {
+                    accumulator.Add(dict);
+                }
+
+                for (var i = 0; i < _aggregations.Count; i++)
+                {
+                    dict[_aggregations[i].OutputName] = accumulators[i].Result();
+                }
+            }
+
+            return Task.FromResult<IEnumerable<dynamic>>(events);
+        }
+
         // Track running windows per group (or global if no group-by)
         var groupWindows = new Dictionary<string, List<dynamic>>(StringComparer.OrdinalIgnoreCase);
 
@@ -2524,7 +2554,7 @@ internal sealed class LegacyChartOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);
@@ -2639,7 +2669,7 @@ internal sealed class LegacyRareOperator : QueryOperator
 
     public override Task<IEnumerable<dynamic>> ExecuteAsync(IEnumerable<dynamic> input, CancellationToken ct = default)
     {
-        var sink = CreateSink(new QueryBudget(new QueryLimits()));
+        var sink = CreateSink(Budget ?? new QueryBudget(new QueryLimits()));
         foreach (object row in input)
         {
             sink.Add(row);

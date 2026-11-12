@@ -265,6 +265,12 @@ internal sealed class StatsSink : IRowSink
         }
         else
         {
+            // As in SPL, an event without every by-field isn't counted
+            if (!BqlGroupKey.HasAll(dict, _groupByFields))
+            {
+                return;
+            }
+
             var key = BqlGroupKey.For(dict, _groupByFields);
             if (!_groups.TryGetValue(key, out group!))
             {
@@ -348,10 +354,34 @@ internal sealed class TimechartSink : IRowSink
 
     public int? Remaining => null;
 
+    /// <summary>
+    /// The row's time: <c>_time</c>, which eval or bin may have changed, else the event's own.
+    /// </summary>
+    private static DateTime? TimeOf(IDictionary<string, object?> row)
+    {
+        if (row.TryGetValue("_time", out var time) && time != null)
+        {
+            var epoch = time switch
+            {
+                double d => d,
+                long l => l,
+                int i => i,
+                string s when double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => (double?)null,
+            };
+            if (BqlTime.FromValue(time, epoch) is { } fromTime && fromTime != DateTime.MinValue)
+            {
+                return fromTime;
+            }
+        }
+
+        return row.TryGetValue("Timestamp", out var value) && value is DateTime timestamp && timestamp != DateTime.MinValue ? timestamp : null;
+    }
+
     public void Add(object row)
     {
         var dict = (IDictionary<string, object?>)row;
-        if (!dict.TryGetValue("Timestamp", out var value) || value is not DateTime timestamp || timestamp == DateTime.MinValue)
+        if (TimeOf(dict) is not { } timestamp)
         {
             return;
         }

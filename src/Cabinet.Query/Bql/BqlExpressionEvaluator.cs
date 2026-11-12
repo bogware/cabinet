@@ -78,9 +78,8 @@ public static class BqlExpressionEvaluator
         var left = Evaluate(expr.Left, context);
         var right = Evaluate(expr.Right, context);
 
-        // Null handling
-        if (left == null && right == null) return expr.Operator is "=" or "==";
-        if (left == null || right == null) return expr.Operator is "!=" or "<>";
+        // As in SPL, comparing with a missing value is never true, for != too: use isnull() for that
+        if (left == null || right == null) return false;
 
         // A time compared with a date string compares as times
         left = CoerceTimeOperand(left, right);
@@ -155,6 +154,10 @@ public static class BqlExpressionEvaluator
         return false;
     }
 
+    private const int MaxCachedLikePatterns = 1000;
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> LikePatterns = new(StringComparer.Ordinal);
+
     private static object EvaluateLike(LikeExpression expr, IDictionary<string, object?> context)
     {
         var rawValue = Evaluate(expr.Field, context);
@@ -163,16 +166,26 @@ public static class BqlExpressionEvaluator
         var value = rawValue.ToString() ?? "";
         // Guard against excessively long LIKE patterns
         if (expr.Pattern.Length > 10_000) return false;
-        // Convert SQL LIKE pattern to regex: first replace wildcards, then escape the rest
-        var pattern = expr.Pattern;
-        // Temporarily replace % and _ with placeholders that won't be escaped
-        pattern = pattern.Replace("%%", "\x01").Replace("%", "\x02").Replace("_", "\x03").Replace("\x01", "%");
-        pattern = "^" + Regex.Escape(pattern)
-            .Replace("\x02", ".*")
-            .Replace("\x03", ".") + "$";
+        var regex = LikePatterns.GetOrAdd(expr.Pattern, static like =>
+        {
+            // Convert SQL LIKE pattern to regex: first replace wildcards, then escape the rest.
+            // Temporarily replace % and _ with placeholders that won't be escaped.
+            var pattern = like.Replace("%%", "\x01").Replace("%", "\x02").Replace("_", "\x03").Replace("\x01", "%");
+            pattern = "^" + Regex.Escape(pattern)
+                .Replace("\x02", ".*")
+                .Replace("\x03", ".") + "$";
+            return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+        });
+
+        // One query uses few patterns; this keeps many different queries from growing it forever
+        if (LikePatterns.Count > MaxCachedLikePatterns)
+        {
+            LikePatterns.Clear();
+        }
+
         try
         {
-            return Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase, RegexTimeout);
+            return regex.IsMatch(value);
         }
         catch (RegexMatchTimeoutException)
         {
@@ -182,6 +195,25 @@ public static class BqlExpressionEvaluator
 
     private static object? EvaluateFunction(FunctionExpression func, IDictionary<string, object?> context)
     {
+        // Only the branch taken is evaluated, so an untaken one can't cost time or fail
+        switch (func.Name)
+        {
+            case "if":
+                return EvalIf(func, context);
+            case "case":
+                return EvalCase(func, context);
+            case "validate":
+                return EvalValidate(func, context);
+            case "coalesce":
+                foreach (var argument in func.Arguments)
+                {
+                    if (Evaluate(argument, context) is { } value)
+                        return value;
+                }
+
+                return null;
+        }
+
         var args = func.Arguments.Select(a => Evaluate(a, context)).ToList();
 
         return func.Name switch
@@ -206,14 +238,11 @@ public static class BqlExpressionEvaluator
             "like" => EvalLike(args),
 
             // Null/coalesce
-            "coalesce" => args.FirstOrDefault(a => a != null),
             "isnull" => args.FirstOrDefault() == null,
             "isnotnull" => args.FirstOrDefault() != null,
             "nullif" => Equals(args.ElementAtOrDefault(0)?.ToString(), args.ElementAtOrDefault(1)?.ToString()) ? null : args.ElementAtOrDefault(0),
 
             // Conditional
-            "if" => EvalIf(args, context, func),
-            "case" => EvalCase(args, context, func),
 
             // Type conversion
             "tostring" => args.FirstOrDefault()?.ToString(),
@@ -275,7 +304,6 @@ public static class BqlExpressionEvaluator
 
             // Type / validation functions
             "typeof" => EvalTypeOf(args),
-            "validate" => EvalValidate(args, context, func),
             "searchmatch" => EvalSearchMatch(args, context),
             "isnum" or "isnumber" => ToDouble(args.FirstOrDefault()).HasValue,
             "isstr" or "isstring" => args.FirstOrDefault() is string,
@@ -351,7 +379,7 @@ public static class BqlExpressionEvaluator
         return str.Substring(start, Math.Min(length, str.Length - start));
     }
 
-    private static object? EvalIf(List<object?> args, IDictionary<string, object?> context, FunctionExpression func)
+    private static object? EvalIf(FunctionExpression func, IDictionary<string, object?> context)
     {
         if (func.Arguments.Count >= 3)
         {
@@ -460,7 +488,7 @@ public static class BqlExpressionEvaluator
         }
     }
 
-    private static object? EvalCase(List<object?> args, IDictionary<string, object?> context, FunctionExpression func)
+    private static object? EvalCase(FunctionExpression func, IDictionary<string, object?> context)
     {
         // case(cond1, val1, cond2, val2, ..., default)
         for (var i = 0; i + 1 < func.Arguments.Count; i += 2)
@@ -645,7 +673,7 @@ public static class BqlExpressionEvaluator
         return "String";
     }
 
-    private static object? EvalValidate(List<object?> args, IDictionary<string, object?> context, FunctionExpression func)
+    private static object? EvalValidate(FunctionExpression func, IDictionary<string, object?> context)
     {
         // Splunk validate(condition1, message1, condition2, message2, ...)
         // Returns null if all conditions pass, otherwise the first failing message
@@ -949,7 +977,8 @@ public static class BqlExpressionEvaluator
         if (value is int i) return i != 0;
         if (value is long l) return l != 0;
         if (value is double d) return d != 0;
-        if (value is string s) return !string.IsNullOrEmpty(s);
+        // A field read from a log holds "false" or "0" as text
+        if (value is string s) return !string.IsNullOrEmpty(s) && !s.Equals("false", StringComparison.OrdinalIgnoreCase) && s != "0";
         return true;
     }
 }
