@@ -281,6 +281,27 @@ public class PostgresLogStorageIntegrationTests : IAsyncLifetime, IDisposable
     }
 
     [SkippableFact]
+    public async Task PurgeIndexEvents_DeletesMoreThanOneBatch()
+    {
+        SkipIfNotAvailable();
+
+        var index = $"purge-{Guid.NewGuid():N}";
+        var count = PostgresLogStorage.DeleteBatchSize * 2 + 7;
+        var events = Enumerable.Range(0, count).Select(i =>
+        {
+            var evt = CreateEvent($"old {i}", timestamp: DateTime.UtcNow.AddDays(-30));
+            evt.Index = index;
+            return evt;
+        }).ToList();
+        await _storage!.StoreBatchAsync(events);
+
+        var purged = await _storage.PurgeIndexEventsAsync(index, DateTime.UtcNow.AddDays(-20));
+
+        purged.Should().Be(count);
+        (await _storage.GetCountAsync(new QueryContext { Index = index })).Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task StoreBatch_DuplicateIds_HandlesGracefully()
     {
         SkipIfNotAvailable();

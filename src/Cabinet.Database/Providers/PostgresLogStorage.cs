@@ -261,21 +261,43 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
     public async Task<int> PurgeIndexEventsAsync(string indexName, DateTime before, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
-        await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await DeleteInBatchesAsync(
+            "index_name = @IndexName AND timestamp < @Before",
+            new { IndexName = indexName, Before = DateTime.SpecifyKind(before, DateTimeKind.Utc) },
+            cancellationToken);
+    }
 
-        return await conn.ExecuteAsync(
-            "DELETE FROM log_events WHERE index_name = @IndexName AND timestamp < @Before",
-            new { IndexName = indexName, Before = DateTime.SpecifyKind(before, DateTimeKind.Utc) });
+    /// <summary>Rows deleted per statement, so retention never runs one huge, lock-holding delete.</summary>
+    public const int DeleteBatchSize = 10_000;
+
+    /// <summary>
+    /// Deletes matching rows a batch at a time, each its own short transaction. One statement over
+    /// millions of rows would time out, hold its locks throughout and write it all to the WAL at once.
+    /// </summary>
+    private async Task<int> DeleteInBatchesAsync(string where, object parameters, CancellationToken cancellationToken)
+    {
+        var sql = $"DELETE FROM log_events WHERE id IN (SELECT id FROM log_events WHERE {where} LIMIT {DeleteBatchSize})";
+        var total = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
+            var deleted = await conn.ExecuteAsync(new CommandDefinition(sql, parameters, commandTimeout: 300, cancellationToken: cancellationToken));
+            total += deleted;
+            if (deleted < DeleteBatchSize)
+            {
+                return total;
+            }
+        }
     }
 
     public async Task<int> PurgeOldEventsAsync(DateTime before, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
-        await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        var deleted = await conn.ExecuteAsync(
-            "DELETE FROM log_events WHERE timestamp < @Before",
-            new { Before = before });
+        var deleted = await DeleteInBatchesAsync(
+            "timestamp < @Before",
+            new { Before = DateTime.SpecifyKind(before, DateTimeKind.Utc) },
+            cancellationToken);
 
         _logger.LogInformation("Purged {Count} events older than {Before}", deleted, before);
         return deleted;
@@ -284,11 +306,7 @@ public sealed partial class PostgresLogStorage : ILogStorage, IDisposable
     public async Task<int> DeleteByIndexAsync(string indexName, CancellationToken cancellationToken = default)
     {
         await EnsureInitializedAsync(cancellationToken);
-        await using var conn = await _dataSource.OpenConnectionAsync(cancellationToken);
-
-        var deleted = await conn.ExecuteAsync(
-            "DELETE FROM log_events WHERE index_name = @IndexName",
-            new { IndexName = indexName });
+        var deleted = await DeleteInBatchesAsync("index_name = @IndexName", new { IndexName = indexName }, cancellationToken);
 
         _logger.LogInformation("Deleted {Count} events from index '{Index}'", deleted, indexName);
         return deleted;
