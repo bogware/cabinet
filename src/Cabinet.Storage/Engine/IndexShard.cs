@@ -183,15 +183,16 @@ internal sealed class IndexShard : IDisposable
         _wal = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 1 << 16);
     }
 
-    public SegmentReader[] Segments => _segments;
-
-    /// <summary>The in-memory events, as of now.</summary>
-    public LogEvent[] HotSnapshot()
+    /// <summary>
+    /// The in-memory events and the segments, taken together, so a flush between reading one and
+    /// the other can't show an event twice or not at all.
+    /// </summary>
+    public (LogEvent[] Hot, SegmentReader[] Segments) Snapshot()
     {
         _writeLock.Wait();
         try
         {
-            return _hot.ToArray();
+            return (_hot.ToArray(), _segments);
         }
         finally
         {

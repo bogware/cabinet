@@ -299,3 +299,49 @@ public sealed class OpenSearchAggregatePushdownTests : AggregatePushdownTests
         await client.DeleteAsync($"{url}/_template/{_indexPrefix}-template");
     }
 }
+
+/// <summary>The engine with events still in memory, before any segment is written.</summary>
+public sealed class EngineInMemoryAggregatePushdownTests : AggregatePushdownTests, IDisposable
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-agg-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    // Every function but percentiles; min and max of text alone stay in the pipeline
+    protected override bool PushesDown(string query) =>
+        !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
+        && !query.Contains("where", StringComparison.Ordinal);
+
+    protected override ILogStorage CreateStorage() => _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path);
+
+    public void Dispose()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+    }
+}
+
+/// <summary>The engine reading compressed segments, with small ones so groups span several.</summary>
+public sealed class EngineSegmentAggregatePushdownTests : AggregatePushdownTests, IDisposable
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-agg-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    protected override bool PushesDown(string query) =>
+        !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
+        && !query.Contains("where", StringComparison.Ordinal);
+
+    protected override ILogStorage CreateStorage() =>
+        _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path, new Cabinet.Storage.Engine.EngineOptions { FlushEvents = 1000 });
+
+    protected override Task OnSeededAsync() => _engine!.FlushAsync();
+
+    public void Dispose()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+    }
+}

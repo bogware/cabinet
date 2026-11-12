@@ -566,6 +566,9 @@ internal sealed class BlockRows
         return logEvent;
     }
 
+    /// <summary>The file a row came from, if any.</summary>
+    public string? SourceFile(int i) => Meta()[i].Item2;
+
     private (long IndexTicks, string? SourceFile, long LineNumber, string? ParserName, string[] Tags)[]? _meta;
 
     private (long, string?, long, string?, string[])[] Meta()

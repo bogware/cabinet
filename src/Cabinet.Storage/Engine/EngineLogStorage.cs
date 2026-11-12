@@ -155,8 +155,9 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         var sources = new List<RowSource>();
         foreach (var shard in ShardsFor(context))
         {
-            sources.Add(RowSource.FromHot(shard.HotSnapshot(), filter, context.SortDescending));
-            sources.AddRange(shard.Segments.Where(filter.MayMatch).Select(segment => RowSource.FromSegment(segment, filter, context.SortDescending)));
+            var (hot, segments) = shard.Snapshot();
+            sources.Add(RowSource.FromHot(hot, filter, context.SortDescending));
+            sources.AddRange(segments.Where(filter.MayMatch).Select(segment => RowSource.FromSegment(segment, filter, context.SortDescending)));
         }
 
         if (!context.SortField.Equals("Timestamp", StringComparison.OrdinalIgnoreCase))
@@ -204,12 +205,13 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         await InitializeAsync(cancellationToken);
         foreach (var shard in _shards.Values)
         {
-            if (shard.HotSnapshot().FirstOrDefault(e => e.Id == id) is { } hot)
+            var (hot, segments) = shard.Snapshot();
+            if (hot.FirstOrDefault(e => e.Id == id) is { } found)
             {
-                return hot;
+                return found;
             }
 
-            foreach (var segment in shard.Segments)
+            foreach (var segment in segments)
             {
                 foreach (var block in segment.Blocks.Where(b => b.Ids.MayContain(id)))
                 {
@@ -235,8 +237,9 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         long count = 0;
         foreach (var shard in ShardsFor(context))
         {
-            count += RowSource.FromHot(shard.HotSnapshot(), filter, true).All(cancellationToken).LongCount();
-            foreach (var segment in shard.Segments.Where(filter.MayMatch))
+            var (hot, segments) = shard.Snapshot();
+            count += hot.Count(filter.Matches);
+            foreach (var segment in segments.Where(filter.MayMatch))
             {
                 foreach (var block in segment.Blocks.Where(filter.MayMatch))
                 {
@@ -294,7 +297,7 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         foreach (var shard in _shards.Values)
         {
             long total = 0;
-            var hot = shard.HotSnapshot();
+            var (hot, segments) = shard.Snapshot();
             foreach (var logEvent in hot)
             {
                 Add(stats.EventsBySourceType, logEvent.SourceType ?? string.Empty, 1);
@@ -305,7 +308,7 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
 
             total += hot.Length;
             stats.StorageSizeBytes += shard.WalBytes;
-            foreach (var segment in shard.Segments)
+            foreach (var segment in segments)
             {
                 total += segment.Rows;
                 stats.StorageSizeBytes += segment.SizeBytes;

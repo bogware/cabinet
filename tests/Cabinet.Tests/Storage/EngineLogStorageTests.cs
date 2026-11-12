@@ -191,6 +191,41 @@ public sealed class EngineLogStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task Aggregates_AcrossManyBlocks_CountWholeBlocksUnread_AndSplitTheRest()
+    {
+        var engine = Open(new EngineOptions { FlushEvents = 5000 });
+        await engine.StoreBatchAsync(Enumerable.Range(0, 20_000).Select(i => Event(i)));
+        await engine.StoreBatchAsync(Enumerable.Range(20_000, 700).Select(i => Event(i)));
+
+        var all = await engine.AggregateAsync(new AggregateRequest
+        {
+            Filter = new QueryContext(),
+            Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count")],
+        });
+        all!.Rows.Single()["count"].Should().Be(20_700);
+
+        var hourly = await engine.AggregateAsync(new AggregateRequest
+        {
+            Filter = new QueryContext { StartTime = Start.AddSeconds(1000) },
+            Bucket = TimeSpan.FromHours(1),
+            Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count")],
+        });
+        hourly!.Rows.Select(r => (int)r["count"]!).Should().Equal(3600 - 1000, 3600, 3600, 3600, 3600, 20_700 - 5 * 3600);
+        hourly.Rows.Select(r => (DateTime)r["_time"]!).Should().BeInAscendingOrder();
+
+        var byHost = await engine.AggregateAsync(new AggregateRequest
+        {
+            Filter = new QueryContext { MinSeverity = LogSeverity.Error },
+            GroupBy = ["host"],
+            Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count"), new AggregateSpec(AggregateKind.Max, "status", 0, "max")],
+        });
+        byHost!.Rows.Should().HaveCount(3);
+        byHost.Rows.Sum(r => (int)r["count"]!).Should().Be(2070);
+        byHost.Rows.Should().OnlyContain(r => (double)r["max"]! == 500);
+        byHost.Rows[0]["host"].Should().Be("host-2", "the newest error, 20690, is on host-2");
+    }
+
+    [Fact]
     public async Task ConcurrentWritersAndReaders_LoseNothing()
     {
         var engine = Open(new EngineOptions { FlushEvents = 500, SyncWrites = false });
