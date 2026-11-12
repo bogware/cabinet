@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\src\Cabinet.Extras.Gaming\Cabinet.Extras.Gaming.csproj" />
     <ProjectReference Include="..\..\src\Cabinet.API\Cabinet.API.csproj" />
     <ProjectReference Include="..\..\src\Cabinet.Agent\Cabinet.Agent.csproj" />
+    <ProjectReference Include="..\..\src\Cabinet.CLI\Cabinet.CLI.csproj" />
   </ItemGroup>
 
 </Project>

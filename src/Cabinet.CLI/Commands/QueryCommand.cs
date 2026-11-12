@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Cabinet.Core.Interfaces;
 using Cabinet.Query;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +19,8 @@ public class QueryCommand : Command
         var formatOption = new Option<string>("--format", () => "table", "Output format: table, json, ndjson, csv");
         var limitOption = new Option<int>("--limit", () => 100, "Maximum results to return");
         var timeRangeOption = new Option<string>("--time", "Time range (e.g., '1h', '24h', '7d')");
+        var serverOption = new Option<string?>("--server",
+            "Run the query on a Cabinet server, such as https://cabinet.example.com, instead of local storage. Also CABINET_SERVER. The API key comes from CABINET_API_KEY.");
 
         AddArgument(queryArgument);
         AddOption(modeOption);
@@ -24,8 +28,9 @@ public class QueryCommand : Command
         AddOption(formatOption);
         AddOption(limitOption);
         AddOption(timeRangeOption);
+        AddOption(serverOption);
 
-        this.SetHandler(HandleCommand, queryArgument, modeOption, pathOption, formatOption, limitOption, timeRangeOption);
+        this.SetHandler(HandleCommand, queryArgument, modeOption, pathOption, formatOption, limitOption, timeRangeOption, serverOption);
     }
 
     private async Task<int> HandleCommand(
@@ -34,12 +39,25 @@ public class QueryCommand : Command
         string? path,
         string format,
         int limit,
-        string? timeRange)
+        string? timeRange,
+        string? server)
     {
         if (mode == "direct" && string.IsNullOrEmpty(path))
         {
             AnsiConsole.MarkupLine("[red]Error:[/] --path is required for direct mode");
             return 1;
+        }
+
+        server ??= Environment.GetEnvironmentVariable("CABINET_SERVER");
+        if (!string.IsNullOrWhiteSpace(server))
+        {
+            if (mode == "direct")
+            {
+                AnsiConsole.MarkupLine("[red]Error:[/] direct mode reads a local file, so it can't run on a server");
+                return 1;
+            }
+
+            return await HandleRemoteAsync(server, query, format, limit, timeRange);
         }
 
         var host = Host.CreateDefaultBuilder()
@@ -84,45 +102,7 @@ public class QueryCommand : Command
                         var results = await queryEngine.ExecuteAsync(context);
 
                         ctx.Status("Formatting results...");
-
-                        switch (format.ToLower())
-                        {
-                            case "json":
-                                OutputJson(results);
-                                break;
-                            case "ndjson":
-                                OutputNdJson(results);
-                                break;
-                            case "csv":
-                                OutputCsv(results);
-                                break;
-                            default:
-                                OutputTable(results);
-                                break;
-                        }
-
-                        // Display statistics
-                        if (results.Statistics != null)
-                        {
-                            AnsiConsole.WriteLine();
-                            var statsTable = new Table();
-                            statsTable.AddColumn("Statistic");
-                            statsTable.AddColumn("Value");
-
-                            statsTable.AddRow("Events Scanned", results.Statistics.EventsScanned.ToString("N0"));
-                            statsTable.AddRow("Events Matched", results.Statistics.EventsMatched.ToString("N0"));
-                            statsTable.AddRow("Execution Time", $"{results.Statistics.ExecutionTime.TotalMilliseconds:N0} ms");
-
-                            if (results.Statistics.FieldCardinality?.Any() == true)
-                            {
-                                foreach (var field in results.Statistics.FieldCardinality)
-                                {
-                                    statsTable.AddRow($"Unique {field.Key}", field.Value.ToString("N0"));
-                                }
-                            }
-
-                            AnsiConsole.Write(statsTable);
-                        }
+                        Output(results, format);
                     });
 
                 await host.StopAsync();
@@ -143,6 +123,166 @@ public class QueryCommand : Command
                 return 1;
             }
         }
+    }
+
+    private void Output(QueryResult results, string format)
+    {
+        switch (format.ToLower())
+        {
+            case "json":
+                OutputJson(results);
+                break;
+            case "ndjson":
+                OutputNdJson(results);
+                break;
+            case "csv":
+                OutputCsv(results);
+                break;
+            default:
+                OutputTable(results);
+                break;
+        }
+
+        // Statistics only with the table, so json, ndjson and csv stay machine-readable
+        if (results.Statistics != null && format.Equals("table", StringComparison.OrdinalIgnoreCase))
+        {
+            AnsiConsole.WriteLine();
+            var statsTable = new Table();
+            statsTable.AddColumn("Statistic");
+            statsTable.AddColumn("Value");
+
+            statsTable.AddRow("Events Scanned", results.Statistics.EventsScanned.ToString("N0"));
+            statsTable.AddRow("Events Matched", results.Statistics.EventsMatched.ToString("N0"));
+            statsTable.AddRow("Execution Time", $"{results.Statistics.ExecutionTime.TotalMilliseconds:N0} ms");
+            if (results.Statistics.Truncated)
+            {
+                statsTable.AddRow("Truncated", "yes: more events matched than were read");
+            }
+
+            if (results.Statistics.FieldCardinality?.Any() == true)
+            {
+                foreach (var field in results.Statistics.FieldCardinality)
+                {
+                    statsTable.AddRow($"Unique {field.Key}", field.Value.ToString("N0"));
+                }
+            }
+
+            AnsiConsole.Write(statsTable);
+        }
+    }
+
+    private async Task<int> HandleRemoteAsync(string server, string query, string format, int limit, string? timeRange)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("CABINET_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            AnsiConsole.MarkupLine("[red]Error:[/] set CABINET_API_KEY to an API key for the server");
+            return 1;
+        }
+
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(5) };
+            http.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+            var request = new
+            {
+                query,
+                limit,
+                startTime = string.IsNullOrEmpty(timeRange) ? (DateTime?)null : ParseTimeRange(timeRange),
+                endTime = string.IsNullOrEmpty(timeRange) ? (DateTime?)null : DateTime.UtcNow,
+            };
+
+            using var response = await http.PostAsJsonAsync("api/v1/query/execute", request);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                AnsiConsole.MarkupLine($"[red]Error ({(int)response.StatusCode}):[/] {Markup.Escape(RemoteError(body) ?? response.ReasonPhrase ?? "request failed")}");
+                return 1;
+            }
+
+            Output(ParseRemoteResult(body), format);
+            return 0;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException or ArgumentException)
+        {
+            AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+    }
+
+    /// <summary>A server's answer as a local result, so it prints the same way.</summary>
+    public static QueryResult ParseRemoteResult(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        var rows = new List<dynamic>();
+        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in results.EnumerateArray())
+            {
+                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                if (item.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in item.EnumerateObject())
+                    {
+                        row[property.Name] = ToValue(property.Value);
+                    }
+                }
+                else
+                {
+                    row["value"] = ToValue(item);
+                }
+
+                rows.Add(row);
+            }
+        }
+
+        long Number(string name) => root.TryGetProperty(name, out var value) && value.TryGetInt64(out var number) ? number : 0;
+        return new QueryResult
+        {
+            Events = rows,
+            Columns = rows.Cast<Dictionary<string, object?>>().SelectMany(r => r.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            Statistics = new QueryStatistics
+            {
+                EventsScanned = Number("eventsScanned"),
+                EventsMatched = rows.Count,
+                ExecutionTime = TimeSpan.FromMilliseconds(Number("executionTimeMs")),
+                Truncated = root.TryGetProperty("truncated", out var truncated) && truncated.ValueKind == JsonValueKind.True,
+            },
+        };
+    }
+
+    private static object? ToValue(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString(),
+        JsonValueKind.Number => value.TryGetInt64(out var whole) ? whole : value.GetDouble(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        _ => value.GetRawText(),
+    };
+
+    private static string? RemoteError(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            foreach (var name in new[] { "detail", "message", "error", "title" })
+            {
+                if (document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                {
+                    return value.GetString();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON, such as a proxy's error page: show it as it is
+            return body.Length > 300 ? body[..300] : body;
+        }
+
+        return null;
     }
 
     private DateTime ParseTimeRange(string timeRange)
