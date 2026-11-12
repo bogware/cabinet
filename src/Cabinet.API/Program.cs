@@ -119,7 +119,8 @@ try
     {
         builder.Services.AddControllers().ConfigureApplicationPartManager(manager =>
             manager.FeatureProviders.Add(new ExcludeControllersFeatureProvider(
-                typeof(Cabinet.API.Controllers.DetectionController))));
+                typeof(Cabinet.API.Controllers.DetectionController),
+                typeof(Cabinet.API.Controllers.ModerationController))));
     }
 
     builder.Services.AddSwaggerGen(options =>

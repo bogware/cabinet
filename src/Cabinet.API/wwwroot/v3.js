@@ -128,6 +128,50 @@ function openInvestigationSearch(query) {
     navigate('search');
 }
 
+/* ===== Players (gaming extension) ===== */
+window.EXTRA_PAGES.players = { title: 'Players', load: () => loadPlayers() };
+
+async function loadPlayers() {
+    const tbody = document.getElementById('playersBody');
+    if (!tbody) return;
+    try {
+        const rows = await api('GET', '/api/v1/moderation/players');
+        tbody.innerHTML = rows.length === 0
+            ? '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-secondary)">No player chat in the last week.</td></tr>'
+            : rows.map(r => `<tr><td><button type="button" class="btn btn-secondary btn-sm" data-click="openPlayer" data-args='${esc(JSON.stringify([r.SteamId || r.steamId]))}'>${esc(r.name || r.SteamId)}</button></td>
+                <td class="mono">${esc(r.SteamId || '')}</td><td>${esc(String(r.chats ?? ''))}</td><td>${esc(String(r.names ?? ''))}</td><td>${esc(r.last_seen ? fmtTime(r.last_seen) : '')}</td></tr>`).join('');
+    } catch (e) {
+        tbody.innerHTML = '';
+        document.getElementById('playersNote').textContent = e.message.includes('404')
+            ? 'Player moderation is part of the gaming extension, which is off. An administrator can turn it on with Gaming:Enabled.'
+            : e.message;
+    }
+}
+
+function openPlayerFromInput() {
+    const value = document.getElementById('playerLookup').value.trim();
+    if (value) openPlayer(value);
+}
+
+async function openPlayer(player) {
+    const panel = document.getElementById('playerProfile');
+    panel.hidden = false;
+    panel.innerHTML = '<span class="spinner"></span>';
+    try {
+        const p = await api('GET', '/api/v1/moderation/players/' + encodeURIComponent(player));
+        const history = Object.entries(p.adminActions || {}).map(([a, n]) => `${esc(a)} ${esc(String(n))}`).join(', ') || 'none';
+        const chat = (p.recentChat || []).map(c => `<li${c.flag ? ' style="background:var(--warning-bg, rgba(210,153,34,0.15))"' : ''}><span style="color:var(--text-muted)">${esc(c.time ? fmtTime(c.time) : '')}</span> ${esc(c.text)}${c.flag ? ` <span class="badge badge-error">${esc(c.severity || 'flagged')}</span>` : ''}</li>`).join('');
+        const s = p.suggestion || {};
+        panel.innerHTML = `<h4>${esc(p.names?.join(', ') || p.player)} <span class="mono" style="color:var(--text-secondary)">${esc(p.steamId || '')}</span></h4>
+            <p>${esc(String(p.events))} events, first seen ${esc(p.firstSeen ? fmtTime(p.firstSeen) : '?')}, last seen ${esc(p.lastSeen ? fmtTime(p.lastSeen) : '?')}.
+               ${esc(String(p.chatLines))} chat lines, ${esc(String(p.toxicLines))} flagged (${esc(String(p.severeLines))} severe). Admin actions against them: ${history}.</p>
+            <div class="st-card" style="padding:12px;margin:12px 0"><strong>Suggested: ${esc(s.action || 'None')}</strong> — ${esc(s.reason || '')}
+                ${s.command ? `<div class="mono" style="margin-top:8px;user-select:all">${esc(s.command)}</div>` : ''}
+                <p class="page-note" style="margin-top:8px">${esc(p.suggestionNote || '')}</p></div>
+            <h4>Recent chat</h4>${chat ? `<ul style="list-style:none;padding:0">${chat}</ul>` : '<p class="page-note">No chat.</p>'}`;
+    } catch (e) { panel.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
+}
+
 /* ===== Anomalies ===== */
 window.EXTRA_PAGES.anomalies = { title: 'Anomalies', load: () => loadAnomalyRules() };
 

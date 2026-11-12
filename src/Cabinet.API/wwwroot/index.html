@@ -468,6 +468,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.5 2.5v5c0 3.9 2.7 7.2 6.5 8.5 3.8-1.3 6.5-4.6 6.5-8.5v-5L8 0Zm0 1.6 5 1.9v4c0 3-2 5.6-5 6.8-3-1.2-5-3.8-5-6.8v-4l5-1.9Z"/></svg>
                 Detections
             </button>
+            <button type="button" class="nav-item" data-page="players">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-5 6.25C3 11.9 5.24 10 8 10s5 1.9 5 4.25a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75Z"/></svg>
+                Players
+            </button>
             <button type="button" class="nav-item" data-page="anomalies">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 13.25h13a.75.75 0 0 1 0 1.5h-13A1.5 1.5 0 0 1 0 13.25V1.75a.75.75 0 0 1 1.5 0Zm3.03-3.47a.75.75 0 0 1-1.06-1.06l3-3a.75.75 0 0 1 1.06 0L9.5 7.69l3.97-3.97a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0L7 7.31Z"/></svg>
                 Anomalies
@@ -766,6 +770,23 @@
                     <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary" id="investigateButton" data-click="runInvestigation">Investigate</button></div>
                     <div id="investigateResult" aria-live="polite"></div>
                 </div>
+            </div>
+
+            <div class="page" id="page-players">
+                <div class="toolbar">
+                    <h3>Players</h3>
+                    <div class="toolbar-actions">
+                        <input type="text" id="playerLookup" placeholder="Steam ID or name" aria-label="Steam ID or player name" style="width:220px">
+                        <button class="btn btn-primary btn-sm" data-click="openPlayerFromInput">Look up</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadPlayers">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note" id="playersNote">Players who chatted on your game servers in the last week. Open one to see their names, chat with toxicity flagged, admin history, and a suggested action. Suggestions only: Cabinet never runs RCON commands.</p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Player</th><th scope="col">Steam ID</th><th scope="col">Chat lines</th><th scope="col">Names used</th><th scope="col">Last seen</th></tr></thead>
+                    <tbody id="playersBody"></tbody>
+                </table></div></div>
+                <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:12px"></div>
             </div>
 
             <div class="page" id="page-anomalies">
