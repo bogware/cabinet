@@ -315,18 +315,34 @@ public sealed class PostgresLeaderLeaseTests
             await WaitUntilAsync(() => lease.IsLeader);
             lease.IsLeader.Should().BeTrue();
 
-            await using (var admin = new NpgsqlConnection(ConnectionString))
+            await using var admin = new NpgsqlConnection(ConnectionString);
+            await admin.OpenAsync();
+            async Task<HashSet<int>> BackendsAsync()
             {
-                await admin.OpenAsync();
-                await using var kill = new NpgsqlCommand($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}'", admin);
+                await using var list = new NpgsqlCommand($"SELECT pid FROM pg_stat_activity WHERE datname = '{database}'", admin);
+                var pids = new HashSet<int>();
+                await using var reader = await list.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) pids.Add(reader.GetInt32(0));
+                return pids;
+            }
+
+            var before = await BackendsAsync();
+            await using (var kill = new NpgsqlCommand($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}'", admin))
+            {
                 await kill.ExecuteNonQueryAsync();
             }
 
-            await WaitUntilAsync(() => !lease.IsLeader);
-            lease.IsLeader.Should().BeFalse("its lock went with the connection");
+            // The lock went with the connection; the loop has to reconnect and take it again,
+            // which can happen faster than a poll here could see it step down
+            var reconnected = false;
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!reconnected && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(200);
+                reconnected = lease.IsLeader && (await BackendsAsync()).Except(before).Any();
+            }
 
-            await WaitUntilAsync(() => lease.IsLeader);
-            lease.IsLeader.Should().BeTrue("the loop keeps trying after losing the connection");
+            reconnected.Should().BeTrue("the loop keeps trying after losing the connection, and leads on a new one");
         }
         finally
         {
