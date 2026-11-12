@@ -677,6 +677,30 @@ public sealed class AccessControlApiTests : IDisposable
     }
 
     [Fact]
+    public async Task RulesAsCode_SigmaAndCoverage_WorkThroughTheApi()
+    {
+        await using var api = StartApi();
+        await api.WaitUntilReadyAsync();
+        var client = api.Client;
+
+        // What cabinet rules push does: a new ID adds the rule
+        var put = await client.SendAsync(Request(HttpMethod.Put, "/api/v1/rules/repo-ssh", AdminKey, new { name = "SSH guessing", pattern = "Failed password", severity = "Error", technique = "T1110.001" }));
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await JsonAsync(client, HttpMethod.Get, "/api/v1/rules/repo-ssh", AdminKey)).GetProperty("name").GetString().Should().Be("SSH guessing");
+
+        using var sigma = new HttpRequestMessage(HttpMethod.Post, "/api/v1/rules/sigma?save=true")
+        {
+            Content = new StringContent("title: Whoami\ntags: [attack.t1033]\ndetection:\n  selection:\n    CommandLine|contains: whoami\n  condition: selection\nlevel: low\n", Encoding.UTF8, "text/plain"),
+        };
+        sigma.Headers.Add("X-API-Key", AdminKey);
+        var imported = await client.SendAsync(sigma);
+        (await imported.Content.ReadAsStringAsync()).Should().Contain("\"saved\":true");
+
+        var coverage = await JsonAsync(client, HttpMethod.Get, "/api/v1/rules/coverage", AdminKey);
+        coverage.ToString().Should().Contain("repo-ssh").And.Contain("T1033");
+    }
+
+    [Fact]
     public async Task DashboardSignIn_WithoutSso_OffersOnlyApiKeys()
     {
         await using var api = StartApi();

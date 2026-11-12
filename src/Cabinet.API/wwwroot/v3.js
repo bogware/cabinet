@@ -340,7 +340,7 @@ async function loadCoverage() {
     const box = document.getElementById('coverageMatrix');
     if (!box) return;
     try {
-        const matrix = await api('GET', '/api/v1/detection-rules/coverage');
+        const matrix = await api('GET', '/api/v1/rules/coverage');
         box.innerHTML = matrix.map(tactic => {
             const cells = tactic.techniques.map(t => {
                 const on = t.rules.filter(r => r.enabled).length;
@@ -360,7 +360,7 @@ async function importSigma(save) {
     if (!yaml.trim()) return;
     out.innerHTML = '<span class="spinner"></span>';
     try {
-        const res = await fetch('/api/v1/detection-rules/sigma' + (save ? '?save=true' : ''), {
+        const res = await fetch('/api/v1/rules/sigma' + (save ? '?save=true' : ''), {
             method: 'POST',
             headers: { ...authHeaders(), 'Content-Type': 'text/plain', Accept: 'application/json' },
             body: yaml,

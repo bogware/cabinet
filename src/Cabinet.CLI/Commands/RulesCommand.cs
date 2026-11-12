@@ -131,7 +131,7 @@ public sealed class RulesCommand : Command
             try
             {
                 // Actions are set up in the dashboard; a file without any keeps the server's
-                using (var current = await client.GetAsync($"api/v1/detection-rules/{Uri.EscapeDataString(rule.Id)}"))
+                using (var current = await client.GetAsync($"api/v1/rules/{Uri.EscapeDataString(rule.Id)}"))
                 {
                     if (current.StatusCode == HttpStatusCode.OK && await current.Content.ReadFromJsonAsync<DetectionRule>(Json) is { } existing)
                     {
@@ -139,7 +139,7 @@ public sealed class RulesCommand : Command
                     }
                 }
 
-                using var response = await client.PutAsJsonAsync($"api/v1/detection-rules/{Uri.EscapeDataString(rule.Id)}", rule, Json);
+                using var response = await client.PutAsJsonAsync($"api/v1/rules/{Uri.EscapeDataString(rule.Id)}", rule, Json);
                 if (response.IsSuccessStatusCode)
                 {
                     AnsiConsole.MarkupLine($"[green]pushed[/] {Markup.Escape(rule.Id)}");
@@ -166,7 +166,7 @@ public sealed class RulesCommand : Command
         if (client == null) return 1;
         try
         {
-            var rules = await client.GetFromJsonAsync<List<DetectionRule>>("api/v1/detection-rules", Json) ?? [];
+            var rules = await client.GetFromJsonAsync<List<DetectionRule>>("api/v1/rules", Json) ?? [];
             Directory.CreateDirectory(directory);
             var written = 0;
             foreach (var rule in rules.Where(r => !r.Builtin))

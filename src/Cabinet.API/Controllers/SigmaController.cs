@@ -10,7 +10,7 @@ namespace Cabinet.API.Controllers;
 
 /// <summary>Sigma rule import, and which ATT&amp;CK techniques the detection rules cover.</summary>
 [ApiController]
-[Route("api/v1/detection-rules")]
+[Route("api/v1/rules")]
 public sealed class SigmaController : ControllerBase
 {
     private readonly DetectionRuleStore _rules;
