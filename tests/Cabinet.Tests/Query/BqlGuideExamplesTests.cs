@@ -16,6 +16,7 @@ namespace Cabinet.Tests.Query;
 /// Runs every query in docs/BQL-GUIDE.md, so a documented example can't stop working unnoticed.
 /// Results of each feature are checked in <see cref="BqlLanguageTests"/>.
 /// </summary>
+[Collection(nameof(IplocationTests))]
 public class BqlGuideExamplesTests
 {
     private static readonly Lazy<BqlQueryEngine> Engine = new(() => CreateEngine().GetAwaiter().GetResult());
@@ -105,6 +106,9 @@ public class BqlGuideExamplesTests
 
     private static async Task<BqlQueryEngine> CreateEngine()
     {
+        // iplocation needs a database; the guide's examples get a stand-in
+        BqlGeoIp.Lookup ??= new FakeGeoIp();
+
         var storage = new InMemoryStorage();
         await storage.InitializeAsync();
 
@@ -145,5 +149,11 @@ public class BqlGuideExamplesTests
             NullLogger<BqlQueryEngine>.Instance,
             new RuleBasedTranslator(),
             knowledge);
+    }
+
+    private sealed class FakeGeoIp : Cabinet.Core.Interfaces.IGeoIpLookup
+    {
+        public Cabinet.Core.Interfaces.GeoLocation? Lookup(string address) =>
+            new("London", "England", "United Kingdom", "GB", 51.5, -0.1);
     }
 }
