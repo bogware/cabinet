@@ -125,6 +125,10 @@ public abstract class AggregatePushdownTests : IAsyncLifetime
         "find * | timechart span=30m sum(bytes) by status",
         "find * | timechart span=7d count",
         "find * | where status = \"none\" | stats count by host",
+        "find * | top 3 status",
+        "find * | top 2 bytes",
+        "find * | rare 2 user",
+        "find * | top 5 host",
     };
 
     private async Task<(List<Dictionary<string, object?>> Rows, int Reads)> RunAsync(ILogStorage storage, string query)
@@ -220,9 +224,10 @@ public sealed class SqliteAggregatePushdownTests : AggregatePushdownTests
 
     protected override bool IsAvailable => true;
 
+    // top and rare count values as .NET writes them, which SQL doesn't always match
     protected override bool PushesDown(string query) =>
         !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
-        && !query.Contains("where", StringComparison.Ordinal);
+        && !query.Contains("where", StringComparison.Ordinal) && !query.Contains("| top", StringComparison.Ordinal) && !query.Contains("| rare", StringComparison.Ordinal);
 
     protected override ILogStorage CreateStorage()
     {
@@ -251,7 +256,8 @@ public sealed class PostgresAggregatePushdownTests : AggregatePushdownTests
     protected override bool IsAvailable => !string.IsNullOrEmpty(ConnectionString);
 
     protected override bool PushesDown(string query) =>
-        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal)
+        && !query.Contains("| top", StringComparison.Ordinal) && !query.Contains("| rare", StringComparison.Ordinal);
 
     private PostgresLogStorage? _storage;
 

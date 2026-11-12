@@ -29,7 +29,8 @@ public sealed class EngineOptions
 
 /// <summary>
 /// One index: a write-ahead log and in-memory events, and the immutable segments they're written
-/// to. Writes and flushes take turns; reads take a snapshot and never wait.
+/// to. A flush freezes the in-memory events and starts a new log, then writes the segment in the
+/// background while writes carry on; reads see the frozen events until the segment replaces them.
 /// </summary>
 internal sealed class IndexShard : IDisposable
 {
@@ -49,6 +50,12 @@ internal sealed class IndexShard : IDisposable
 
     private List<LogEvent> _hot = [];
     private HashSet<string> _hotIds = new(StringComparer.Ordinal);
+
+    // Events being written to a segment, and the logs that hold them and anything older in memory
+    private List<LogEvent> _frozen = [];
+    private HashSet<string> _frozenIds = new(StringComparer.Ordinal);
+    private readonly List<string> _unflushedLogs = [];
+    private Task<bool> _flushing = Task.FromResult(true);
     private volatile SegmentReader[] _segments = [];
     private FileStream? _wal;
     private long _walGeneration;
@@ -206,7 +213,7 @@ internal sealed class IndexShard : IDisposable
         _writeLock.Wait();
         try
         {
-            return (_hot.ToArray(), _segments);
+            return (_frozen.Count == 0 ? _hot.ToArray() : [.. _frozen, .. _hot], _segments);
         }
         finally
         {
@@ -222,6 +229,12 @@ internal sealed class IndexShard : IDisposable
     /// <summary>Stores events, skipping IDs this index already has. Returns how many were new.</summary>
     public async Task<int> AddAsync(IReadOnlyList<LogEvent> events, CancellationToken cancellationToken)
     {
+        // Writes outrunning the segment writer wait for it, so memory stays bounded
+        if (Volatile.Read(ref _hotCountField) >= 2L * _options.FlushEvents)
+        {
+            await _flushing.WaitAsync(cancellationToken);
+        }
+
         await _writeLock.WaitAsync(cancellationToken);
         try
         {
@@ -265,7 +278,7 @@ internal sealed class IndexShard : IDisposable
             Volatile.Write(ref _hotCountField, _hot.Count);
             if (_hot.Count >= _options.FlushEvents)
             {
-                FlushLocked();
+                StartFlushLocked();
             }
 
             return kept.Count;
@@ -285,7 +298,7 @@ internal sealed class IndexShard : IDisposable
         var decoded = new Dictionary<BlockInfo, HashSet<string>>(ReferenceEqualityComparer.Instance);
         foreach (var logEvent in events)
         {
-            if (!batch.Add(logEvent.Id) || _hotIds.Contains(logEvent.Id) || InSegments(segments, logEvent.Id, decoded))
+            if (!batch.Add(logEvent.Id) || _hotIds.Contains(logEvent.Id) || _frozenIds.Contains(logEvent.Id) || InSegments(segments, logEvent.Id, decoded))
             {
                 continue;
             }
@@ -333,7 +346,10 @@ internal sealed class IndexShard : IDisposable
         return false;
     }
 
-    /// <summary>Writes in-memory events older than the flush interval, or all with <paramref name="force"/>.</summary>
+    /// <summary>
+    /// Starts writing in-memory events older than the flush interval to a segment. With
+    /// <paramref name="force"/>, writes all of them and waits until they're in a segment.
+    /// </summary>
     public async Task FlushAsync(bool force, CancellationToken cancellationToken)
     {
         if (!force && (Volatile.Read(ref _hotCountField) == 0 || DateTime.UtcNow - _oldestHot < TimeSpan.FromSeconds(_options.FlushSeconds)))
@@ -341,13 +357,133 @@ internal sealed class IndexShard : IDisposable
             return;
         }
 
-        await _writeLock.WaitAsync(cancellationToken);
+        if (!force)
+        {
+            await _writeLock.WaitAsync(cancellationToken);
+            try
+            {
+                if (!_disposed)
+                {
+                    StartFlushLocked();
+                }
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
+
+            return;
+        }
+
+        // Until nothing is left in memory: a write can start a flush of its own in between
+        while (true)
+        {
+            await _flushing.WaitAsync(cancellationToken);
+            await _writeLock.WaitAsync(cancellationToken);
+            Task<bool> flushing;
+            try
+            {
+                if (_disposed || (_hot.Count == 0 && _flushing.IsCompleted))
+                {
+                    return;
+                }
+
+                StartFlushLocked();
+                flushing = _flushing;
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
+
+            if (!await flushing.WaitAsync(cancellationToken))
+            {
+                throw new IOException($"Writing index {Index} to a segment failed; its events are still in the log");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Freezes the in-memory events and starts a new log for what follows, then writes the frozen
+    /// events to a segment in the background. Does nothing while a flush is already running; the
+    /// next write or timer tick tries again.
+    /// </summary>
+    private void StartFlushLocked()
+    {
+        DisposeRetired(TimeSpan.FromMinutes(10));
+        if (_hot.Count == 0 || !_flushing.IsCompleted)
+        {
+            return;
+        }
+
+        _unflushedLogs.Add(_wal!.Name);
+        _wal.Dispose();
+        _walGeneration++;
+        OpenWal();
+
+        _frozen = _hot;
+        _frozenIds = _hotIds;
+        _hot = [];
+        _hotIds = new HashSet<string>(StringComparer.Ordinal);
+        _oldestHot = DateTime.MaxValue;
+        Volatile.Write(ref _hotCountField, 0);
+
+        var frozen = _frozen;
+        var logs = _unflushedLogs.ToList();
+        _flushing = Task.Run(() => WriteFrozenAsync(frozen, logs));
+    }
+
+    /// <summary>Writes frozen events to a segment. Returns false if that failed and they went back in memory.</summary>
+    private async Task<bool> WriteFrozenAsync(List<LogEvent> frozen, List<string> logs)
+    {
+        SegmentReader? written = null;
         try
         {
-            if (!_disposed)
+            var first = frozen.Min(e => e.Timestamp.Ticks);
+            var path = Path.Combine(_directory, $"seg-{first:D19}-{Guid.NewGuid():N}.seg");
+            SegmentWriter.Write(path, Index, frozen);
+            written = SegmentReader.Open(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            _logger.LogError(ex, "Writing index {Index} to a segment failed; its events stay in memory and in the log, to try again", Index);
+        }
+
+        await _writeLock.WaitAsync();
+        try
+        {
+            if (written == null || _disposed)
             {
-                FlushLocked();
+                if (written != null)
+                {
+                    written.Dispose();
+                    written = null;
+                }
+
+                // Back in with the newest, so the next flush takes them. They're still in their logs.
+                _hot.InsertRange(0, frozen);
+                _hotIds.UnionWith(frozen.Select(e => e.Id));
+                Volatile.Write(ref _hotCountField, _hot.Count);
+                if (_oldestHot == DateTime.MaxValue)
+                {
+                    _oldestHot = DateTime.UtcNow;
+                }
             }
+            else
+            {
+                AddSegment(written);
+
+                // The events are in a segment, so the logs that held them can go
+                foreach (var log in logs)
+                {
+                    File.Delete(log);
+                    _unflushedLogs.Remove(log);
+                }
+            }
+
+            _frozen = [];
+            _frozenIds = new HashSet<string>(StringComparer.Ordinal);
+            return written != null;
         }
         finally
         {
@@ -355,27 +491,20 @@ internal sealed class IndexShard : IDisposable
         }
     }
 
-    private void FlushLocked()
+    /// <summary>Takes the write lock with no flush running, for work that replaces segments.</summary>
+    private async Task LockWithoutFlushAsync(CancellationToken cancellationToken)
     {
-        DisposeRetired(TimeSpan.FromMinutes(10));
-        if (_hot.Count == 0)
+        while (true)
         {
-            return;
+            await _flushing.WaitAsync(cancellationToken);
+            await _writeLock.WaitAsync(cancellationToken);
+            if (_flushing.IsCompleted)
+            {
+                return;
+            }
+
+            _writeLock.Release();
         }
-
-        WriteSegment(_hot);
-
-        // The events are in a segment, so the log that held them can go
-        var oldWal = _wal!.Name;
-        _wal.Dispose();
-        File.Delete(oldWal);
-        _walGeneration++;
-        OpenWal();
-
-        _hot = [];
-        _hotIds = new HashSet<string>(StringComparer.Ordinal);
-        _oldestHot = DateTime.MaxValue;
-        Volatile.Write(ref _hotCountField, 0);
     }
 
     private SegmentReader WriteSegment(IReadOnlyList<LogEvent> events, IReadOnlyList<string>? replaces = null)
@@ -397,10 +526,10 @@ internal sealed class IndexShard : IDisposable
         await _maintenanceLock.WaitAsync(cancellationToken);
         try
         {
-            await _writeLock.WaitAsync(cancellationToken);
+            await FlushAsync(force: true, cancellationToken);
+            await LockWithoutFlushAsync(cancellationToken);
             try
             {
-                FlushLocked();
                 var deleted = 0;
                 foreach (var segment in _segments.Where(s => s.MinTicks < before.Ticks).ToList())
                 {
@@ -558,7 +687,7 @@ internal sealed class IndexShard : IDisposable
         await _maintenanceLock.WaitAsync(cancellationToken);
         try
         {
-            await _writeLock.WaitAsync(cancellationToken);
+            await LockWithoutFlushAsync(cancellationToken);
             try
             {
                 var count = _segments.Sum(s => s.Rows) + _hot.Count;
@@ -600,7 +729,7 @@ internal sealed class IndexShard : IDisposable
     {
         _maintenanceLock.Wait();
         _maintenanceLock.Release();
-        _writeLock.Wait();
+        LockWithoutFlushAsync(CancellationToken.None).GetAwaiter().GetResult();
         try
         {
             // What's in memory is in the log, so stopping needn't write a segment

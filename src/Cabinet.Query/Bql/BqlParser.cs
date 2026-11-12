@@ -1947,6 +1947,9 @@ internal sealed class LegacyTopOperator : QueryOperator
 
     internal IRowSink CreateSink(QueryBudget budget) => new ValueCountSink(_field, _byField, budget, Rank);
 
+    /// <summary>The rows for counts computed elsewhere, as storage gives them.</summary>
+    internal IEnumerable<dynamic> FromCounts(IEnumerable<KeyValuePair<string, long>> counts) => Rank(counts, null).ToList();
+
     private IEnumerable<dynamic> Rank(IEnumerable<KeyValuePair<string, long>> counts, string? group)
     {
         foreach (var (value, count) in counts
@@ -2769,6 +2772,9 @@ internal sealed class LegacyRareOperator : QueryOperator
     }
 
     internal IRowSink CreateSink(QueryBudget budget) => new ValueCountSink(_field, null, budget, (counts, _) => Rank(counts));
+
+    /// <summary>The rows for counts computed elsewhere, as storage gives them.</summary>
+    internal IEnumerable<dynamic> FromCounts(IEnumerable<KeyValuePair<string, long>> counts) => Rank(counts);
 
     private IEnumerable<dynamic> Rank(IEnumerable<KeyValuePair<string, long>> counts)
     {

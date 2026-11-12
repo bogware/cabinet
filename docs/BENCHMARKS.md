@@ -49,7 +49,7 @@ Parsing alone runs at 25,000 to 42,000 lines a second on one thread. The server 
 | All events: count by host | 107 ms | 4.6 s | 292 ms | 17 ms | 37 s |
 | All events: hourly timechart | 34 ms | 3.0 s | 720 ms | 29 ms | 30 s |
 | All events: avg and p95 by host | 201 ms | 14 s | 3.8 s | 30 s | 32 s |
-| All events: top 10 paths | 5.4 s | 13 s | 15 s | 33 s | 27 s |
+| All events: top 10 paths | 186 ms | 13 s | 15 s | 33 s | 27 s |
 
 The Cabinet engine is Cabinet's own storage (`Storage:Type=Cabinet`): a write-ahead log, then compressed column segments with summaries and word and ID filters per block of 4,096 events. It counts blocks every event of which matches from their summaries, without reading them, and reads the rest in parallel. The rare word appears in about two blocks in five, so finding 100 of them reads most of the text; PostgreSQL and OpenSearch answer it from a full-text index.
 
@@ -65,7 +65,23 @@ In-memory storage sorts every match on each read, so it's for tests rather than 
 | Hourly timechart | 13 s | 3.0 s | 13 s | 720 ms | 28 s | 29 ms |
 | Avg and p95 of a JSON field by host | 13 s | 14 s | 13 s | 3.8 s | 30 s | 30 s |
 
-SQLite has no percentiles, so the last query still runs in the pipeline there, and OpenSearch pushes down counts only. `top` isn't pushed down on any backend: `stats count by path | sort -count | head 10` gives the same rows and is.
+SQLite has no percentiles, so the last query still runs in the pipeline there, and OpenSearch pushes down counts only. `top` and `rare` count each value as .NET writes it as text, which SQL doesn't always match, so only the Cabinet engine computes them; elsewhere `stats count by path | sort -count | head 10` gives the same rows and is pushed down.
+
+### Ten million events, Cabinet engine
+
+| Query | 10,000,000 events |
+|---|---:|
+| Newest 100 | 1.3 ms |
+| Newest 100 on one host | 5.2 ms |
+| Text search for a rare word, first 100 | 780 ms |
+| Errors and worse, first 100 | 15 ms |
+| Count everything | 0.4 ms |
+| Last hour: count by host | 15 ms |
+| All events: count by host | 879 ms |
+| All events: hourly timechart | 34 ms |
+| All events: avg and p95 by host | 2.1 s |
+
+Searches for the newest matches don't depend on how much is stored, and aggregates grow linearly, at about 11 million events a second for a count by host on this machine. The files took 493 MB. This run predates `top` in the engine. Storing alone ran at 86,676 events a second, lower than at a million because segments were being merged meanwhile. Peak memory was 1.7 GB.
 
 ## Memory
 

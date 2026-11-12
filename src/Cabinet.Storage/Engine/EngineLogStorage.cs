@@ -425,6 +425,9 @@ internal sealed class RowFilter
 
     public EventCursor? After => _context.After;
 
+    /// <summary>Whether matching rows costs more than reading times: text, fields or tags to check.</summary>
+    public bool Expensive => _terms.Count > 0 || _context.FieldFilters is { Count: > 0 } || _context.Tags is { Count: > 0 };
+
     public bool MayMatch(SegmentReader segment) => segment.Rows > 0 && segment.MaxTicks >= _start && segment.MinTicks <= _end;
 
     /// <summary>Whether a block could hold a match, from its summary alone.</summary>
@@ -618,28 +621,70 @@ internal sealed class RowSource
     public static RowSource FromSegment(SegmentReader segment, RowFilter filter, bool descending) =>
         new(segment.MinTicks, segment.MaxTicks, token => SegmentRows(segment, filter, descending, token));
 
+    /// <summary>
+    /// A segment's matches in order. Where matching is costly, blocks are scanned ahead in parallel,
+    /// one at first and then twice as many each time up to the core count, so a query that stops
+    /// after a few matches reads little more than it needs, and one that reads far gets every core.
+    /// </summary>
     private static IEnumerable<Row> SegmentRows(SegmentReader segment, RowFilter filter, bool descending, CancellationToken cancellationToken)
     {
-        var blocks = descending ? Enumerable.Reverse(segment.Blocks) : segment.Blocks;
         var cursor = filter.After?.Timestamp.Ticks;
-        foreach (var block in blocks)
+        var blocks = (descending ? Enumerable.Reverse(segment.Blocks) : segment.Blocks)
+            .Where(block => filter.MayMatch(block) && !(cursor is { } c && (descending ? block.MinTicks > c : block.MaxTicks < c)));
+        using var pending = blocks.GetEnumerator();
+        var most = filter.Expensive ? Environment.ProcessorCount : 1;
+        var window = 1;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!filter.MayMatch(block) || (cursor is { } c && (descending ? block.MinTicks > c : block.MaxTicks < c)))
+            var batch = new List<BlockInfo>(window);
+            while (batch.Count < window && pending.MoveNext())
             {
-                continue;
+                batch.Add(pending.Current);
             }
 
-            var rows = new BlockRows(segment, block);
-            for (var n = 0; n < rows.Count; n++)
+            if (batch.Count == 0)
             {
-                var i = descending ? rows.Count - 1 - n : n;
-                if (filter.Matches(rows, i) && filter.PastCursor(rows.Ticks[i], rows.Ids[i], descending))
+                yield break;
+            }
+
+            var scanned = new (BlockRows Rows, List<int> Matches)[batch.Count];
+            if (batch.Count == 1)
+            {
+                scanned[0] = Scan(segment, batch[0], filter, descending);
+            }
+            else
+            {
+                Parallel.For(0, batch.Count, new ParallelOptions { CancellationToken = cancellationToken }, b => scanned[b] = Scan(segment, batch[b], filter, descending));
+            }
+
+            foreach (var (rows, matches) in scanned)
+            {
+                foreach (var i in matches)
                 {
                     yield return new Row(rows.Ticks[i], rows.Ids[i], null, rows, i);
                 }
             }
+
+            window = Math.Min(window * 2, most);
         }
+    }
+
+    /// <summary>A block's matching rows, in the query's order.</summary>
+    private static (BlockRows Rows, List<int> Matches) Scan(SegmentReader segment, BlockInfo block, RowFilter filter, bool descending)
+    {
+        var rows = new BlockRows(segment, block);
+        var matches = new List<int>();
+        for (var n = 0; n < rows.Count; n++)
+        {
+            var i = descending ? rows.Count - 1 - n : n;
+            if (filter.Matches(rows, i) && filter.PastCursor(rows.Ticks[i], rows.Ids[i], descending))
+            {
+                matches.Add(i);
+            }
+        }
+
+        return (rows, matches);
     }
 
     /// <summary>

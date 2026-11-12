@@ -17,7 +17,8 @@ public sealed partial class OpenSearchLogStorage : IAggregatingLogStorage
     public async Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
     {
         var fields = request.GroupBy.Select(AggregateFields.Builtin).ToList();
-        if (fields.Any(field => field == null)
+        if (request.ExactTextKeys
+            || fields.Any(field => field == null)
             || request.Aggregates.Any(spec => spec.Kind != AggregateKind.Count || (spec.Field != null && AggregateFields.Builtin(spec.Field) == null))
             || (request.Bucket is { } span && (span.TotalMilliseconds < 1 || span.Ticks % TimeSpan.TicksPerMillisecond != 0
                 // OpenSearch buckets from the Unix epoch, and the engine from year 1. They agree

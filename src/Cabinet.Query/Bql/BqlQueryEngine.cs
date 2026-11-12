@@ -177,6 +177,10 @@ public sealed class BqlQueryEngine : IQueryEngine
                 [new AggregateFunction(timechart.Aggregation, timechart.AggregationField)],
                 timechart.ByField == null ? [] : [timechart.ByField],
                 timechart.Span),
+
+            // top and rare count each value as text, so only storage that writes values as .NET does can
+            TopStage { ByField: null } top => CountValuesRequest(optimized.StorageContext, top.Field),
+            RareStage rare => CountValuesRequest(optimized.StorageContext, rare.Field),
             _ => null,
         };
 
@@ -196,16 +200,21 @@ public sealed class BqlQueryEngine : IQueryEngine
             ? aggregate.Rows.Where(values => grouped.GroupByFields.All(f => values.TryGetValue(f, out var v) && v != null)).ToList()
             : aggregate.Rows;
         budget.CheckGroupCount(rows.Count);
-        IEnumerable<dynamic> result = rows.Select(values =>
+        IEnumerable<dynamic> result = optimized.RemainingStages[0] switch
         {
-            var row = new BqlRow();
-            foreach (var (key, value) in values)
+            TopStage top => new LegacyTopOperator(top.Count, top.Field).FromCounts(ValueCounts(rows, top.Field)),
+            RareStage rare => new LegacyRareOperator(rare.Count, rare.Field).FromCounts(ValueCounts(rows, rare.Field)),
+            _ => rows.Select(values =>
             {
-                row[key] = value;
-            }
+                var row = new BqlRow();
+                foreach (var (key, value) in values)
+                {
+                    row[key] = value;
+                }
 
-            return (dynamic)row;
-        }).ToList();
+                return (dynamic)row;
+            }).ToList(),
+        };
 
         foreach (var stage in optimized.RemainingStages.Skip(1))
         {
@@ -236,6 +245,25 @@ public sealed class BqlQueryEngine : IQueryEngine
             },
         };
     }
+
+    /// <summary>A count of each value of a field, grouped as top and rare group them.</summary>
+    private AggregateRequest CountValuesRequest(QueryContext filter, string field)
+    {
+        var unbounded = filter.Clone();
+        unbounded.Limit = QueryContext.MaxLimit;
+        return new AggregateRequest
+        {
+            Filter = unbounded,
+            GroupBy = [field],
+            Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count")],
+            MaxGroups = _limits.MaxGroups,
+            ExactTextKeys = true,
+        };
+    }
+
+    private static IEnumerable<KeyValuePair<string, long>> ValueCounts(IEnumerable<Dictionary<string, object?>> rows, string field) =>
+        rows.Where(row => row.TryGetValue(field, out var value) && value != null)
+            .Select(row => new KeyValuePair<string, long>(row[field]!.ToString() ?? string.Empty, Convert.ToInt64(row["count"], System.Globalization.CultureInfo.InvariantCulture)));
 
     private AggregateRequest? BuildAggregateRequest(
         QueryContext filter,

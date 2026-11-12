@@ -260,6 +260,7 @@ public sealed class EngineLogStorageTests : IDisposable
         {
             // Interleaved times, so merged segments overlap and must be re-sorted
             await engine.StoreBatchAsync(Enumerable.Range(0, 100).Select(i => Event((i * 25) + b)));
+            await engine.FlushAsync();
         }
 
         SegmentFiles().Should().Be(25);
@@ -284,6 +285,7 @@ public sealed class EngineLogStorageTests : IDisposable
         for (var b = 0; b < 10; b++)
         {
             await engine.StoreBatchAsync(Enumerable.Range(b * 10, 10).Select(i => Event(i)));
+            await engine.FlushAsync();
         }
 
         var originals = Directory.EnumerateFiles(_path, "*.seg", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
