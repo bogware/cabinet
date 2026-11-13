@@ -17,9 +17,11 @@ public sealed class ArchiveController : ControllerBase
     private readonly ILogStorage _storage;
     private readonly IndexAccessScope _scope;
     private readonly IAuditLogger _audit;
+    private readonly IConfiguration? _configuration;
 
-    public ArchiveController(ILogStorage storage, IndexAccessScope scope, IAuditLogger audit, EventArchiver? archiver = null, IEventArchive? archive = null)
+    public ArchiveController(ILogStorage storage, IndexAccessScope scope, IAuditLogger audit, EventArchiver? archiver = null, IEventArchive? archive = null, IConfiguration? configuration = null)
     {
+        _configuration = configuration;
         _storage = storage;
         _scope = scope;
         _audit = audit;
@@ -52,6 +54,99 @@ public sealed class ArchiveController : ControllerBase
                 SizeBytes = g.Sum(c => c.SizeBytes),
             })
             .OrderBy(a => a.Index, StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Searches an index's archived events between two times where they are, without bringing
+    /// them back: BQL, SPL or plain words, with the caller's index access and masking. Reads only
+    /// the archived days in the range, and refuses a range with more events than
+    /// <c>Archive:SearchMaxEvents</c> (500,000 by default).
+    /// </summary>
+    [HttpPost("search")]
+    [RequireCapability(Capability.Search)]
+    [ProducesResponseType(typeof(QueryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Search([FromBody] ArchiveSearchRequest request, CancellationToken cancellationToken)
+    {
+        if (_archiver == null)
+        {
+            return Problem(detail: "No archive is set up. An administrator can set one with Archive:Type.", statusCode: StatusCodes.Status404NotFound);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Index) || request.From >= request.To || string.IsNullOrWhiteSpace(request.Query) || request.Query.Length > 10_000)
+        {
+            return Problem(detail: "Name an index, a time range, and a query.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!_scope.CanRead(request.Index))
+        {
+            return Problem(detail: $"Searching the archive of {request.Index} needs reading {request.Index}.", statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var query = request.Query;
+        if (!request.Exact)
+        {
+            var understanding = new Cabinet.Query.Natural.QueryUnderstander().Understand(query);
+            if (!understanding.WillRun)
+            {
+                return Problem(detail: understanding.Problems.FirstOrDefault()?.Message ?? "Couldn't tell what this asks for.", statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            query = understanding.Query!;
+        }
+
+        var started = DateTime.UtcNow;
+        Cabinet.Storage.InMemoryStorage archived;
+        try
+        {
+            archived = await _archiver.LoadAsync(
+                request.Index,
+                request.From.ToUniversalTime(),
+                request.To.ToUniversalTime(),
+                _configuration?.GetValue("Archive:SearchMaxEvents", 500_000) ?? 500_000,
+                cancellationToken);
+        }
+        catch (ArchiveTooLargeException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(60));
+            var engine = new Cabinet.Query.Bql.BqlQueryEngine(
+                _scope.Restrict(archived),
+                new Cabinet.Query.Bql.BqlParser(),
+                new Cabinet.Query.Bql.BqlOptimizer(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Cabinet.Query.Bql.BqlQueryEngine>.Instance);
+            var result = await engine.ExecuteAsync(new Cabinet.Query.QueryExecutionContext { Query = query, Limit = Math.Clamp(request.Limit ?? 10_000, 1, 10_000) }, timeout.Token);
+            await _audit.LogAsync(new AuditEvent
+            {
+                PrincipalId = User.FindFirst("ClientId")?.Value ?? "unknown",
+                Action = AuditAction.Search,
+                ResourceType = "Archive",
+                Description = $"Searched the archive of {request.Index} from {request.From:O} to {request.To:O}: {query[..Math.Min(200, query.Length)]}",
+                SourceIp = HttpContext.Connection.RemoteIpAddress?.ToString(),
+            });
+            return Ok(new QueryResponse
+            {
+                Query = query,
+                Results = result.Events.Cast<object>().ToList(),
+                Count = result.Events.Count,
+                ExecutionTimeMs = (int)(DateTime.UtcNow - started).TotalMilliseconds,
+                Timestamp = DateTime.UtcNow,
+                EventsScanned = result.Statistics?.EventsScanned ?? 0,
+                Truncated = result.Statistics?.Truncated == true,
+                Approximate = result.Statistics?.Approximate == true,
+            });
+        }
+        catch (Cabinet.Query.QueryParseException ex)
+        {
+            return Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
     }
 
     /// <summary>
@@ -93,6 +188,26 @@ public sealed class ArchiveController : ControllerBase
         });
         return Ok(new RehydrateResult { Restored = restored, Index = target });
     }
+}
+
+/// <summary>A search of archived events.</summary>
+public sealed class ArchiveSearchRequest
+{
+    /// <summary>The archived index.</summary>
+    public string? Index { get; set; }
+
+    public DateTime From { get; set; }
+
+    public DateTime To { get; set; }
+
+    /// <summary>BQL, SPL or plain words, as on the search page.</summary>
+    public string Query { get; set; } = "find *";
+
+    /// <summary>Run the query exactly as typed.</summary>
+    public bool Exact { get; set; }
+
+    /// <summary>Most rows to return.</summary>
+    public int? Limit { get; set; }
 }
 
 /// <summary>An index's archive.</summary>

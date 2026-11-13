@@ -51,7 +51,7 @@ What Cabinet does today, and how finished each part is. **Available** means it's
 | Kubernetes manifests | Available | `k8s/`, tested on a kind cluster by `tests/EndToEnd/k8s-smoke.sh`. The included PostgreSQL pod is for trying it, not for production. |
 | Encryption at rest | Available | AES-256-GCM on configured fields, or whole lines, with key rotation. Those values can't be searched in storage. |
 | PII and field masking | Available | Applied to every read by role, in fields and in the raw line. |
-| Archive and rehydrate | Available | Retention can archive events to a directory or S3 first, and archived events can be brought back to search. Hot/warm tiering isn't implemented. |
+| Archive, search and rehydrate | Available | Retention can archive events to a directory or S3 first. Archived days can be searched where they are (`/archive/search`, up to 500,000 events a search), or brought back into an index. Hot/warm tiering isn't implemented. |
 | Charts | Available | Line, area, bar, pie, single value, gauge, heatmap, map and table. |
 | Multiple API instances | Available | On PostgreSQL, sharing all state. One instance at a time runs background work. |
 | OpenTelemetry | Available | Receives OTLP logs, traces and metrics, in protobuf or JSON, as searchable events. Exports its own request, query and ingest spans. |

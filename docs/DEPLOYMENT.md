@@ -393,6 +393,8 @@ Retention can archive events before deleting them: per index with the policy's `
 
 Events are kept as gzipped JSON lines, one file per index, day and run. If archiving fails, or an index should be archived and no archive is set, its events aren't deleted. `POST /api/v1/archive/rehydrate` with `index`, `from` and `to` (up to 31 days) brings them back into `{index}-restored`, or `targetIndex`, keeping their IDs so a second run adds nothing. It needs `IndexManagement`, reading the index and writing the target.
 
+To look something up without bringing it back, `POST /api/v1/archive/search` with `index`, `from`, `to` and a `query` searches the archived days in that range where they are, with the caller's index access and masking, as a search of live events would. It reads only the files for those days, and refuses a range holding more than `Archive:SearchMaxEvents` events (500,000 by default), since they're searched in memory; search a shorter time, or rehydrate.
+
 ### Ingest pipeline
 
 The Ingest Pipeline page, or `/api/v1/pipelines/rules`, sets rules that run on every event as it arrives, in order, before it's stored or checked by detection rules: drop, sample (keep one in N, chosen by event ID), route to another index, or redact what a regular expression matches. Rules apply on every instance within 30 seconds; `/api/v1/pipelines/stats` shows what each did since the server started.
