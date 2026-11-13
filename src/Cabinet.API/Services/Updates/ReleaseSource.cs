@@ -183,9 +183,24 @@ public sealed class GitHubReleaseSource : IReleaseSource
         }
     }
 
-    public async Task<ReleaseInfo> GetLatestAsync(CancellationToken cancellationToken = default) =>
-        await GetAsync($"repos/{_repository}/releases/latest", cancellationToken)
-        ?? throw new InvalidOperationException($"No releases found for {_repository}. If the repository is private, set Updates:Token.");
+    public async Task<ReleaseInfo> GetLatestAsync(CancellationToken cancellationToken = default)
+    {
+        // GitHub's latest release is never a pre-release. A server running one is testing the next
+        // version, so it's offered the newest of all, which may be the next candidate or the release.
+        var latest = ReleaseVersions.CurrentIsPrerelease
+            ? Newest(await GetListAsync($"repos/{_repository}/releases?per_page=30", cancellationToken))
+            : await GetAsync($"repos/{_repository}/releases/latest", cancellationToken);
+        return latest ?? throw new InvalidOperationException($"No releases found for {_repository}. If the repository is private, set Updates:Token.");
+    }
+
+    /// <summary>The highest version among published releases, pre-releases included.</summary>
+    public static ReleaseInfo? Newest(IEnumerable<ReleaseInfo> releases) =>
+        releases
+            .Select(release => (Release: release, Version: ReleaseVersions.Parse(release.Tag)))
+            .Where(item => item.Version != null && item.Release.Assets.Count > 0)
+            .OrderByDescending(item => item.Version!.Value, Comparer<(Version Core, string? Pre)>.Create(ReleaseVersions.Compare))
+            .Select(item => item.Release)
+            .FirstOrDefault();
 
     public Task<ReleaseInfo?> GetByTagAsync(string tag, CancellationToken cancellationToken = default) =>
         GetAsync($"repos/{_repository}/releases/tags/{Uri.EscapeDataString(tag)}", cancellationToken);
@@ -199,7 +214,24 @@ public sealed class GitHubReleaseSource : IReleaseSource
         return await response.Content.ReadAsStreamAsync(cancellationToken);
     }
 
+    private async Task<List<ReleaseInfo>> GetListAsync(string path, CancellationToken cancellationToken)
+    {
+        using var document = await SendAsync(path, cancellationToken);
+        return document == null ? [] : document.RootElement.EnumerateArray()
+            .Where(release => !(release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True))
+            .Select(Read)
+            .OfType<ReleaseInfo>()
+            .ToList();
+    }
+
     private async Task<ReleaseInfo?> GetAsync(string path, CancellationToken cancellationToken)
+    {
+        using var document = await SendAsync(path, cancellationToken);
+        return document == null ? null
+            : Read(document.RootElement) ?? throw new InvalidOperationException($"Release tag '{document.RootElement.GetProperty("tag_name").GetString()}' isn't a version");
+    }
+
+    private async Task<JsonDocument?> SendAsync(string path, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
@@ -215,10 +247,18 @@ public sealed class GitHubReleaseSource : IReleaseSource
         }
 
         response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        var root = document.RootElement;
+        return await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+    }
+
+    /// <summary>A release from GitHub's JSON, or null if its tag isn't a version.</summary>
+    private static ReleaseInfo? Read(JsonElement root)
+    {
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
-        var version = ReleaseVersions.Parse(tag)?.Core ?? throw new InvalidOperationException($"Release tag '{tag}' isn't a version");
+        if (ReleaseVersions.Parse(tag)?.Core is not { } version)
+        {
+            return null;
+        }
+
         var assets = root.GetProperty("assets").EnumerateArray()
             .Select(asset => new ReleaseAsset(asset.GetProperty("id").GetInt64(), asset.GetProperty("name").GetString() ?? string.Empty, asset.GetProperty("size").GetInt64()))
             .ToList();

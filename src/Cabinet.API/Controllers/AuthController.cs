@@ -187,8 +187,11 @@ public sealed class AuthController : ControllerBase
         });
 
     /// <summary>Only a path on this site, so sign-in can't be used to send someone elsewhere.</summary>
-    private static string LocalOnly(string? url) =>
-        !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//", StringComparison.Ordinal) && !url.StartsWith("/\\", StringComparison.Ordinal) ? url : "/";
+    /// Browsers drop tabs and line breaks from a Location, so "/\t/evil.example" would become
+    /// "//evil.example": any control character is refused.
+    internal static string LocalOnly(string? url) =>
+        !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//", StringComparison.Ordinal) && !url.StartsWith("/\\", StringComparison.Ordinal)
+        && !url.Any(char.IsControl) ? url : "/";
 }
 
 /// <summary>An LDAP sign-in.</summary>

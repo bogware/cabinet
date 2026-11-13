@@ -61,6 +61,19 @@ public sealed class BrowserSessionTests
         (await AcceptedAsync("GET", false, TimeSpan.FromHours(25))).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("/search?q=x", "/search?q=x")]
+    [InlineData("//evil.example", "/")]
+    [InlineData("/\\evil.example", "/")]
+    [InlineData("/\t/evil.example", "/")]
+    [InlineData("/\n/evil.example", "/")]
+    [InlineData("https://evil.example", "/")]
+    public void AfterSignIn_OnlyPathsOnThisSiteAreFollowed(string returnUrl, string expected)
+    {
+        // Browsers strip tabs and line breaks, turning "/\t/evil.example" into "//evil.example"
+        Cabinet.API.Controllers.AuthController.LocalOnly(returnUrl).Should().Be(expected);
+    }
+
     [Fact]
     public void ASession_ThatDoesntSayWhenItBegan_HasEnded()
     {

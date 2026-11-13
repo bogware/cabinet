@@ -37,7 +37,8 @@ public class HealthControllerTests
         var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
         var version = okResult.Value.Should().BeOfType<VersionInfo>().Subject;
         version.ApiVersion.Should().Be("v1");
-        version.Version.Should().NotBeNullOrEmpty();
+        version.Version.Should().Be(Cabinet.API.Services.Updates.ReleaseVersions.CurrentFull, "the version as released, with any pre-release label");
+        version.Version.Split('-')[0].Split('.').Should().HaveCount(3);
     }
 
     [Fact]

@@ -192,6 +192,19 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public void AServerOnACandidate_IsOfferedTheNewestRelease_CandidatesIncluded()
+    {
+        // GitHub's "latest" skips pre-releases, so rc.1 would never hear of rc.2
+        var asset = new List<ReleaseAsset> { new(1, "cabinet-win-x64.zip", 1) };
+        ReleaseInfo Release(string tag, bool withAssets = true) =>
+            new(tag, ReleaseVersions.Parse(tag)!.Value.Core, null, null, withAssets ? asset : []);
+
+        GitHubReleaseSource.Newest([Release("v2.5.4"), Release("v3.0.0-rc.2"), Release("v3.0.0-rc.10"), Release("v3.0.0-rc.11", withAssets: false)])!
+            .Tag.Should().Be("v3.0.0-rc.10", "numbered labels order by number, and a release without files is skipped");
+        GitHubReleaseSource.Newest([Release("v3.0.0-rc.3"), Release("v3.0.0")])!.Tag.Should().Be("v3.0.0");
+    }
+
+    [Fact]
     public async Task AReleaseCandidate_AndItsRelease_AreStagedApart()
     {
         // Both are version 3.0.0; reusing the candidate's files would reinstall it on every update

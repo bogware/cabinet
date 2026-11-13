@@ -103,12 +103,10 @@ public class HealthController : ControllerBase
     [ProducesResponseType(typeof(VersionInfo), StatusCodes.Status200OK)]
     public IActionResult GetVersion()
     {
-        var assembly = Assembly.GetExecutingAssembly();
-        var version = assembly.GetName().Version?.ToString() ?? "1.0.0";
-
+        // As released, such as 3.0.0 or 3.0.0-rc.1, not the assembly's four-part number
         return Ok(new VersionInfo
         {
-            Version = version,
+            Version = Cabinet.API.Services.Updates.ReleaseVersions.CurrentFull,
             ApiVersion = "v1"
         });
     }
