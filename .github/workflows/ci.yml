@@ -376,6 +376,7 @@ jobs:
         RestartSec=10
         User=cabinet
         Group=cabinet
+        UMask=0027
         NoNewPrivileges=true
         ProtectSystem=strict
         ProtectHome=true
@@ -465,6 +466,7 @@ jobs:
         RestartSec=5
         User=cabinet-agent
         Group=cabinet-agent
+        UMask=0077
         NoNewPrivileges=true
         ProtectSystem=strict
         ProtectHome=true

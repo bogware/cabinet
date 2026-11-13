@@ -484,10 +484,13 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Storage — supports SQLite, Memory, PostgreSQL, OpenSearch and the Cabinet engine.
     // The "base" store is everything below detection. Detection events are written to it directly,
     // so they're stored, encrypted and searchable but never fed back into the detection engine.
+    // Built the same way a storage migration builds it, so the two can't disagree. A move off the
+    // Cabinet engine reads through this one, since only one engine may have its folder open.
+    services.AddKeyedSingleton<ILogStorage>("backend", (sp, _) =>
+        Cabinet.API.Services.Storage.StorageBackends.CreateLogStorage(configuration, sp.GetRequiredService<ILoggerFactory>()));
     services.AddKeyedSingleton<ILogStorage>("base", (sp, _) =>
     {
-        // Built the same way a storage migration builds it, so the two can't disagree
-        var backend = Cabinet.API.Services.Storage.StorageBackends.CreateLogStorage(configuration, sp.GetRequiredService<ILoggerFactory>());
+        var backend = sp.GetRequiredKeyedService<ILogStorage>("backend");
 
         if (configuration.GetValue<bool>("Encryption:Enabled"))
         {
@@ -554,7 +557,13 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
 
     // Moving to another database, and holding back ingest while it switches
     services.AddSingleton<Cabinet.API.Services.Storage.IngestGate>();
-    services.AddSingleton<Cabinet.API.Services.Storage.StorageMigrationService>();
+    services.AddSingleton(sp => new Cabinet.API.Services.Storage.StorageMigrationService(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetRequiredService<Cabinet.API.Services.Storage.IngestGate>(),
+        sp.GetRequiredService<Cabinet.API.Services.Settings.SettingsService>(),
+        sp.GetRequiredService<Cabinet.API.Services.Settings.ServiceRestarter>(),
+        sp.GetRequiredService<ILoggerFactory>(),
+        sp.GetRequiredKeyedService<ILogStorage>("backend")));
 
     // The settings screen
     services.AddSingleton<Cabinet.API.Services.Settings.ServiceRestarter>();

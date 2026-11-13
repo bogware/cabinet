@@ -20,6 +20,9 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
         _capability = capability;
     }
 
+    /// <summary>The capability this requires.</summary>
+    public Capability Capability => _capability;
+
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var rbac = context.HttpContext.RequestServices.GetService<IRbacService>();

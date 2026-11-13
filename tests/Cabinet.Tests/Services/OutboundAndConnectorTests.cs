@@ -24,6 +24,8 @@ public sealed class OutboundUrlGuardTests
     [InlineData("http://[::1]/hook")]
     [InlineData("http://[fd00::1]/hook")]
     [InlineData("http://100.64.1.1/hook")]
+    [InlineData("http://[64:ff9b::a9fe:a9fe]/latest/meta-data")]
+    [InlineData("http://[2002:c0a8:011b::1]/hook")]
     public void PrivateTargets_AreRefused(string url)
     {
         new OutboundUrlGuard(new OutboundUrlOptions()).Check(url).Should().NotBeNull();
@@ -51,6 +53,13 @@ public sealed class OutboundUrlGuardTests
     {
         new OutboundUrlGuard(new OutboundUrlOptions { AllowedHosts = ["10.0.0.5"] }).Check("http://10.0.0.5/jira").Should().BeNull();
         new OutboundUrlGuard(new OutboundUrlOptions { AllowPrivateTargets = true }).Check("http://192.168.1.10/x").Should().BeNull();
+    }
+
+    [Fact]
+    public void Handler_NeverGoesThroughAProxy()
+    {
+        // Through a proxy the connect check would only see the proxy's address
+        new OutboundUrlGuard(new OutboundUrlOptions()).CreateHandler().UseProxy.Should().BeFalse();
     }
 
     [Fact]

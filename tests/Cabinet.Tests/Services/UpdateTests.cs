@@ -192,6 +192,24 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task AReleaseCandidate_AndItsRelease_AreStagedApart()
+    {
+        // Both are version 3.0.0; reusing the candidate's files would reinstall it on every update
+        var releases = new FakeReleases();
+        releases.Add("cabinet-win-x64.zip", Zip(("api/Cabinet.API.exe", "candidate")));
+        var service = Service(releases);
+        var assets = (await releases.GetLatestAsync()).Assets;
+        var candidate = new ReleaseInfo("v3.0.0-rc.1", new Version(3, 0, 0), "notes", DateTimeOffset.UtcNow, assets);
+        var final = new ReleaseInfo("v3.0.0", new Version(3, 0, 0), "notes", DateTimeOffset.UtcNow, assets);
+
+        var first = await service.StageAsync(candidate, "win-x64");
+        var second = await service.StageAsync(final, "win-x64");
+
+        second.Should().NotBe(first);
+        releases.Downloads.Should().Be(4, "each release is downloaded with its checksum");
+    }
+
+    [Fact]
     public async Task Agents_GetTheBuildMatchingThisServer()
     {
         var releases = new FakeReleases();
@@ -237,11 +255,11 @@ public sealed class UpdateTests : IDisposable
         }
     }
 
-    private (AgentUpdater Updater, string Program) Agent(HttpMessageHandler server)
+    private (AgentUpdater Updater, string Program) Agent(HttpMessageHandler server, OutputConfiguration? output = null)
     {
         var program = Path.Combine(_directory, "cabinet-agent");
         File.WriteAllText(program, "old agent");
-        var config = new AgentConfiguration { Output = new OutputConfiguration { ServerUrl = "https://cabinet.example:8443", ApiKey = "agent-key" } };
+        var config = new AgentConfiguration { Output = output ?? new OutputConfiguration { ServerUrl = "https://cabinet.example:8443", ApiKey = "agent-key" } };
         return (new AgentUpdater(new HttpClient(server), config, Mock.Of<IHostApplicationLifetime>(), NullLogger<AgentUpdater>.Instance, program), program);
     }
 
@@ -255,6 +273,29 @@ public sealed class UpdateTests : IDisposable
 
         File.ReadAllText(program).Should().Be("new agent");
         File.ReadAllText(program + ".old").Should().Be("old agent");
+    }
+
+    [Theory]
+    [InlineData("http://cabinet.example:8080", true, null)]
+    [InlineData("https://cabinet.example:8443", false, null)]
+    public async Task Agent_WontUpdate_OverAConnectionThatDoesntProveItsTheServer(string url, bool verify, string? pin)
+    {
+        // Whoever sits between the agent and an unauthenticated server could offer any program
+        var binary = Encoding.UTF8.GetBytes("new agent");
+        var (updater, program) = Agent(
+            new FakeServer("9.9.9", binary, Convert.ToHexString(SHA256.HashData(binary))),
+            new OutputConfiguration { ServerUrl = url, VerifySsl = verify, CertificateSha256 = pin, ApiKey = "agent-key" });
+
+        (await updater.CheckOnceAsync()).Should().BeFalse();
+
+        File.ReadAllText(program).Should().Be("old agent");
+    }
+
+    [Fact]
+    public void Agent_UpdatesOverHttps_VerifiedOrPinned()
+    {
+        AgentUpdater.AuthenticatesServer(new OutputConfiguration { ServerUrl = "https://a:8443", VerifySsl = true }).Should().BeTrue();
+        AgentUpdater.AuthenticatesServer(new OutputConfiguration { ServerUrl = "https://a:8443", VerifySsl = false, CertificateSha256 = new string('A', 64) }).Should().BeTrue();
     }
 
     [Fact]

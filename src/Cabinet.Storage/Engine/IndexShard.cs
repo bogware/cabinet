@@ -198,6 +198,42 @@ internal sealed class IndexShard : IDisposable
         return events;
     }
 
+    /// <summary>
+    /// Appends one record to the log, all of it or none: never cancelled partway, and on a failed
+    /// write, such as a full disk, the log is cut back to where it was. Otherwise a half-written
+    /// record would sit in front of later ones, and recovery, which stops at a damaged record,
+    /// would lose every batch after it.
+    /// </summary>
+    private async Task AppendToWalAsync(byte[] record)
+    {
+        var before = _wal!.Length;
+        try
+        {
+            await _wal.WriteAsync(record, CancellationToken.None);
+            _wal.Flush(flushToDisk: _options.SyncWrites);
+        }
+        catch (IOException)
+        {
+            var path = _wal.Name;
+            try
+            {
+                _wal.Dispose();
+            }
+            catch (IOException ex)
+            {
+                _logger.LogWarning(ex, "Closing the log for index {Index} after a failed write failed too", Index);
+            }
+
+            using (var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.Read))
+            {
+                file.SetLength(before);
+            }
+
+            OpenWal();
+            throw;
+        }
+    }
+
     private void OpenWal()
     {
         var path = Path.Combine(_directory, $"{WalPrefix}{_walGeneration:D12}.log");
@@ -256,13 +292,12 @@ internal sealed class IndexShard : IDisposable
                 }
             }
 
-            var bytes = payload.GetBuffer().AsSpan(0, (int)payload.Length);
-            var header = new byte[8];
-            BitConverter.TryWriteBytes(header.AsSpan(0, 4), bytes.Length);
-            BitConverter.TryWriteBytes(header.AsSpan(4, 4), Crc32.Compute(bytes));
-            await _wal!.WriteAsync(header, cancellationToken);
-            await _wal.WriteAsync(payload.GetBuffer().AsMemory(0, (int)payload.Length), cancellationToken);
-            _wal.Flush(flushToDisk: _options.SyncWrites);
+            var length = (int)payload.Length;
+            var record = new byte[8 + length];
+            payload.GetBuffer().AsSpan(0, length).CopyTo(record.AsSpan(8));
+            BitConverter.TryWriteBytes(record.AsSpan(0, 4), length);
+            BitConverter.TryWriteBytes(record.AsSpan(4, 4), Crc32.Compute(record.AsSpan(8)));
+            await AppendToWalAsync(record);
 
             foreach (var logEvent in kept)
             {

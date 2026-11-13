@@ -91,6 +91,16 @@ function Protect-File([string]$Path) {
     Set-Acl -Path $Path -AclObject $acl
 }
 
+# A folder, and everything in it, for administrators and SYSTEM only
+function Protect-Folder([string]$Path) {
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($who in @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    }
+    Set-Acl -Path $Path -AclObject $acl
+}
+
 # PostgreSQL for Windows from EnterpriseDB, the PostgreSQL project's Windows distributor
 $postgresVersion = "17.7-1"
 $postgresMajor = "17"
@@ -212,6 +222,8 @@ Write-Host "[2/6] Copying files" -ForegroundColor Green
 foreach ($dir in @("$InstallDir\api", "$InstallDir\cli", "$DataDir\db", "$DataDir\backups")) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
+# Events and backups: administrators and the service only, not every local user as ProgramData allows
+foreach ($dir in @("$DataDir\db", "$DataDir\backups")) { Protect-Folder $dir }
 # Settings live in $DataDir and are kept on upgrade
 Get-ChildItem "$source\api" | Where-Object { $_.Name -ne "appsettings.Production.json" } |
     Copy-Item -Destination "$InstallDir\api" -Recurse -Force

@@ -56,9 +56,16 @@ public sealed class StorageMigrationService
     private readonly object _lock = new();
     private MigrationStatus _status = new();
     private CancellationTokenSource? _cancellation;
+    private readonly ILogStorage? _live;
 
-    public StorageMigrationService(IConfiguration configuration, IngestGate gate, SettingsService settings, ServiceRestarter restarter, ILoggerFactory loggers)
+    /// <param name="live">
+    /// The server's own backend, below encryption. The Cabinet engine is read through it when
+    /// moving off the engine: a second engine opened on the same folder would recover the live
+    /// log and merge files the server still has open.
+    /// </param>
+    public StorageMigrationService(IConfiguration configuration, IngestGate gate, SettingsService settings, ServiceRestarter restarter, ILoggerFactory loggers, ILogStorage? live = null)
     {
+        _live = live;
         _configuration = configuration;
         _gate = gate;
         _settings = settings;
@@ -393,7 +400,8 @@ public sealed class StorageMigrationService
     private async Task CopyThroughCabinetAsync(string targetType, string targetConnection, CancellationToken cancellationToken)
     {
         var targetConfiguration = StorageBackends.With(_configuration, targetType, targetConnection);
-        var source = StorageBackends.CreateLogStorage(_configuration, _loggers);
+        var shared = CurrentType == "Cabinet" && _live != null;
+        var source = shared ? _live! : StorageBackends.CreateLogStorage(_configuration, _loggers);
         var target = StorageBackends.CreateLogStorage(targetConfiguration, _loggers);
         try
         {
@@ -445,7 +453,11 @@ public sealed class StorageMigrationService
         }
         finally
         {
-            (source as IDisposable)?.Dispose();
+            if (!shared)
+            {
+                (source as IDisposable)?.Dispose();
+            }
+
             (target as IDisposable)?.Dispose();
         }
     }

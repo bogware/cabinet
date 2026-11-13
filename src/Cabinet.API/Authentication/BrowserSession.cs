@@ -43,6 +43,7 @@ public static class BrowserSession
             options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             options.ExpireTimeSpan = TimeSpan.FromHours(Math.Clamp(sso?.SessionHours ?? 8, 1, 24 * 7));
             options.SlidingExpiration = true;
+            var longest = TimeSpan.FromHours(Math.Clamp(sso?.MaxSessionHours ?? 24, 1, 24 * 30));
 
             // An API answers with a status, not a redirect to a login page
             options.Events.OnRedirectToLogin = context =>
@@ -60,6 +61,12 @@ public static class BrowserSession
                 if (!IsSafe(context.Request.Method) && !context.Request.Headers.ContainsKey(RequestHeader))
                 {
                     context.RejectPrincipal();
+                }
+                else if (Expired(context.Properties, DateTimeOffset.UtcNow, longest))
+                {
+                    // Sliding renewal moves IssuedUtc, so the sign-in time travels separately
+                    context.RejectPrincipal();
+                    context.ShouldRenew = false;
                 }
 
                 return Task.CompletedTask;
@@ -99,6 +106,15 @@ public static class BrowserSession
 
                     return Task.CompletedTask;
                 };
+                options.Events.OnTicketReceived = context =>
+                {
+                    if (context.Properties != null)
+                    {
+                        context.Properties.Items[SignedInItem] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+                    }
+
+                    return Task.CompletedTask;
+                };
             });
         }
 
@@ -111,6 +127,15 @@ public static class BrowserSession
         && !request.Headers.ContainsKey("X-API-Key")
         && request.Headers.Authorization.Count == 0;
 
+    /// <summary>The item that holds when someone signed in, which renewal doesn't move.</summary>
+    public const string SignedInItem = "cabinet.signedIn";
+
+    /// <summary>Whether a session is past its absolute limit, or doesn't say when it began.</summary>
+    public static bool Expired(AuthenticationProperties properties, DateTimeOffset now, TimeSpan longest) =>
+        !properties.Items.TryGetValue(SignedInItem, out var text)
+        || !DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var signedIn)
+        || now - signedIn > longest;
+
     private static bool IsSafe(string method) =>
         HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method);
 
@@ -118,7 +143,9 @@ public static class BrowserSession
     public static async Task SignInAsync(HttpContext context, ClaimsIdentity identity)
     {
         var session = new ClaimsIdentity(identity.Claims, Scheme, ClaimTypes.Name, PrincipalResolver.RoleClaim);
-        await context.SignInAsync(Scheme, new ClaimsPrincipal(session), new AuthenticationProperties { IsPersistent = true });
+        var properties = new AuthenticationProperties { IsPersistent = true };
+        properties.Items[SignedInItem] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        await context.SignInAsync(Scheme, new ClaimsPrincipal(session), properties);
     }
 }
 

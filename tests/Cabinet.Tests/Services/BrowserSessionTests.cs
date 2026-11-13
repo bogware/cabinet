@@ -14,7 +14,7 @@ namespace Cabinet.Tests.Services;
 
 public sealed class BrowserSessionTests
 {
-    private static async Task<bool> AcceptedAsync(string method, bool withHeader)
+    private static async Task<bool> AcceptedAsync(string method, bool withHeader, TimeSpan? signedInAgo = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -30,11 +30,13 @@ public sealed class BrowserSessionTests
         }
 
         var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("ClientId", "oidc-alice")], BrowserSession.Scheme));
+        var properties = new AuthenticationProperties();
+        properties.Items[BrowserSession.SignedInItem] = (DateTimeOffset.UtcNow - (signedInAgo ?? TimeSpan.FromMinutes(5))).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
         var context = new CookieValidatePrincipalContext(
             http,
             new AuthenticationScheme(BrowserSession.Scheme, null, typeof(CookieAuthenticationHandler)),
             options,
-            new AuthenticationTicket(principal, BrowserSession.Scheme));
+            new AuthenticationTicket(principal, properties, BrowserSession.Scheme));
         await options.Events.ValidatePrincipal(context);
         return context.Principal != null;
     }
@@ -49,6 +51,20 @@ public sealed class BrowserSessionTests
     {
         // Another site's page can make the browser send the cookie, but can't add the header
         (await AcceptedAsync(method, withHeader)).Should().Be(accepted);
+    }
+
+    [Fact]
+    public async Task ASession_EndsAtItsLimit_HoweverMuchItsUsed()
+    {
+        // Sliding renewal would otherwise keep a role the identity provider took away
+        (await AcceptedAsync("GET", false, TimeSpan.FromHours(23))).Should().BeTrue();
+        (await AcceptedAsync("GET", false, TimeSpan.FromHours(25))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ASession_ThatDoesntSayWhenItBegan_HasEnded()
+    {
+        BrowserSession.Expired(new AuthenticationProperties(), DateTimeOffset.UtcNow, TimeSpan.FromHours(24)).Should().BeTrue();
     }
 
     [Theory]

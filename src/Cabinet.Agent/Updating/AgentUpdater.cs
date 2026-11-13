@@ -110,6 +110,12 @@ public sealed class AgentUpdater : BackgroundService
             return;
         }
 
+        if (!AuthenticatesServer(_config.Output))
+        {
+            _logger.LogWarning("Not updating from the server: updates need an https server URL with its certificate verified or pinned (Output:CertificateSha256), so nobody in between can hand this agent a program");
+            return;
+        }
+
         try
         {
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
@@ -137,6 +143,11 @@ public sealed class AgentUpdater : BackgroundService
     /// </summary>
     public async Task<bool> CheckOnceAsync(CancellationToken cancellationToken = default)
     {
+        if (!AuthenticatesServer(_config.Output))
+        {
+            return false;
+        }
+
         var server = new Uri(_config.Output.ServerUrl.TrimEnd('/') + "/");
         var platform = RuntimeInformation.RuntimeIdentifier;
         var host = string.IsNullOrEmpty(_config.Hostname) ? Environment.MachineName : _config.Hostname;
@@ -191,6 +202,16 @@ public sealed class AgentUpdater : BackgroundService
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether the connection proves it's the server: https, with the certificate checked normally
+    /// or pinned. The program arrives over it with its checksum, so anything less would let
+    /// whoever sits on the network path choose what the agent runs.
+    /// </summary>
+    public static bool AuthenticatesServer(OutputConfiguration output) =>
+        Uri.TryCreate(output.ServerUrl, UriKind.Absolute, out var uri)
+        && uri.Scheme == Uri.UriSchemeHttps
+        && (output.VerifySsl || !string.IsNullOrWhiteSpace(output.CertificateSha256));
 
     /// <summary>A request with the agent's key, unless the forwarder already set it for every request.</summary>
     private HttpRequestMessage Request(Uri uri)

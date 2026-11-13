@@ -27,8 +27,9 @@ public static class ServiceCollectionExtensions
             var config = new WebhookConfiguration();
             var configuration = sp.GetService<IConfiguration>();
             configuration?.GetSection("Webhook").Bind(config);
+            // The host's guarded client when it has one, so this URL can't reach private addresses either
             return new WebhookAlertChannel(
-                new HttpClient(),
+                sp.GetKeyedService<HttpClient>("outbound") ?? new HttpClient(),
                 config,
                 sp.GetRequiredService<ILogger<WebhookAlertChannel>>());
         });

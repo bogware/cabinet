@@ -45,6 +45,8 @@ public sealed class UpdateService
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ConcurrentDictionary<string, AgentVersion> _agents = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, AgentPackage> _agentPackages = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _agentStageFailed = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _agentStageLock = new(1, 1);
 
     private ReleaseInfo? _latest;
     private DateTimeOffset? _lastChecked;
@@ -171,23 +173,44 @@ public sealed class UpdateService
             return cached;
         }
 
-        var release = await _source.GetByTagAsync(ReleaseVersions.CurrentTag, cancellationToken);
-        if (release == null)
+        // Any agent can ask, so one download at a time, and a failure isn't retried for a while
+        await _agentStageLock.WaitAsync(cancellationToken);
+        try
         {
-            return null;
-        }
+            if (_agentPackages.TryGetValue(platform, out cached) && File.Exists(cached.Path))
+            {
+                return cached;
+            }
 
-        var staged = await StageAsync(release, platform, cancellationToken);
-        var binary = Path.Combine(staged, "agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
-        if (!File.Exists(binary))
+            if (_agentStageFailed.TryGetValue(platform, out var failedAt) && DateTimeOffset.UtcNow - failedAt < TimeSpan.FromMinutes(15))
+            {
+                return null;
+            }
+
+            _agentStageFailed[platform] = DateTimeOffset.UtcNow;
+            var release = await _source.GetByTagAsync(ReleaseVersions.CurrentTag, cancellationToken);
+            if (release == null)
+            {
+                return null;
+            }
+
+            var staged = await StageAsync(release, platform, cancellationToken);
+            var binary = Path.Combine(staged, "agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
+            if (!File.Exists(binary))
+            {
+                return null;
+            }
+
+            await using var stream = File.OpenRead(binary);
+            var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull);
+            _agentPackages[platform] = package;
+            _agentStageFailed.TryRemove(platform, out _);
+            return package;
+        }
+        finally
         {
-            return null;
+            _agentStageLock.Release();
         }
-
-        await using var stream = File.OpenRead(binary);
-        var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull);
-        _agentPackages[platform] = package;
-        return package;
     }
 
     /// <summary>Remembers an agent's version for the dashboard. Bounded, since agents report it.</summary>
@@ -205,7 +228,10 @@ public sealed class UpdateService
     /// </summary>
     public async Task<string> StageAsync(ReleaseInfo release, string platform, CancellationToken cancellationToken = default)
     {
-        var directory = Path.Combine(_workDirectory, $"v{release.Version}", platform);
+        // By tag, not version: 3.0.0-rc.1 and 3.0.0 share a version number but not a build
+        var folder = string.IsNullOrWhiteSpace(release.Tag) ? $"v{release.Version}"
+            : new string(release.Tag.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_').ToArray());
+        var directory = Path.Combine(_workDirectory, folder, platform);
         var complete = Path.Combine(directory, ".complete");
         if (File.Exists(complete))
         {

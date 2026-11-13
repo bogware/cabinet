@@ -45,7 +45,7 @@ public sealed class StorageMigrationTests : IDisposable
 
     private string Sqlite(string name) => $"Data Source={Path.Combine(_directory, name)}";
 
-    private (StorageMigrationService Migration, IngestGate Gate, IConfigurationRoot Configuration) Build(string type, string connectionString)
+    private (StorageMigrationService Migration, IngestGate Gate, IConfigurationRoot Configuration) Build(string type, string connectionString, ILogStorage? live = null)
     {
         // As the server: appsettings first, then the dashboard's settings file over it
         var appsettings = Path.Combine(_directory, $"appsettings-{Guid.NewGuid():N}.json");
@@ -56,7 +56,7 @@ public sealed class StorageMigrationTests : IDisposable
         var restarter = new ServiceRestarter(new UpdateOptions(), Mock.Of<IHostApplicationLifetime>(), NullLogger<ServiceRestarter>.Instance);
         var settings = new SettingsService(configuration, store, restarter);
         var gate = new IngestGate();
-        return (new StorageMigrationService(configuration, gate, settings, restarter, NullLoggerFactory.Instance), gate, configuration);
+        return (new StorageMigrationService(configuration, gate, settings, restarter, NullLoggerFactory.Instance, live), gate, configuration);
     }
 
     /// <summary>Events and one of each kind of metadata, in the database a configuration names.</summary>
@@ -217,6 +217,41 @@ public sealed class StorageMigrationTests : IDisposable
         engineConfiguration["Storage:MetadataConnectionString"] = configuration["Storage:MetadataConnectionString"];
         back.Start("SQLite", Sqlite("again.db"), copy: true, "test");
         (await WaitAsync(back)).EventsCopied.Should().Be(3210);
+    }
+
+    [Fact]
+    public async Task MovingOffTheEngine_WhileItRuns_ReadsThroughTheRunningEngine()
+    {
+        // A second engine on the live folder would replay and delete the running one's log
+        var (seeder, _, configuration) = Build("SQLite", Sqlite("seed.db"));
+        await SeedAsync(configuration, 10);
+        var folder = Path.Combine(_directory, "live-engine");
+        seeder.Start("Cabinet", folder, copy: true, "test");
+        (await WaitAsync(seeder)).State.Should().Be("WaitingForRestart");
+
+        var engineConfiguration = StorageBackends.With(configuration, "Cabinet", folder);
+        var running = StorageBackends.CreateLogStorage(engineConfiguration, NullLoggerFactory.Instance);
+        await running.InitializeAsync();
+        try
+        {
+            // Unflushed: these are only in the running engine's log and memory
+            await running.StoreBatchAsync(Enumerable.Range(0, 25).Select(i => new LogEvent { RawLine = $"late {i}", Index = "l4d2" }).ToList());
+            var (migration, _, live) = Build("Cabinet", folder, running);
+            live["Storage:DataPath"] = folder;
+            live["Storage:MetadataConnectionString"] = engineConfiguration["Storage:MetadataConnectionString"];
+
+            migration.Start("SQLite", Sqlite("off-engine.db"), copy: true, "test");
+            var status = await WaitAsync(migration);
+
+            status.State.Should().Be("WaitingForRestart", status.Error ?? status.Phase);
+            status.EventsCopied.Should().Be(35);
+            Directory.GetFiles(folder, "wal-*", SearchOption.AllDirectories).Should().NotBeEmpty("the running engine's log is still its own");
+            (await running.GetCountAsync()).Should().Be(35);
+        }
+        finally
+        {
+            (running as IDisposable)?.Dispose();
+        }
     }
 
     [SkippableFact]

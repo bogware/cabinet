@@ -46,12 +46,19 @@ public sealed class SsoConfiguration
 
     /// <summary>
     /// When true, users authenticating via SSO are automatically provisioned
-    /// with <see cref="DefaultRole"/> if no <see cref="RoleMappings"/> match.
+    /// with <see cref="DefaultRole"/> if no <see cref="RoleMappings"/> match. Off by default:
+    /// otherwise every account the identity provider or directory knows could read every index.
     /// </summary>
-    public bool AutoProvision { get; set; } = true;
+    public bool AutoProvision { get; set; }
 
     /// <summary>How long a dashboard sign-in lasts while it's used, in hours.</summary>
     public int SessionHours { get; set; } = 8;
+
+    /// <summary>
+    /// The longest a dashboard sign-in lasts however much it's used, in hours, so a role taken
+    /// away at the identity provider or directory takes effect.
+    /// </summary>
+    public int MaxSessionHours { get; set; } = 24;
 
     /// <summary>
     /// Default role assigned to SSO-authenticated users when no claim mapping matches.
