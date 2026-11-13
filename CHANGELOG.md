@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Linux services write only under their data folder (/var/lib/cabinet): logs (`CABINET_LOG_DIR`), dashboard settings (`CABINET_SETTINGS_FILE`) and update downloads now go there, and the program belongs to root, so a compromised service can't replace its own program. Dashboard settings and the storage move used to fail on Linux installs, whose sandbox made the settings folder read-only; the installer moves an existing settings file across.
+- `/etc/cabinet/appsettings.json`, which can hold a database password, is readable by root and the service only, no longer by every user.
+- The agent list keeps each key's reports apart, with at most 1,000 agents per key, so one ingest key can't rewrite another's agents or fill the list.
 - The server checks the publisher's signature on a release archive before unpacking it, as well as its SHA-256, and refuses an unsigned or wrongly signed release. Releases before 3.0.1 aren't signed, so install those with the installer. `Updates:AllowUnsigned` accepts unsigned releases, for development builds only, and is logged as a warning.
 - Agents check the publisher's signature over the agent program their server offers, with the key built into the agent, so a server that has been taken over can't give agents a program the publisher didn't sign. The server passes the signature (`cabinet-agent-<platform>.sig` in the release) with its offer; agents before 3.0.1 ignore it. Agents from 3.0.1 don't update from servers before 3.0.1, which send no signature. `Agent:Update:AllowUnsigned` is the development-only escape hatch.
 - Workflows ask for the least permissions per job, pass inputs to scripts only through checked environment variables, and only the release job sees the signing key, which it removes when it's done.

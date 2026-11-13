@@ -93,7 +93,11 @@ fi
 # ─── Create directories ───────────────────────────────────────────────
 echo "[2/7] Creating directories"
 mkdir -p "$INSTALL_DIR"/{api,cli}
-mkdir -p "$DATA_DIR"/{db,backups,logs}
+mkdir -p "$DATA_DIR"/{db,backups,logs,settings,updates}
+# Dashboard settings used to live beside the program, where the service couldn't write them
+if [[ -f "$INSTALL_DIR/settings/cabinet.settings.json" && ! -f "$DATA_DIR/settings/cabinet.settings.json" ]]; then
+    mv "$INSTALL_DIR/settings/cabinet.settings.json" "$DATA_DIR/settings/cabinet.settings.json"
+fi
 mkdir -p "$CONFIG_DIR"
 
 # ─── Check/copy binaries ──────────────────────────────────────────────
@@ -209,9 +213,13 @@ ln -sf "$CONFIG_DIR/appsettings.json" "$INSTALL_DIR/api/appsettings.Production.j
 # ─── Set ownership ─────────────────────────────────────────────────────
 echo "[5/7] Setting ownership and permissions"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+# The program belongs to root: the service can run it but not change it
+chown -R root:root "$INSTALL_DIR"
 chown -R root:root "$CONFIG_DIR"
-chmod 644 "$CONFIG_DIR/appsettings.json"
+# It can hold a database password: root and the service's group only
+chown root:"$SERVICE_USER" "$CONFIG_DIR" "$CONFIG_DIR/appsettings.json"
+chmod 750 "$CONFIG_DIR"
+chmod 640 "$CONFIG_DIR/appsettings.json"
 chmod 600 "$CONFIG_DIR/cabinet.env"
 # Binary needs to be executable
 chmod +x "$INSTALL_DIR/api/Cabinet.API" 2>/dev/null || true
@@ -250,11 +258,15 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=$DATA_DIR $INSTALL_DIR/api
+ReadWritePaths=$DATA_DIR
 ReadOnlyPaths=$CONFIG_DIR
 
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=DOTNET_ENVIRONMENT=Production
+# Everything the service writes is under the data folder; the program stays read-only to it
+Environment=CABINET_LOG_DIR=$DATA_DIR/logs
+Environment=CABINET_SETTINGS_FILE=$DATA_DIR/settings/cabinet.settings.json
+Environment=Updates__WorkDirectory=$DATA_DIR/updates
 EnvironmentFile=-$CONFIG_DIR/cabinet.env
 
 StandardOutput=journal

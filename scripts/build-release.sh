@@ -149,8 +149,10 @@ if ! id cabinet &>/dev/null; then
 fi
 
 # Set permissions
+mkdir -p /var/lib/cabinet/logs /var/lib/cabinet/settings /var/lib/cabinet/updates
 chown -R cabinet:cabinet /var/lib/cabinet
-chown -R cabinet:cabinet /opt/cabinet/api
+# The program stays root's: the service can run it but not change it
+chown -R root:root /opt/cabinet/api
 chmod +x /opt/cabinet/api/Cabinet.API
 
 # Create symlink for CLI if present
@@ -198,8 +200,11 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
-ReadWritePaths=/var/lib/cabinet /opt/cabinet/api
+ReadWritePaths=/var/lib/cabinet
 Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=CABINET_LOG_DIR=/var/lib/cabinet/logs
+Environment=CABINET_SETTINGS_FILE=/var/lib/cabinet/settings/cabinet.settings.json
+Environment=Updates__WorkDirectory=/var/lib/cabinet/updates
 EnvironmentFile=-/etc/cabinet/cabinet.env
 StandardOutput=journal
 StandardError=journal
@@ -291,7 +296,8 @@ cp "$SCRIPT_DIR/install-agent.ps1" "$DIST_DIR/"
 echo ""
 echo "Generating checksums..."
 cd "$DIST_DIR"
-for f in *.tar.gz *.zip *.deb 2>/dev/null; do
+shopt -s nullglob
+for f in *.tar.gz *.zip *.deb; do
     [[ -f "$f" ]] || continue
     sha256sum "$f" > "$f.sha256"
 done

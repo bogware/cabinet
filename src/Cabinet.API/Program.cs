@@ -26,6 +26,12 @@ var contentRoot = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHel
     ? AppContext.BaseDirectory
     : Directory.GetCurrentDirectory();
 
+// Logs go beside the program unless CABINET_LOG_DIR says otherwise: Linux services keep their
+// program read-only and write only under their data folder
+var logDirectory = Environment.GetEnvironmentVariable("CABINET_LOG_DIR") is { Length: > 0 } configuredLogs
+    ? configuredLogs
+    : Path.Combine(contentRoot, "logs");
+
 // Shared by the logger used during startup and the one configuration can adjust
 LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Information()
@@ -34,7 +40,7 @@ LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Override("Microsoft.AspNetCore.Authentication", LogEventLevel.Information)
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File(Path.Combine(contentRoot, "logs", "cabinet-api-.log"),
+    .WriteTo.File(Path.Combine(logDirectory, "cabinet-api-.log"),
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}",
         rollingInterval: RollingInterval.Day,
         rollOnFileSizeLimit: true,
