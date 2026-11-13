@@ -51,6 +51,43 @@ public sealed class MetricsAccessTests
         (await MetricsMiddleware.MayReadMetricsAsync(Request(address, requireKey, key, bearer))).Should().Be(allowed);
     }
 
+    [Fact]
+    public async Task ALocalProxy_DoesntMakeEveryoneLocal()
+    {
+        // Behind a reverse proxy on the same machine, requests arrive from loopback with a forwarding header
+        var proxied = Request("127.0.0.1", true);
+        proxied.Request.Headers["X-Forwarded-For"] = "203.0.113.9";
+
+        (await MetricsMiddleware.MayReadMetricsAsync(proxied)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GuessingKeys_IsCutOff_AfterTwenty()
+    {
+        // /metrics answers before the pre-auth rate limit, so it limits wrong keys itself
+        MetricsMiddleware.KeyGuesses.Reset();
+        var middleware = new MetricsMiddleware(_ => Task.CompletedTask);
+        for (var i = 0; i < MetricsMiddleware.KeyGuesses.MaxGuesses; i++)
+        {
+            var guess = Request("198.51.100.7", true, key: $"guess-{i}");
+            guess.Request.Path = "/metrics";
+            await middleware.InvokeAsync(guess);
+            guess.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        }
+
+        var right = Request("198.51.100.7", true, key: "read-key");
+        right.Request.Path = "/metrics";
+        await middleware.InvokeAsync(right);
+        right.Response.StatusCode.Should().Be(StatusCodes.Status429TooManyRequests, "even a right key isn't checked once guessing has used up the allowance");
+
+        var other = Request("198.51.100.8", true, key: "read-key");
+        other.Request.Path = "/metrics";
+        other.Response.Body = new MemoryStream();
+        await middleware.InvokeAsync(other);
+        other.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        MetricsMiddleware.KeyGuesses.Reset();
+    }
+
     [Theory]
     [InlineData("10.1.2.3", true)]
     [InlineData("::ffff:10.1.2.3", true)]
