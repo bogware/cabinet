@@ -62,9 +62,11 @@ public sealed class CasesController : ControllerBase
             return Problem(detail: "Give the case a title of up to 200 characters.", statusCode: StatusCodes.Status400BadRequest);
         }
 
+        var existing = await _cases.ListAsync(cancellationToken);
         var item = new Case
         {
             Title = request.Title.Trim(),
+            Number = existing.Select(c => c.Number).DefaultIfEmpty(0).Max() + 1,
             Description = request.Description,
             Severity = request.Severity ?? "Warning",
             Assignee = request.Assignee,

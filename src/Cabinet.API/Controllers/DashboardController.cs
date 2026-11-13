@@ -118,6 +118,8 @@ public class DashboardController : ControllerBase
                     return Problem(detail: "Panel Width and Height must be between 1 and 12", statusCode: 400);
                 if (p.Row < 0 || p.Column < 0)
                     return Problem(detail: "Panel Row and Column must be non-negative", statusCode: 400);
+                if (p.Description is { Length: > 500 })
+                    return Problem(detail: "A panel's description must be 500 characters or fewer", statusCode: 400);
             }
 
             dashboard.Panels = request.Panels.Select(p => new DashboardPanel
@@ -125,6 +127,7 @@ public class DashboardController : ControllerBase
                 Id = Ulid.NewUlid(),
                 Title = p.Title,
                 Query = p.Query,
+                Description = string.IsNullOrWhiteSpace(p.Description) ? null : p.Description.Trim(),
                 Type = p.Type,
                 Row = p.Row,
                 Column = p.Column,
@@ -193,6 +196,8 @@ public class DashboardController : ControllerBase
                     return Problem(detail: "Panel Width and Height must be between 1 and 12", statusCode: 400);
                 if (p.Row < 0 || p.Column < 0)
                     return Problem(detail: "Panel Row and Column must be non-negative", statusCode: 400);
+                if (p.Description is { Length: > 500 })
+                    return Problem(detail: "A panel's description must be 500 characters or fewer", statusCode: 400);
             }
 
             dashboard.Panels = request.Panels.Select(p => new DashboardPanel
@@ -200,6 +205,7 @@ public class DashboardController : ControllerBase
                 Id = p.Id ?? Ulid.NewUlid(),
                 Title = p.Title,
                 Query = p.Query,
+                Description = string.IsNullOrWhiteSpace(p.Description) ? null : p.Description.Trim(),
                 Type = p.Type,
                 Row = p.Row,
                 Column = p.Column,
@@ -282,6 +288,10 @@ public class CreatePanelRequest
 {
     public string Title { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
+
+    /// <summary>What the panel measures, in a sentence.</summary>
+    public string? Description { get; set; }
+
     public VisualizationType Type { get; set; } = VisualizationType.Table;
     public int Row { get; set; }
     public int Column { get; set; }
@@ -304,6 +314,10 @@ public class UpdatePanelRequest
     public string? Id { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
+
+    /// <summary>What the panel measures, in a sentence.</summary>
+    public string? Description { get; set; }
+
     public VisualizationType Type { get; set; } = VisualizationType.Table;
     public int Row { get; set; }
     public int Column { get; set; }

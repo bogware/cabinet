@@ -33,6 +33,9 @@ public sealed class DashboardPanel
 
     public required string Query { get; set; }
 
+    /// <summary>What the panel measures, in a sentence, shown under its title.</summary>
+    public string? Description { get; set; }
+
     public VisualizationType Type { get; set; } = VisualizationType.Table;
 
     public int Row { get; set; }
@@ -57,5 +60,8 @@ public enum VisualizationType
     Gauge,
     Map,
     Heatmap,
-    Markdown
+    Markdown,
+
+    /// <summary>One bar split into each group's share, with a legend.</summary>
+    StackedBar
 }

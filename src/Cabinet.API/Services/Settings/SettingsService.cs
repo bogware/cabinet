@@ -41,6 +41,13 @@ public sealed class SettingView
     /// <summary>default, appsettings, settings-file or environment.</summary>
     public required string Source { get; init; }
 
+    /// <summary>
+    /// Where exactly: the appsettings file's name (such as appsettings.Production.json), the
+    /// overrides file's name, or the environment variable. Null for the default.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceName { get; init; }
+
     /// <summary>False when an environment variable sets it, which wins over the dashboard.</summary>
     public required bool Editable { get; init; }
 
@@ -143,6 +150,7 @@ public sealed class SettingsService
             Value = setting.Sensitive ? null : ValueOf(setting),
             IsSet = setting.Sensitive ? !string.IsNullOrEmpty(_configuration[setting.Key]) : null,
             Source = source,
+            SourceName = SourceNameOf(setting.Key),
             Editable = source != "environment",
             RequiresRestart = setting.RequiresRestart,
             PendingRestart = setting.RequiresRestart && !string.Equals(_atStartup[setting.Key], Fingerprint(setting), StringComparison.Ordinal),
@@ -231,6 +239,31 @@ public sealed class SettingsService
         }
 
         return "default";
+    }
+
+    /// <summary>
+    /// The file or variable the value comes from: the JSON file's name, or the environment
+    /// variable as it's written (Storage__Type). Null when nothing sets it.
+    /// </summary>
+    public string? SourceNameOf(string key)
+    {
+        var providers = _configuration.Providers.ToList();
+        for (var i = providers.Count - 1; i >= 0; i--)
+        {
+            if (Provides(providers[i], key))
+            {
+                return providers[i] switch
+                {
+                    EnvironmentVariablesConfigurationProvider => key.Replace(":", "__", StringComparison.Ordinal),
+                    Microsoft.Extensions.Configuration.CommandLine.CommandLineConfigurationProvider => $"--{key}",
+                    SettingsOverridesProvider => Path.GetFileName(_store.Path),
+                    FileConfigurationProvider file when !string.IsNullOrEmpty(file.Source.Path) => Path.GetFileName(file.Source.Path),
+                    _ => null,
+                };
+            }
+        }
+
+        return null;
     }
 
     private static bool Provides(IConfigurationProvider provider, string key)
