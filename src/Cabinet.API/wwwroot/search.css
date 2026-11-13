@@ -213,3 +213,10 @@ body.light .q-field { color: #116329; }
 .sx-gallery-group button:hover, .sx-gallery-group button:focus-visible { border-color: var(--accent); }
 .sx-gallery-group button code { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sx-understood[hidden], .sx-builder[hidden] { display: none; }
+
+/* The starter gallery reads as questions, not code */
+.sx-empty > p { font-size: 14px; margin: 4px 0; }
+.sx-gallery { max-width: 1100px; margin: 18px auto 0; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+.sx-empty .sx-gallery-group button { font: 13.5px/1.35 -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; color: var(--text-primary); padding: 10px 12px; border-radius: 8px; }
+.sx-empty .sx-gallery-group button code { font: 11px 'SF Mono', 'Fira Code', Consolas, monospace; background: none; padding: 0; margin-top: 6px; color: var(--text-muted); }
+.sx-gallery-group h4 { color: var(--accent); }

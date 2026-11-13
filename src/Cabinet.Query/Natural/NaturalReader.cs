@@ -1884,7 +1884,9 @@ public sealed partial class NaturalReader
             }
             else if (_r.Aggregates.Count > 0)
             {
-                parts.Add($"{string.Join(", ", _r.Aggregates.Distinct().Select(a => a.Describe()))} of {subject}{(_r.By.Count > 0 ? " for each " + string.Join(" and ", _r.By) : string.Empty)}");
+                // "the average duration for each path" says enough; only a count needs "of events"
+                var of = subject == "events" && _r.Aggregates.All(a => a.Field != null) ? string.Empty : $" of {subject}";
+                parts.Add($"{string.Join(", ", _r.Aggregates.Distinct().Select(a => a.Describe()))}{of}{(_r.By.Count > 0 ? " for each " + string.Join(" and ", _r.By) : string.Empty)}");
             }
             else if (_r.ValuesOf != null)
             {

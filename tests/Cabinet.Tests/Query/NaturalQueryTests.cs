@@ -126,6 +126,53 @@ public sealed class NaturalQueryTests
         understanding.Explanation.Should().NotBeNullOrWhiteSpace();
     }
 
+    /// <summary>"You type" and "Cabinet runs" rows in the guide and README, which have to stay true.</summary>
+    public static TheoryData<string, string, string> DocumentedReadings()
+    {
+        var rows = new TheoryData<string, string, string>();
+        foreach (var file in new[] { "docs/BQL-GUIDE.md", "README.md" })
+        {
+            var path = Path.Combine(RepoRoot(), file);
+            var inSection = false;
+            foreach (var line in File.ReadAllLines(path))
+            {
+                if (line.StartsWith("## ", StringComparison.Ordinal))
+                {
+                    inSection = line.Contains("plain words", StringComparison.OrdinalIgnoreCase);
+                }
+
+                if (!inSection)
+                {
+                    continue;
+                }
+
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"^\| `(?<typed>[^`]+)` \| `(?<runs>(?:[^`])+)` \|$");
+                if (match.Success && !match.Groups["typed"].Value.StartsWith("find", StringComparison.Ordinal) && !match.Groups["typed"].Value.Contains('|'))
+                {
+                    rows.Add(file, match.Groups["typed"].Value, match.Groups["runs"].Value.Replace(@"\|", "|", StringComparison.Ordinal));
+                }
+            }
+        }
+
+        return rows;
+    }
+
+    private static string RepoRoot([System.Runtime.CompilerServices.CallerFilePath] string here = "") =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(here)!, "..", "..", ".."));
+
+    [Theory]
+    [MemberData(nameof(DocumentedReadings))]
+    public void DocumentedPhrasing_ReadsAsDocumented(string file, string typed, string runs)
+    {
+        Understand(typed).Query.Should().Be(runs, $"{file} says \"{typed}\" runs as this");
+    }
+
+    [Fact]
+    public void TheDocs_ShowReadings()
+    {
+        DocumentedReadings().Count.Should().BeGreaterThan(20);
+    }
+
     [Theory]
     [InlineData("error")]
     [InlineData("connection refused timeout")]

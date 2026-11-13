@@ -1,193 +1,190 @@
-# Cabinet
+<p align="center">
+  <img src="docs/images/logo.svg" alt="Cabinet" width="320">
+</p>
 
-[![.NET 10.0](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
-[![Build](https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg)](https://github.com/bogware/cabinet/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
+<p align="center">
+  <strong>Ask your logs anything.</strong><br>
+  Self-hosted log search and security analytics. Plain-English questions, SPL when you want it,<br>
+  its own fast storage engine, and nothing to license.
+</p>
 
-Cabinet is a self-hosted log search system built on .NET 10. It accepts logs over a REST API, OpenTelemetry (OTLP/HTTP), the Splunk HTTP Event Collector (HEC) protocol, syslog and a forwarding agent, stores them in SQLite, PostgreSQL or OpenSearch, and searches them with a pipeline query language called BQL. It also has a web dashboard, saved queries, and scheduled searches that send alerts.
+<p align="center">
+  <a href="https://dotnet.microsoft.com/"><img alt=".NET 10" src="https://img.shields.io/badge/.NET-10.0-512BD4"></a>
+  <a href="https://github.com/bogware/cabinet/actions/workflows/ci.yml"><img alt="Build" src="https://github.com/bogware/cabinet/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
+  <a href="src/Cabinet.Agent/LICENSE"><img alt="Agent: Apache-2.0" src="https://img.shields.io/badge/agent-Apache--2.0-blue"></a>
+</p>
 
-Each deployment serves one organization and should run as a single API instance. Some of what the codebase contains is not finished; the [features table](#features) and [known limitations](#known-limitations) say which parts work today.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/BQL-GUIDE.md">Query guide</a> ·
+  <a href="docs/FEATURES.md">Features</a> ·
+  <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
+  <a href="docs/DEPLOYMENT.md">Deployment</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/ask-in-plain-words.gif" alt="Typing 'errors on web servers since yesterday by host' into Cabinet and getting a chart of errors per web server" width="900">
+</p>
+
+## Why Cabinet
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Ask in plain words
+Type *"errors on web servers since yesterday by host"* or *"p95 response time by endpoint"*. Cabinet reads it into a query, shows you exactly what it understood, and fixes typos as it goes. Field names come from your own data. SPL works too, so people coming from Splunk keep their habits.
+
+</td>
+<td width="50%" valign="top">
+
+### Fast on one machine
+The built-in Cabinet engine stores a million events in 50 MB, counts them in under a millisecond, and computes a 95th percentile per host in about 0.2 s. It writes 120,000 events a second from a single writer, with every batch on disk before it's acknowledged.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### Lean to run
+One server process with no database to run, no JVM, and no cluster to babysit. It runs on Linux, Windows, Docker or Kubernetes. PostgreSQL and OpenSearch are there when you need several instances or an existing cluster.
+
+</td>
+<td valign="top">
+
+### Secure and dependable
+Per-index access control, masking, encryption at rest, SSO (OIDC, SAML, LDAP) and a hash-chained audit log. Delivery is at-least-once with server-side de-duplication, and chaos tests kill the agent, the API and the database mid-stream.
+
+</td>
+</tr>
+</table>
+
+## Ask in plain words
+
+The search box, the CLI and the API all take questions in ordinary words, in any order. Each one runs as a real query, so you can always see and edit what ran.
+
+| You type | Cabinet runs |
+|---|---|
+| `errors on web servers since yesterday by host` | `find * earliest=-1d@d \| where severity >= error and host like "web%" \| stats count by host \| sort by count desc` |
+| `how many unique users per day` | `find * \| timechart span=1d dc(user)` |
+| `top 5 slowest endpoints` | `find * \| stats avg(duration_ms) as avg_duration_ms by path \| sort by avg_duration_ms desc \| head 5` |
+| `POST requests over 1000 ms` | `find * \| where duration_ms > 1000 and method = "POST"` |
+| `count of 5xx errors per endpoint` | `find * \| where status >= 500 and status <= 599 \| stats count by path \| sort by count desc` |
+| `erors by hots` | `find * \| where severity >= error \| stats count by host \| sort by count desc` |
+
+When a question is ambiguous, Cabinet doesn't guess. It offers the likely readings, marks the part it didn't follow, and can hand the question to the optional AI assistant, which runs on a local model by default. Saved searches, alerts and detection rules always store the exact query, so their meaning can't drift. The [query guide](docs/BQL-GUIDE.md#ask-in-plain-words-natural-language) covers what it understands.
+
+<p align="center">
+  <img src="docs/images/screenshots/search-natural.png" alt="A plain-English search with the query it was understood as, an explanation in words, and a bar chart of the 95th percentile response time per endpoint" width="900">
+</p>
 
 ## Quick start
 
 ### Docker Compose
 
-Requires Docker with the Compose plugin.
-
 ```bash
 git clone https://github.com/bogware/cabinet.git && cd cabinet
-cp .env.example .env
-# Set every value in .env. Each must be non-empty. Generate one per value with:
-#   openssl rand -hex 32
+cp .env.example .env          # set each value; openssl rand -hex 32 makes a good one
 docker compose up -d
 ```
 
-The API and dashboard are at `http://localhost:5000`. The dashboard asks for an API key; use the value of `CABINET_API_KEY` from `.env`. Postgres and Redis are not published to the host.
-
-To add Grafana (`127.0.0.1:3000`) and Prometheus (`127.0.0.1:9090`):
-
-```bash
-docker compose --profile monitoring up -d
-```
+Open `http://localhost:5000` and sign in with the `CABINET_API_KEY` from `.env`.
 
 ### From source
 
-Requires the .NET 10 SDK (see `global.json`).
+```bash
+dotnet run --project src/Cabinet.API     # .NET 10 SDK; development mode on http://localhost:5068
+```
+
+To use the Cabinet engine, set `Storage__Type=Cabinet`; SQLite is the default. Packages, installers, systemd units and the Windows service are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+### Send some logs
 
 ```bash
-dotnet build
-dotnet run --project src/Cabinet.API
+# Splunk HEC: point existing Splunk senders at Cabinet
+curl http://localhost:5000/services/collector/event -H "Authorization: Splunk $CABINET_API_KEY" \
+  -d '{"event": "Failed password for alice from 203.0.113.7", "sourcetype": "auth", "host": "auth-01"}'
+
+# Or ask from the command line
+cabinet query "failed logins by user today" --server http://localhost:5000
 ```
 
-This uses the Development environment on `http://localhost:5068` with SQLite. Swagger UI is at the root URL, and the keys `dev-basic-key`, `dev-professional-key` and `dev-enterprise-key` are accepted. Outside Development the root URL serves the dashboard instead, there is no Swagger UI, and you must configure your own keys.
+Cabinet also takes OpenTelemetry (OTLP/HTTP), syslog, a REST API, and its own forwarding agent for files, the systemd journal, Windows event logs and Kubernetes.
 
-Other install paths (packages, installer scripts, systemd, Windows service) are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+## A look around
 
-## Ingest and query
+<table>
+<tr>
+<td width="50%"><img src="docs/images/screenshots/search-examples.png" alt="The search page with starter questions grouped into overview, errors, performance and security"><br><sub>Starter questions fitted to your own hosts and fields.</sub></td>
+<td width="50%"><img src="docs/images/screenshots/search-events.png" alt="Events matching 5xx errors on one web server, with a timeline and a fields sidebar"><br><sub>Events with a timeline, field summaries and one-click filters.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/screenshots/search-builder.jpg" alt="The Build panel choosing a source type, an average of duration and a chart over time per host"><br><sub>Build a search by picking fields, or type one.</sub></td>
+<td><img src="docs/images/screenshots/dashboard.jpg" alt="A dashboard with requests per hour, error count, p95 latency by endpoint, events by source type, status codes and blocked connections"><br><sub>Dashboards with nine chart types and auto-refresh.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/images/screenshots/attack-coverage.jpg" alt="The MITRE ATT&CK coverage matrix showing which techniques detection rules cover"><br><sub>Detections mapped to MITRE ATT&CK, with Sigma rules imported in one paste.</sub></td>
+</tr>
+</table>
 
-Examples use the Compose port. With `dotnet run`, use port 5068 and a dev key.
+## What's inside
 
-```bash
-API_KEY=$(grep '^CABINET_API_KEY=' .env | cut -d= -f2)
+- **Search**: plain-English questions, BQL, and SPL syntax (OR, NOT, phrases, wildcards, `earliest=`), `stats` and `timechart`, `top` and `rare`, `eval`, `rex`, `transaction`, `join`, lookups, macros, subsearches, `cluster` for log patterns, `iplocation`, and async search jobs.
+- **Storage**: the Cabinet engine (write-ahead log, compressed column segments, per-block summaries and Bloom filters, background merges), plus SQLite, PostgreSQL and OpenSearch. Retention per index, and archive to a folder or S3 before deletion.
+- **Ingest**: Splunk HEC, OpenTelemetry logs, traces and metrics, syslog, REST, and an agent with a disk spool and checkpoints, so outages and restarts don't lose or repeat lines. An ingest pipeline drops, samples, routes or redacts before anything is stored.
+- **Detection and response**: rules evaluated on every event at ingest, 29 built-in rules, Sigma import, ATT&CK coverage, anomaly rules (spikes, silence, new values, new kinds of line), backtesting, cases, and actions to Slack, Teams, PagerDuty, Opsgenie, Jira, ServiceNow, email and webhooks.
+- **Dashboards and reports**: line, area, bar, pie, single value, gauge, heatmap, map and table panels, and scheduled reports emailed as HTML with a PDF.
+- **Access and audit**: API keys with tiers and expiry, OIDC, SAML and LDAP sign-in, roles and per-index grants on every endpoint, field masking, AES-256-GCM encryption at rest, and a hash-chained audit log.
+- **Operations**: health and Prometheus metrics, OpenTelemetry tracing of its own work, several instances on PostgreSQL, Kubernetes manifests, and verified backups.
 
-# REST ingest: an array of raw lines, up to 10,000 per request
-curl -X POST http://localhost:5000/api/v1/logs/ingest \
-  -H "X-API-Key: $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"Logs": ["2026-01-15 10:30:00 ERROR Database connection timeout"]}'
+The [feature list](docs/FEATURES.md) says how finished each part is.
 
-# Splunk HEC. Also accepts X-API-Key.
-curl -X POST http://localhost:5000/services/collector/event \
-  -H "Authorization: Splunk $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"event": "Server started", "sourcetype": "app", "host": "web-01"}'
+## Performance
 
-# Query
-curl -X POST http://localhost:5000/api/v1/query/execute \
-  -H "X-API-Key: $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "find timeout | head 10"}'
-```
+One million events of web traffic on an 8-core desktop, queried through the full engine. The [benchmarks](docs/BENCHMARKS.md) give the setup and the other backends.
 
-BQL is a pipeline language with SPL-style stages:
+| Query | Cabinet engine | SQLite | PostgreSQL |
+|---|---:|---:|---:|
+| Count everything | 0.1 ms | 144 ms | 44 ms |
+| Count by host | 107 ms | 4.6 s | 292 ms |
+| Hourly timechart | 34 ms | 3.0 s | 720 ms |
+| Average and p95 by host | 201 ms | 14 s | 3.8 s |
+| Top 10 paths | 144 ms | 13 s | 15 s |
+| Size on disk | 50 MB | 838 MB | |
 
-```
-find errors from last 24h
-find * | where severity >= warning | stats count by host
-find * | timechart span=1h count by severity
-search error | sort -timestamp | head 10
-```
+## Coming from Splunk
 
-
-## Features
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| REST ingest | Available | `POST /api/v1/logs/ingest`. Events go to index `main`. |
-| Splunk HEC ingest | Available | `/services/collector/event` and `/raw`. |
-| OpenTelemetry logs | Available | OTLP over HTTP at `/v1/logs`, in protobuf or JSON. Retried exports are stored once. |
-| Syslog listener | Working | RFC 3164 and RFC 5424 over UDP, TCP and TLS. Off by default, and Compose doesn't publish the port. |
-| Forwarding agent | Available | Files, Kubernetes container logs, the systemd journal and Windows event logs. Retries, a disk spool and checkpoints that follow delivery, so an outage or crash doesn't lose lines, and re-sent lines are stored once. See the limits below. |
-| Ingest pipeline | Available | Drop, sample, route or redact events before they're stored, with how much was kept out. |
-| Storage backends | Available | SQLite, In-Memory, PostgreSQL, OpenSearch. |
-| BQL query engine | Available | SPL search syntax (OR, NOT, phrases, wildcards, field terms, `earliest=`), `stats` functions including `values`, `earliest`, `mode` and `count(eval())`, `cluster` for log patterns, and `iplocation`. Every example in the guide runs as a test. Filters, `stats`, `timechart`, `chart`, `top`, `rare` and `sort | head` read every matching event without holding them in memory. Stages that need all their rows at once hold up to 100,000 and flag results as `truncated` beyond that. See [benchmarks](docs/BENCHMARKS.md). |
-| Natural language to BQL | Available | Rule-based, `POST /api/v1/query/translate`. |
-| Web dashboard | Available | Search with charts, dashboards with a panel editor and auto-refresh, detections, and keyboard and screen reader support. Served from the API outside the Development environment. |
-| Search in the dashboard | Available | Time picker, timeline with drag-to-zoom, fields sidebar with top values and one-click filters, query highlighting and autocomplete, shareable links, CSV and JSON export. |
-| Settings in the dashboard | Available | Every server setting described and editable, with defaults, limits and where each value comes from; API keys; restart. |
-| Importing existing logs | Available | `cabinet-agent import` sends a folder, file or glob once, from any machine, or the history an agent skips. Repeating it stores nothing twice. |
-| Detection actions | Available | When a rule fires: notify, write a searchable `detections` event, call a webhook, or send to a connector (Slack, Teams, Discord, PagerDuty, Opsgenie, Jira, ServiceNow, email) — off the ingest path, templated and configurable per rule. |
-| Sigma and ATT&CK | Available | Import Sigma rules; see which ATT&CK techniques the rules cover. |
-| Detection rules as code | Available | YAML rule files with tests; `cabinet rules test`, `push` and `pull`. |
-| Anomaly rules | Available | Spikes against a learned baseline, silence, new values and new kinds of line. |
-| Cases | Available | Alerts, events, searches and notes on one investigation timeline. |
-| AI investigator | Available | Off by default. Answers questions by running searches with the asker's access, on a local model (Ollama or any OpenAI-compatible server) or Claude. |
-| Scheduled reports | Available | Searches emailed on a schedule as HTML with a PDF. |
-| Storage management | Available | Where the database is, its size and span; move to another file or drive, switch to PostgreSQL, or start empty, from the dashboard, API or Windows installer, with ingest paused only for the switch. |
-| Dashboards, saved queries, lookups, macros, field aliases | Available | REST APIs. |
-| Async search jobs | Available | Private to their owner, and shared by all instances on PostgreSQL. |
-| Scheduled searches | Available | Cron-based, run by one instance. Require an Enterprise-tier key. |
-| Alert channels | Available | Console, file, email, and webhook with generic, Slack, Discord, Teams and PagerDuty formats. |
-| Alert history | Available | `/api/v1/alerts`, kept in the metadata database, from both detections and scheduled searches. |
-| API key authentication | Available | `X-API-Key` header, with Ingest, Basic, Professional, Enterprise and Admin tiers, and optional expiry. |
-| Roles and capabilities per endpoint | Available | A test fails if an endpoint has no capability check. |
-| Per-index RBAC | Available | Grants limit a principal to some indexes for every read and write, including subsearches and search jobs. |
-| Index and user management routes | Available | `IndexManagement` from the Enterprise tier, `UserManagement` from the Admin tier. |
-| OIDC | Available | Bearer tokens for API clients, and dashboard sign-in with the authorization code flow, with claims mapped to roles and index grants. |
-| SAML, LDAP | Available | Dashboard sign-in. |
-| Rate limiting | Available | Per address and per key, shared out among running instances. Queries and streams also have concurrency limits. |
-| Audit log | Available | Hash-chained records in the database, optionally keyed with HMAC, searchable and checkable through `/api/v1/audit`. |
-| Global retention | Available | `Storage:RetentionDays`. 0, the default, keeps everything. |
-| Per-index retention | Available | `/api/v1/retention`, applied hourly by one instance. |
-| Log parsers | Available | JSON, CEF, Apache, Nginx, CSV, Generic. |
-| Data models | Available | Pre-aggregated summaries for `tstats`. |
-| Field extractions | Available | Regular expressions applied at search time, to events already stored too. |
-| Gaming extension | Partial | Optional, off by default. Set `Gaming:Enabled` to add L4D2, SourceMod and SteamCMD parsers, on-demand moderation detection at `/api/v1/detection/*`, and player profiles with suggested moderation actions (never run by Cabinet). |
-| Security detection rules | Available | Rules run on every event at ingest, with thresholds and cooldowns shared by all instances. 29 built-in rules for SSH, sudo, Linux persistence, Windows, Kerberos, web attacks and AWS, off until turned on. Add your own, and backtest any rule against stored events before turning it on. |
-| Health and Prometheus metrics | Available | `/health`, `/health/ready`, `/health/live`, `/metrics`. |
-| AWS CloudWatch and CloudTrail | Available | CLI only (`cabinet aws`). |
-| Backup and restore | Available | Verified SQLite backups with `--restore`, and a PostgreSQL drill. Both run in CI. OpenSearch uses snapshots, which aren't drill-tested. |
-| Kubernetes manifests | Available | `k8s/`, tested on a kind cluster by `tests/EndToEnd/k8s-smoke.sh`. The included PostgreSQL pod is for trying it, not for production. |
-| Encryption at rest | Available | AES-256-GCM on configured fields, or whole lines, with key rotation. Those values can't be searched in storage. |
-| PII and field masking | Available | Applied to every read by role, in fields and in the raw line. |
-| Archive and rehydrate | Available | Retention can archive events to a directory or S3 first, and archived events can be brought back to search. Hot/warm tiering isn't implemented. |
-| Charts | Available | Line, area, bar, pie, single value, gauge, heatmap, map and table. |
-| Multiple API instances | Available | On PostgreSQL, sharing all state. One instance at a time runs background work. |
-| OpenTelemetry | Available | Receives OTLP logs, traces and metrics, in protobuf or JSON, as searchable events. Exports its own request, query and ingest spans. |
-| Server-side multi-line merging | Not implemented | The agent merges multi-line events; the API does not. |
-| Prometheus alert rules | Available | `prometheus-rules.yml`. |
+- Existing senders work: Cabinet speaks the HTTP Event Collector protocol, including `Authorization: Splunk <token>`.
+- SPL searches run: `search error | stats count by host | sort -count | head 10` means what it does in Splunk, and the [guide](docs/BQL-GUIDE.md#spl-compatibility) lists the differences.
+- Sigma rules import directly, and detection rules live as YAML with tests (`cabinet rules test`, `push`, `pull`).
+- There's no per-gigabyte license. You run it on your own hardware, and your data stays there.
 
 ## Known limitations
 
-- **The built-in detections are a starting point.** They're tested against sample lines of common formats, not against your traffic, so expect to tune them.
-- **Multiple instances need PostgreSQL.** With OpenSearch, set `Storage:MetadataPostgresConnectionString`. SQLite and in-memory storage serve one instance. The query cache is per instance.
-- **Only some aggregates run in the database.** A query whose first stage after its filters is `stats` or `timechart`, over built-in or JSON fields, runs as SQL on PostgreSQL and SQLite, and counts run as OpenSearch aggregations. Anything else, such as `top`, `rare`, `stats` after `eval` or `rex`, or percentiles on SQLite, reads every event through the API process. `stats count by f | sort -count | head 10` is a pushed-down `top 10 f`. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-- **Agent delivery has edge cases.** Lines are lost if a file is deleted before they're read, for example during a long agent outage. If the registry file is lost, files are read again from the start under new event IDs. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#agent-behaviour).
-- **The audit log is tamper-evident, not tamper-proof.** Changes, removals and truncation show up in `/api/v1/audit/verify`, but someone with database access could rewrite every record. Chain heads also go to the log output, which helps if you keep it elsewhere. Reading and verifying are slow on very large logs, since they load every record.
-- **API keys** are looked up by SHA-256 hash in a dictionary. The comparison is not constant-time.
-- **`/metrics` is unauthenticated.** Restrict it at the network. See [SECURITY.md](SECURITY.md).
-- **Rate limits are shared out, not counted centrally.** The tier limits default to 100, 1,000 and 10,000 requests per minute (`RateLimiting:Tiers:*`), and a per-address limit of 300 per minute applies to all non-health requests (`RateLimiting:PreAuth:*`). With several instances, each enforces its share, so a client sent mostly to one instance is limited early.
-- **Soak testing has run for hours, not days.** `tests/EndToEnd/soak.sh` runs two instances under load while killing them; see [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Run the Soak workflow before relying on long uptimes.
+Cabinet is honest about what it doesn't do yet. The main gaps today:
 
-## Command-line tools
+- **One machine is the sweet spot.** Several instances need PostgreSQL. The Cabinet engine serves one instance and isn't clustered.
+- **Plain-English reading is English only.** Unusual phrasings come back as choices rather than a guess.
+- **Some backups aren't drill-tested yet.** SQLite and PostgreSQL backups are tested in CI; Cabinet engine and OpenSearch snapshots aren't yet.
+- **`/metrics` is unauthenticated**, and API keys aren't compared in constant time. Restrict the metrics endpoint at the network ([SECURITY.md](SECURITY.md)).
 
-`cabinet` is the CLI. Commands: `peek`, `tail`, `ingest`, `query` (local, or on a server with `--server`), `rules`, `dashboard`, `aws`, `setup`, `version`, `help`. `cabinet setup` is the interactive setup wizard.
-
-`Cabinet.Agent` is a separate forwarder that tails files and sends them to `/services/collector/event`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#forwarding-agent).
-
-## Project layout
-
-```
-src/
-  Cabinet.Core/       Models, interfaces, configuration
-  Cabinet.API/        REST API and web dashboard
-  Cabinet.CLI/        Command-line interface
-  Cabinet.Agent/      Log forwarding agent
-  Cabinet.Query/      BQL parser, optimizer, query engine
-  Cabinet.Parsers/    Log parsers
-  Cabinet.Storage/    SQLite and in-memory backends
-  Cabinet.Database/   PostgreSQL and OpenSearch backends
-  Cabinet.Extras.Gaming/  Optional game log parsers and moderation detection
-  Cabinet.Alerts/     Alert channels
-  Cabinet.AWS/        CloudWatch and CloudTrail access, S3 client code
-tests/Cabinet.Tests/  xUnit tests
-tests/EndToEnd/       CLI end-to-end script
-scripts/              Installers and build-release.sh
-k8s/                  Kubernetes manifests (starting point)
-```
+The full list is in [docs/FEATURES.md](docs/FEATURES.md#known-limitations).
 
 ## Documentation
 
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): installation, configuration, operations
-- [docs/API-GUIDE.md](docs/API-GUIDE.md): REST API. `api-spec.json` is the generated OpenAPI spec.
-- [docs/BQL-GUIDE.md](docs/BQL-GUIDE.md): query language
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): layers, design decisions, internals
-- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow
-- [SECURITY.md](SECURITY.md): reporting vulnerabilities, deployment guidance
-- [CHANGELOG.md](CHANGELOG.md)
+| | |
+|---|---|
+| [Query guide](docs/BQL-GUIDE.md) | Plain-English questions, BQL, every command and function, SPL compatibility |
+| [Deployment](docs/DEPLOYMENT.md) | Installing, configuring, storage backends, backups, scaling, the agent |
+| [API guide](docs/API-GUIDE.md) | The REST API; `api-spec.json` is the OpenAPI spec |
+| [Features](docs/FEATURES.md) | What works today, and the known limitations |
+| [Benchmarks](docs/BENCHMARKS.md) | Measured ingest and query speed on each backend |
+| [Architecture](docs/ARCHITECTURE.md) | Layers, design decisions, the engine and query internals |
+| [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | |
 
 ## License
 
-Cabinet is licensed under the [GNU Affero General Public License v3.0](LICENSE), except the forwarding agent (`src/Cabinet.Agent`), which is under the [Apache License 2.0](src/Cabinet.Agent/LICENSE) so it can run anywhere without conditions.
+Cabinet is licensed under the [GNU AGPL v3.0](LICENSE), except the forwarding agent (`src/Cabinet.Agent`), which is under the [Apache License 2.0](src/Cabinet.Agent/LICENSE) so it can run anywhere without conditions.
 
-Using Cabinet, including running it for your own organization, carries no obligations. If you modify the server and let others use it over a network, the AGPL asks you to offer them your modified source. Releases before 3.0 remain under Apache-2.0.
+Running Cabinet for your own organization carries no obligations. If you modify the server and offer it to others over a network, the AGPL asks you to offer them your modified source. Releases before 3.0 remain under Apache-2.0.
