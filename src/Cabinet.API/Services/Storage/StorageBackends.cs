@@ -91,6 +91,7 @@ public static class StorageBackends
                 {
                     FlushEvents = configuration.GetValue("Storage:EngineFlushEvents", 100_000),
                     FlushSeconds = configuration.GetValue("Storage:EngineFlushSeconds", 10),
+                    SecureFolder = configuration.GetValue("Storage:SecureFolders", true),
                     SyncWrites = configuration.GetValue("Storage:EngineSyncWrites", true),
                     MaxSegmentEvents = configuration.GetValue("Storage:EngineMaxSegmentEvents", 5_000_000),
                 },

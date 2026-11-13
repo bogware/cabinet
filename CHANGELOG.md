@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-13
+
+### Security
+
+- On Windows, the Cabinet engine's folder kept the access it inherited, so under C:\ProgramData every user on the machine could read its events and its metadata database: key hashes, the user directory, and the keys that sign dashboard sessions, enough to forge a sign-in. The server now makes that folder, and the folder of settings saved from the dashboard (which can hold secrets, and sat under Program Files), readable only by its own account, SYSTEM and Administrators, at every start. `Storage:SecureFolders` turns this off. Linux services were already private through their data folder and umask.
+
 ## [3.1.0] - 2026-11-13
 
 Enterprise sign-in and signed releases. Upgrading: dashboard sessions end once, since their keys now live in the metadata database; update the server before its agents, because 3.1 agents install only signed builds, which a 3.1 server offers; and on Linux, rerun the installer (or reinstall the package) so the service gets its new data-folder settings.

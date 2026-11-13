@@ -79,6 +79,8 @@ public static class SettingsCatalog
             min: 1000, max: 10000000),
         S("Storage:EngineFlushSeconds", "Storage", "Engine flush interval", SettingType.Int, 10,
             "With the Cabinet engine, the longest new events wait in memory before going into a segment.", unit: "seconds", min: 1, max: 3600),
+        S("Storage:SecureFolders", "Storage", "Keep data folders private", SettingType.Bool, true,
+            "On Windows, the Cabinet engine's folder is made readable only by this server's account, SYSTEM and Administrators, since it holds every event and usually the metadata. Turn off only if something else must read it. Takes effect on restart."),
         S("Storage:EngineMaxSegmentEvents", "Storage", "Engine segment size", SettingType.Int, 5000000,
             "With the Cabinet engine, segments are merged in the background until they hold about this many events. Larger means fewer files; smaller means less to rewrite when retention cuts through one.",
             min: 100000, max: 100000000),
