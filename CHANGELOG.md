@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Signed releases**: every archive, package and install script in a release has a `.sig`, an ECDSA P-256 / SHA-256 signature made by the release workflow, plus a signed `SHA256SUMS`. The public key is `build/release-signing.pub.pem`; DEPLOYMENT.md and SECURITY.md show how to check a download with `openssl`.
+- **One-step releases**: the manual Release workflow tests a commit, builds every artifact from it with the version stamped in, signs them, tags the commit and publishes the release, as a pre-release for versions like `3.1.0-rc.1`.
+
+### Changed
+
+- CI runs only when started by hand (`gh workflow run ci.yml --ref <branch>`); nothing runs on pushes, pull requests, tags or a schedule. Releases are made by running the Release workflow rather than pushing a tag. See docs/CI.md.
+- The Docker image carries the release's version, and is tagged with it, `sha-<commit>`, and for a release `<major>.<minor>` and `latest`; pushes to `main` no longer publish an image.
+- Updating logs the full running version and the release's tag, as in "Updating from 3.0.0-rc.4 to v3.0.1", where it used to drop the pre-release label from both.
+
+### Security
+
+- The server checks the publisher's signature on a release archive before unpacking it, as well as its SHA-256, and refuses an unsigned or wrongly signed release. Releases before 3.0.1 aren't signed, so install those with the installer. `Updates:AllowUnsigned` accepts unsigned releases, for development builds only, and is logged as a warning.
+- Agents check the publisher's signature over the agent program their server offers, with the key built into the agent, so a server that has been taken over can't give agents a program the publisher didn't sign. The server passes the signature (`cabinet-agent-<platform>.sig` in the release) with its offer; agents before 3.0.1 ignore it. Agents from 3.0.1 don't update from servers before 3.0.1, which send no signature. `Agent:Update:AllowUnsigned` is the development-only escape hatch.
+- Workflows ask for the least permissions per job, pass inputs to scripts only through checked environment variables, and only the release job sees the signing key, which it removes when it's done.
+
 ## [3.0.0] - 2026-11-13
 
 It has breaking changes to search semantics and single sign-on, listed under Changed.

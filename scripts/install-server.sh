@@ -123,6 +123,7 @@ if [[ "$BINARY_FOUND" = false ]]; then
     echo "    $INSTALL_DIR/api/"
     echo ""
     echo "  Download from: https://github.com/bogware/cabinet/releases"
+    echo "  and check its signature first (docs/DEPLOYMENT.md, \"Verifying a release\")."
     echo ""
 fi
 

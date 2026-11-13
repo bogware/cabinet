@@ -12,6 +12,29 @@ In scope: the server, dashboard, CLI, agent, installers and the official contain
 
 Security fixes go into the latest release. Earlier releases don't get backported fixes; update to the latest, which the dashboard and `cabinet` CLI can do for you.
 
+## Verifying a release
+
+Releases from 3.0.1 on are signed. Every file in a GitHub release (archives, `.deb` packages and install scripts) has a `.sig` beside it: the base64 of an ECDSA P-256 / SHA-256 signature over the file, made with a key held only by the release workflow. The public key is [`build/release-signing.pub.pem`](build/release-signing.pub.pem):
+
+```
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvmbaHgWhTTRlnyCau/X3thoO2fwa
+sXPcegaZlvyGgRQDGKASeAC0yXDi7M/viVho6JDqNAR51oSw2HuS7FNlng==
+-----END PUBLIC KEY-----
+```
+
+Check a download before installing it:
+
+```bash
+f=cabinet-linux-x64.tar.gz
+base64 -d "$f.sig" > "$f.sig.der"
+openssl dgst -sha256 -verify release-signing.pub.pem -signature "$f.sig.der" "$f"
+```
+
+Anything other than `Verified OK` means the file didn't come from us. `SHA256SUMS` and `SHA256SUMS.sig` cover every file at once. The `.sha256` files only detect a damaged download.
+
+The server checks the same signature before it unpacks an update, and agents check the publisher's signature over the agent program their server hands them, with the key built into each, so neither installs a program we didn't sign. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#verifying-a-release).
+
 ## Deployment guidance
 
 - **Terminate TLS at a reverse proxy.** The API container listens on plain HTTP. List the proxy in `Network:TrustedProxies`; otherwise `X-Forwarded-For` is ignored and every client appears to have the proxy's address.

@@ -97,9 +97,33 @@ CI publishes only the API image, to `ghcr.io/bogware/cabinet`. Build the agent a
 
 ## Packages and Installers
 
-CI builds these artifacts on `v*` tags and attaches them to a GitHub release. The latest published release, v1.0.0, predates the current `main` and this guide. To install the current code, run `./scripts/build-release.sh <version>`, which writes to `dist/`. It builds API, CLI and agent archives for Linux, Windows and macOS, plus `.deb` packages when `dpkg-deb` is available.
+Each GitHub release has these artifacts, built and signed by the Release workflow ([docs/CI.md](CI.md)): an archive per platform (`cabinet-<platform>.tar.gz`, or `.zip` for Windows) holding the API, CLI and agent, `.deb` packages, and the install scripts. Every one has a `.sha256` and a `.sig` beside it; check the signature before installing (see [Verifying a release](#verifying-a-release)). To build the current code yourself, run `./scripts/build-release.sh <version>`, which writes unsigned artifacts to `dist/`. It builds API, CLI and agent archives for Linux, Windows and macOS, plus `.deb` packages when `dpkg-deb` is available.
 
 Binaries are self-contained and single-file, so no .NET runtime is needed.
+
+### Verifying a release
+
+Releases from 3.0.1 on are signed with ECDSA P-256 over SHA-256. The public key is [`build/release-signing.pub.pem`](../build/release-signing.pub.pem) in the repository, and the same key is built into the server and the agent:
+
+```
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvmbaHgWhTTRlnyCau/X3thoO2fwa
+sXPcegaZlvyGgRQDGKASeAC0yXDi7M/viVho6JDqNAR51oSw2HuS7FNlng==
+-----END PUBLIC KEY-----
+```
+
+Each file's `.sig` is the base64 of the DER signature over the file's bytes. To check one, save the key as `release-signing.pub.pem` and run:
+
+```bash
+f=cabinet-linux-x64.tar.gz
+base64 -d "$f.sig" > "$f.sig.der"
+openssl dgst -sha256 -verify release-signing.pub.pem -signature "$f.sig.der" "$f"
+# Verified OK
+```
+
+Anything but `Verified OK` means the file isn't what the publisher released: don't install it. `SHA256SUMS` lists every file's SHA-256 and has its own `SHA256SUMS.sig`, so you can check that one signature and then `sha256sum -c SHA256SUMS --ignore-missing`. The `.sha256` files alone prove nothing about who made a file, since whoever could replace the file could replace them too. `cabinet-agent-<platform>.sig` is the signature over the agent program inside that platform's archive, which servers pass to agents when they update them.
+
+On Windows, `openssl` comes with Git for Windows (`C:\Program Files\Git\usr\bin\openssl.exe`), and `certutil -decode file.sig file.sig.der` does the base64 step.
 
 ### Linux: .deb
 
@@ -240,7 +264,7 @@ Delivery is at-least-once, and the server stores each event once.
 - **Old files.** `IgnoreOlderThanHours` on an input skips files last written longer ago than that, for folders with years of history. A file the agent was already reading is always finished, and an ignored file is read in full if it's written to again.
 - **Quiet files.** A file read to the end that hasn't changed for `CloseInactiveSeconds` (default 300) is closed, and reopened from its checkpoint when it changes. Programs that start a new file per session, such as game servers, don't leave thousands open.
 - **Deleting delivered files.** `DeleteDeliveredAfterDays` on an input deletes a file once the server has stored all of it and it hasn't been written to for that many days. Off by default. Only files the agent has read are deleted, so skipped history stays. A final line the writer never finished doesn't stop deletion. The service needs write access: `install-agent.sh --writable /path/to/logs`, and the folder's own permissions must allow the agent's user to delete.
-- **Updates.** The agent asks its server every `Agent:Update:CheckIntervalMinutes` (default 60) for the agent build matching the server's version, checks its SHA-256, swaps it in, and restarts through systemd. It updates only over https with the server's certificate verified or pinned (`Output:CertificateSha256`), since the program arrives over that connection. `Agent:Update:Enabled=false` turns this off, and the server's `Updates:AgentHosts` limits which agents take a new version.
+- **Updates.** The agent asks its server every `Agent:Update:CheckIntervalMinutes` (default 60) for the agent build matching the server's version, checks its SHA-256 and the publisher's signature against the key built into the agent, swaps it in, and restarts through systemd. A build without a good signature is refused, so a server that has been taken over still can't give agents a program the publisher didn't sign; agents from 3.0.1 therefore don't update from servers before 3.0.1, which send no signature. It updates only over https with the server's certificate verified or pinned (`Output:CertificateSha256`), since the program arrives over that connection. `Agent:Update:AllowUnsigned=true` accepts unsigned builds, for testing development builds only. `Agent:Update:Enabled=false` turns this off, and the server's `Updates:AgentHosts` limits which agents take a new version.
 - **Pinned certificates.** `Output:CertificateSha256` makes the agent accept the server's certificate only if its SHA-256 fingerprint matches, whoever issued it and whatever name it holds. A malformed fingerprint stops the agent at startup.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
@@ -299,11 +323,13 @@ Every setting the server reads is on the dashboard's Settings screen, grouped by
 
 Updates come from the GitHub releases. The server looks for a new one every `Updates:CheckIntervalHours` (default 6) and never installs one by itself: start it from **Settings > Updates** on the dashboard, `cabinet update apply`, or `POST /api/v1/updates/apply`, which need the `UserManagement` capability. `cabinet update` and `GET /api/v1/updates` show the running and newest versions and each agent's version.
 
-Installing downloads the release's archive for this platform, checks it against the release's SHA-256, and starts a separate updater, which stops the service, backs up the program to `backup\api`, copies the new one in, and starts it again. Settings (`appsettings.Production.json`) and logs are never replaced. If the new version doesn't answer `/health/ready` within 90 seconds, the backup is restored. Progress goes to `updates\update.log` beside the program folder.
+Installing downloads the release's archive for this platform, checks it against the release's SHA-256 and, before unpacking anything, against the publisher's signature (`<archive>.sig`, see [Verifying a release](#verifying-a-release)) with the key built into the server. A release without a signature, or with one that doesn't match, is refused and nothing changes; releases before 3.0.1 aren't signed, so install those with the installer. The agent build the server hands agents comes from a verified archive and carries its own signature, which agents check too. Then it starts a separate updater, which stops the service, backs up the program to `backup\api`, copies the new one in, and starts it again. Settings (`appsettings.Production.json`) and logs are never replaced. If the new version doesn't answer `/health/ready` within 90 seconds, the backup is restored. Progress goes to `updates\update.log` beside the program folder.
 
 While the repository is private, the server needs a GitHub token that can read it: a fine-grained token limited to this repository with read-only Contents access. Give it to the Windows installer once with `-UpdateToken`, or set `Updates:Token` or `CABINET_UPDATE_TOKEN`. Agents never need it: they get their builds from the server.
 
 A server can update itself when it runs as a Windows service, or as a systemd service running as root. In Docker, pull the new image instead.
+
+`Updates:AllowUnsigned=true` lets the server install a release, and offer agents a build, that has no signature at all. It exists for testing development builds you publish to a release source of your own, which aren't signed, and is off by default; the server logs a warning at startup and on every unsigned download while it's on. A signature that is present but wrong is refused even then. It can be set only in the settings file or the environment (`Updates__AllowUnsigned=true`), not from the dashboard. Don't leave it on in production: it lets whoever controls the release source choose what the server runs.
 
 ## Kubernetes
 
