@@ -570,6 +570,56 @@ Under `SSO` (`Enabled`): an identity gets the role and index permissions that `S
 
 Dashboard sign-ins get an HttpOnly, SameSite=Strict session cookie lasting `SSO:SessionHours` (8) while used, and at most `SSO:MaxSessionHours` (24) from sign-in. A cookie request that changes anything must carry the `X-Cabinet-Request` header, which the dashboard sends and another site's page can't.
 
+### Local accounts and MFA
+
+People can sign in to the dashboard with a user name and password kept in Cabinet, with or without single sign-on beside it. The sign-in dialog offers it once there's a local account and `Accounts:LocalSignIn` is on (the default).
+
+1. Sign in with an admin API key (Admin tier) and open **Users**.
+2. **New User**, signing in with "A password here", with the role they need. Leave the password empty to get a temporary one, shown once, which they replace when they first sign in. Make your own SuperAdmin account first, then keep the admin key for automation or emergencies.
+3. They sign in with the user name and password, and set up an authenticator app under **My account** (Microsoft Authenticator, Google Authenticator, 1Password and others). Cabinet shows the key to type into the app and an `otpauth://` link for a phone; there's no QR code. Setting one up gives ten recovery codes, shown once, each of which signs in once without the app.
+
+Passwords are hashed with PBKDF2-HMAC-SHA256, 600,000 iterations (`Accounts:PasswordIterations`) and a random salt. They must have `Accounts:PasswordMinLength` (12) characters and not contain the user name or email or be a common password. Wrong passwords or codes are slowed per account and per address, and `Accounts:LockoutThreshold` (5) in a row lock the account for `Accounts:LockoutMinutes` (15); **Unlock** on the Users page ends that sooner. `Accounts:RequireMfa` makes an authenticator compulsory for `Everyone`, or for `Analyst`, `Admin` or `SuperAdmin` and above; anyone it applies to who hasn't set one up is asked to at their next sign-in. **Reset MFA** removes someone's authenticator if they lose it.
+
+Authenticator secrets are encrypted with the encryption-at-rest key when `Encryption:Enabled` is on, and otherwise with ASP.NET Data Protection, whose keys Cabinet keeps in the metadata database (`data-protection-keys`) so every instance can read them and session cookies survive restarts. Back that database up with the rest, and if you turn encryption at rest on or off later, people set up their authenticators again.
+
+### The user directory with single sign-on
+
+The **Users** page is also where single sign-on users can be managed. When someone signs in with OIDC, SAML or LDAP, or calls the API with an OIDC token, Cabinet looks for a directory user whose external ID is the identity provider's ID for them (Entra's object ID, `oid`, or the token's subject), or whose user name or email is their sign-in name (`preferred_username`, `upn`) or verified email. If there is one:
+
+- a deactivated user is refused, even with a valid session at the identity provider, and their existing sessions end;
+- their own role and their groups' roles apply, so a group your identity provider provisions over SCIM gives the role you map it to here; with none, `SSO:RoleMappings` still decides;
+- deactivating or deleting them, or **Sign out**, ends their dashboard sessions at their next request.
+
+A principal saved through `/api/v1/roles` still overrides both. Cabinet trusts the names your identity provider vouches for, so use an authority for your own tenant, not one any organization can sign in to.
+
+### SCIM provisioning
+
+SCIM lets your identity provider create, update and deactivate Cabinet's directory users and groups as people join, move and leave. Cabinet serves SCIM 2.0 at `https://<cabinet>/scim/v2`. Each identity provider needs a SCIM token: on the **Users** page, under SCIM provisioning, give it a name and choose **New SCIM token**, and copy the token, which isn't shown again. A SCIM token only works on SCIM; revoke it there when it's no longer needed. Amazon Cognito has no SCIM client, so with Cognito, manage users on the Users page or rely on `SSO:RoleMappings`.
+
+**Microsoft Entra ID**
+
+1. In the Entra admin center, open **Enterprise applications** and the application people use to sign in to Cabinet (or **New application**, **Create your own application**, "Integrate any other application you don't find in the gallery").
+2. **Provisioning**, **New configuration** (or **Get started**), with **Provisioning Mode** Automatic.
+3. **Tenant URL** `https://<cabinet>/scim/v2` and **Secret Token** the SCIM token. **Test Connection**: Entra looks up made-up users, and Cabinet answers with empty lists.
+4. Under **Mappings**, **Provision Microsoft Entra ID Users**: keep `userPrincipalName` to `userName`, and change the source of `externalId` from `mailNickname` to `objectId`, so a user's external ID is the `oid` in their sign-in tokens. Cabinet keeps `userName`, `active`, `displayName`, `title`, `emails[type eq "work"].value`, `name.givenName`, `name.familyName`, `externalId` and the enterprise `department`; you can remove other mappings, which it ignores. Leave **Provision Microsoft Entra ID Groups** on to provision groups.
+5. Under **Users and groups**, assign the people and groups who use Cabinet, and set **Scope** to "Sync only assigned users and groups".
+6. Turn **Provisioning Status** on and save. The first cycle starts within minutes; later ones run about every 40 minutes, and **Provision on demand** pushes one user at once.
+7. In Cabinet, the groups appear on the Users page with source Scim. **Edit** each to give the role its members need.
+
+Unassigning or disabling a user in Entra sets them inactive in Cabinet, which ends their sessions; Entra deletes them some time later.
+
+**Okta**
+
+1. In the Okta Admin Console, open the app integration people use to sign in to Cabinet. SCIM provisioning is available on SAML and SWA app integrations (**General**, **App Settings**, **Provisioning**: SCIM). For an OIDC sign-in, add a separate app integration for provisioning, such as "SCIM 2.0 Test App (OAuth Bearer Token)" from the catalog.
+2. **Provisioning**, **Integration**: **SCIM connector base URL** `https://<cabinet>/scim/v2`, **Unique identifier field for users** `userName`, **Supported provisioning actions** Push New Users, Push Profile Updates and Push Groups, **Authentication Mode** HTTP Header, and the SCIM token as the bearer token. **Test Connector Configuration**, then save.
+3. **Provisioning**, **To App**: enable Create Users, Update User Attributes and Deactivate Users. Leave Sync Password off: Cabinet ignores passwords sent over SCIM, and SCIM users sign in through single sign-on.
+4. **Assignments**: assign people and groups. **Push Groups**: push the groups whose members need roles.
+5. In Cabinet, give each pushed group a role on the Users page.
+
+Okta updates users with PUT and deactivates them by setting `active` to false; it doesn't delete them. Its users' external ID is the Okta user ID, which is the subject of Okta's sign-in tokens.
+
+SCIM requests are rate limited like other clients and limited to `Limits:ScimMaxRequestMB` (1 MB). `Accounts:ScimMaxResults` (200) caps a page of results. Every change is in the audit log as the token's `scim-<id>`.
+
 ### Not implemented
 
 These have configuration or classes in the code but no effect, so don't rely on them:

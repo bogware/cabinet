@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Local accounts: people can sign in to the dashboard with a user name and password kept in Cabinet. Passwords are hashed with PBKDF2-HMAC-SHA256 (600,000 iterations, `Accounts:PasswordIterations`) and must meet `Accounts:PasswordMinLength` (12) without containing the user name or email or being a common password. Repeated failures are slowed per account and per address and lock the account (`Accounts:LockoutThreshold`, `Accounts:LockoutMinutes`).
+- Multi-factor sign-in for local accounts with any authenticator app (TOTP, RFC 6238), with ten single-use recovery codes. `Accounts:RequireMfa` makes it compulsory for everyone or for a role and above. Administrators can reset a password (to a temporary one that must be changed), reset MFA, unlock and sign someone out everywhere.
+- A user directory, shared by every instance on every backend: users, groups, and the role and index permissions each group gives (the highest role wins; permissions combine). Managed on the new Users page, at `/api/v1/users` and `/api/v1/groups`, and from **My account** for one's own password and authenticator. Every change is audited.
+- Single sign-on users (OIDC, SAML, LDAP and OIDC bearer tokens) are matched to directory users by external ID or sign-in name: a user deactivated in the directory is refused whatever the identity provider says, and directory groups give roles. Deactivating, resetting or signing out a directory user ends their sessions on the next request.
+- SCIM 2.0 provisioning at `/scim/v2`, tested against the requests Microsoft Entra ID and Okta send, authenticated by SCIM tokens made on the Users page (`/api/v1/scim-tokens`) that work only there. New settings: `Accounts:*` and `Limits:ScimMaxRequestMB`.
+- `/auth/providers` says which OIDC provider is configured, and the dashboard labels its sign-in button for Microsoft or AWS.
+
+### Changed
+
+- ASP.NET Data Protection keys, which protect session cookies and now authenticator secrets, are kept in the metadata database, so sessions survive restarts and work across instances. Existing dashboard sessions end once on upgrade.
+- LDAP sign-in is slowed after repeated failures, like local accounts, and user names typed at sign-in are cleaned of control characters and shortened before they reach the audit log.
+
 ## [3.0.0] - 2026-11-13
 
 It has breaking changes to search semantics and single sign-on, listed under Changed.
