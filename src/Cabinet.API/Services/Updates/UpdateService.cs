@@ -65,15 +65,19 @@ public sealed class UpdateService
     /// <summary>This program's platform, as release archives name it.</summary>
     public static string Platform => RuntimeInformation.RuntimeIdentifier;
 
+    /// <summary>Whether a release is newer than this build. A release of the same number as this pre-release is.</summary>
+    private static bool IsNewer(ReleaseInfo release) =>
+        ReleaseVersions.Compare((release.Version, ReleaseVersions.Parse(release.Tag)?.Pre), (ReleaseVersions.Current, ReleaseVersions.Parse(ReleaseVersions.CurrentFull)?.Pre)) > 0;
+
     public UpdateStatus GetStatus()
     {
         var latest = _latest;
         var (canApply, reason) = _applier.CanApply();
         return new UpdateStatus
         {
-            Current = ReleaseVersions.Current.ToString(),
+            Current = ReleaseVersions.CurrentFull,
             Latest = latest?.Version.ToString(),
-            Available = latest != null && latest.Version > ReleaseVersions.Current,
+            Available = latest != null && IsNewer(latest),
             Notes = latest?.Notes,
             LastChecked = _lastChecked,
             CheckError = _checkError,
@@ -124,9 +128,9 @@ public sealed class UpdateService
         {
             await CheckAsync(cancellationToken);
             var latest = _latest ?? throw new InvalidOperationException(_checkError ?? "No release found");
-            if (latest.Version <= ReleaseVersions.Current)
+            if (!IsNewer(latest))
             {
-                throw new InvalidOperationException($"Already on {ReleaseVersions.Current}, the newest release");
+                throw new InvalidOperationException($"Already on {ReleaseVersions.CurrentFull}, the newest release");
             }
 
             _state = "Downloading";
@@ -167,7 +171,7 @@ public sealed class UpdateService
             return cached;
         }
 
-        var release = await _source.GetByTagAsync($"v{ReleaseVersions.Current}", cancellationToken);
+        var release = await _source.GetByTagAsync(ReleaseVersions.CurrentTag, cancellationToken);
         if (release == null)
         {
             return null;
@@ -181,7 +185,7 @@ public sealed class UpdateService
         }
 
         await using var stream = File.OpenRead(binary);
-        var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, release.Version.ToString());
+        var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull);
         _agentPackages[platform] = package;
         return package;
     }

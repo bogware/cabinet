@@ -72,21 +72,25 @@ public class UpdatesController : ControllerBase
         [FromQuery] string? host = null,
         CancellationToken cancellationToken = default)
     {
-        if (!ReleaseVersions.Platforms.Contains(platform) || !Version.TryParse(version, out var agentVersion))
+        if (!ReleaseVersions.Platforms.Contains(platform) || ReleaseVersions.Parse(version) is not { } agentVersion)
         {
             return Problem(detail: "Unknown platform or version", statusCode: 400);
         }
 
         _updates.RecordAgent(string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)], platform, version);
-        if (ReleaseVersions.Normalize(agentVersion) >= ReleaseVersions.Current)
+        var server = ReleaseVersions.Parse(ReleaseVersions.CurrentFull)!.Value;
+        if (ReleaseVersions.Compare((ReleaseVersions.Normalize(agentVersion.Core), agentVersion.Pre), server) >= 0)
         {
             return NoContent();
         }
 
         var package = await _updates.GetAgentPackageAsync(platform, cancellationToken);
+
+        // Agents before 3.0 read only plain versions, and would skip a pre-release they can't parse
+        var offered = agentVersion.Pre == null ? server.Core.ToString() : package?.Version;
         return package == null
             ? NoContent()
-            : Ok(new AgentUpdateOffer { Version = package.Version, Sha256 = package.Sha256, Size = package.Size });
+            : Ok(new AgentUpdateOffer { Version = offered!, Sha256 = package.Sha256, Size = package.Size });
     }
 
     /// <summary>

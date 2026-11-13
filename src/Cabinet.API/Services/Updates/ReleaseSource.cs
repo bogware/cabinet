@@ -67,8 +67,74 @@ public static partial class ReleaseVersions
     /// <summary>Major, minor and patch only, so 2.0.1.0 and 2.0.1 compare equal.</summary>
     public static Version Normalize(Version version) => new(version.Major, version.Minor, Math.Max(0, version.Build));
 
-    /// <summary>The running program's version.</summary>
+    /// <summary>The running program's version, without any pre-release label.</summary>
     public static Version Current { get; } = Normalize(typeof(ReleaseVersions).Assembly.GetName().Version ?? new Version(0, 0, 0));
+
+    /// <summary>
+    /// The running program's full version, such as 3.0.0 or 3.0.0-rc.1, from the version it was
+    /// built with. A pre-release counts as just below the release of the same number.
+    /// </summary>
+    public static string CurrentFull { get; } = FullVersion(
+        typeof(ReleaseVersions).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+        Current);
+
+    /// <summary>Whether this build is a pre-release, such as a release candidate.</summary>
+    public static bool CurrentIsPrerelease => CurrentFull.Contains('-', StringComparison.Ordinal);
+
+    /// <summary>The tag this build was released under.</summary>
+    public static string CurrentTag => "v" + CurrentFull;
+
+    /// <summary>A built version's text without build metadata, or the plain version when it doesn't match it.</summary>
+    public static string FullVersion(string? informational, Version core)
+    {
+        var text = (informational ?? string.Empty).Split('+')[0];
+        return PrereleasePattern().Match(text) is { Success: true } match && FromTag(match.Groups["core"].Value) == core ? text : core.ToString();
+    }
+
+    [GeneratedRegex(@"^v?(?<core>\d+\.\d+\.\d+)(?:-(?<pre>[0-9A-Za-z.-]+))?$")]
+    private static partial Regex PrereleasePattern();
+
+    /// <summary>The version and pre-release label in a tag like v3.0.0-rc.1, or null.</summary>
+    public static (Version Core, string? Pre)? Parse(string? text)
+    {
+        var match = PrereleasePattern().Match((text ?? string.Empty).Split('+')[0]);
+        return match.Success && FromTag(match.Groups["core"].Value) is { } core
+            ? (core, match.Groups["pre"].Success ? match.Groups["pre"].Value : null)
+            : null;
+    }
+
+    /// <summary>
+    /// Orders two versions as semantic versioning does: by number, then a pre-release below the
+    /// release, then pre-release labels part by part, numbers as numbers.
+    /// </summary>
+    public static int Compare((Version Core, string? Pre) a, (Version Core, string? Pre) b)
+    {
+        var byCore = a.Core.CompareTo(b.Core);
+        if (byCore != 0)
+        {
+            return byCore;
+        }
+
+        if (a.Pre == null || b.Pre == null)
+        {
+            return a.Pre == null ? (b.Pre == null ? 0 : 1) : -1;
+        }
+
+        var left = a.Pre.Split('.');
+        var right = b.Pre.Split('.');
+        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
+        {
+            var numbers = long.TryParse(left[i], out var x) & long.TryParse(right[i], out var y);
+            var order = numbers ? x.CompareTo(y) : string.CompareOrdinal(left[i], right[i]);
+            if (order != 0)
+            {
+                return order;
+            }
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
 
     /// <summary>Platforms releases are built for. Anything else asked for is refused.</summary>
     public static readonly IReadOnlySet<string> Platforms = new HashSet<string>(StringComparer.Ordinal)
@@ -137,7 +203,7 @@ public sealed class GitHubReleaseSource : IReleaseSource
         using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
         var root = document.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
-        var version = ReleaseVersions.FromTag(tag) ?? throw new InvalidOperationException($"Release tag '{tag}' isn't a version");
+        var version = ReleaseVersions.Parse(tag)?.Core ?? throw new InvalidOperationException($"Release tag '{tag}' isn't a version");
         var assets = root.GetProperty("assets").EnumerateArray()
             .Select(asset => new ReleaseAsset(asset.GetProperty("id").GetInt64(), asset.GetProperty("name").GetString() ?? string.Empty, asset.GetProperty("size").GetInt64()))
             .ToList();

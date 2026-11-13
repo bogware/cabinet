@@ -108,6 +108,30 @@ public sealed class UpdateTests : IDisposable
         ReleaseVersions.FromTag(tag)?.ToString().Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData("3.0.0-rc.1", "3.0.0", -1)]
+    [InlineData("3.0.0-rc.2", "3.0.0-rc.1", 1)]
+    [InlineData("3.0.0-rc.10", "3.0.0-rc.2", 1)]
+    [InlineData("2.5.4", "3.0.0-rc.1", -1)]
+    [InlineData("v3.0.0", "3.0.0", 0)]
+    [InlineData("3.0.1-beta", "3.0.0", 1)]
+    public void PreReleases_OrderBelowTheirRelease_OnServerAndAgent(string a, string b, int expected)
+    {
+        Math.Sign(ReleaseVersions.Compare(ReleaseVersions.Parse(a)!.Value, ReleaseVersions.Parse(b)!.Value)).Should().Be(expected);
+        Math.Sign(Cabinet.Agent.Updating.AgentUpdater.Compare(Cabinet.Agent.Updating.AgentUpdater.Parse(a.TrimStart('v'))!.Value, Cabinet.Agent.Updating.AgentUpdater.Parse(b.TrimStart('v'))!.Value))
+            .Should().Be(expected, "the agent orders versions as the server does");
+    }
+
+    [Theory]
+    [InlineData("3.0.0-rc.1+0123abcd", "3.0.0", "3.0.0-rc.1")]
+    [InlineData("3.0.0+0123abcd", "3.0.0", "3.0.0")]
+    [InlineData("1.0.0", "3.0.0", "3.0.0")]
+    [InlineData(null, "3.0.0", "3.0.0")]
+    public void TheFullVersion_ComesFromTheBuild_WhenItMatches(string? informational, string core, string expected)
+    {
+        ReleaseVersions.FullVersion(informational, Version.Parse(core)).Should().Be(expected);
+    }
+
     [Fact]
     public void FourPartVersions_CompareAsThree()
     {
