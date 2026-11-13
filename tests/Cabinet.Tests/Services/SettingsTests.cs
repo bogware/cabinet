@@ -212,6 +212,8 @@ public sealed class SettingsServiceTests : IDisposable
     {
         var (configuration, service) = Build("""{"Storage":{"RetentionDays":"90"}}""");
         Find(service.GetView([]), "Storage:RetentionDays").Source.Should().Be("appsettings");
+        Find(service.GetView([]), "Storage:RetentionDays").SourceName.Should().Be("appsettings.json", "the screen says which file sets it");
+        Find(service.GetView([]), "Storage:Type").SourceName.Should().BeNull("nothing sets it, so it's the default");
 
         await service.SaveAsync(Values("""{"Storage:RetentionDays": 30}"""), "admin", null);
 
@@ -220,6 +222,7 @@ public sealed class SettingsServiceTests : IDisposable
         Directory.GetFiles(Path.GetDirectoryName(OverridesFile)!, "*.tmp").Should().BeEmpty();
         var view = Find(service.GetView([]), "Storage:RetentionDays");
         view.Source.Should().Be("settings-file");
+        view.SourceName.Should().Be("cabinet.settings.json");
         view.Value.Should().Be(30);
         view.PendingRestart.Should().BeTrue();
 
@@ -271,6 +274,7 @@ public sealed class SettingsServiceTests : IDisposable
 
         var view = Find(service.GetView([]), "Query:CacheTtlSeconds");
         view.Source.Should().Be("environment");
+        view.SourceName.Should().Be("Query__CacheTtlSeconds");
         view.Editable.Should().BeFalse();
         view.Value.Should().Be(5);
 

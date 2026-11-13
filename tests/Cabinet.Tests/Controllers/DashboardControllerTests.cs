@@ -226,6 +226,37 @@ public class DashboardControllerTests
     }
 
     [Fact]
+    public async Task UpdateDashboard_KeepsEachPanelsDescription_AndStackedBars()
+    {
+        var dashboard = new Dashboard { Title = "Web traffic" };
+        _storage.Setup(s => s.GetByIdAsync(dashboard.Id, It.IsAny<CancellationToken>())).ReturnsAsync(dashboard);
+        _storage.Setup(s => s.SaveAsync(It.IsAny<Dashboard>(), It.IsAny<CancellationToken>())).ReturnsAsync((Dashboard d, CancellationToken _) => d);
+
+        var result = await _controller.UpdateDashboard(dashboard.Id, new UpdateDashboardRequest
+        {
+            Panels = [new UpdatePanelRequest { Title = "Status codes", Query = "find * | stats count by status", Type = VisualizationType.StackedBar, Description = "  Share of all responses " }],
+        });
+
+        var panel = ((Dashboard)((OkObjectResult)result).Value!).Panels.Single();
+        panel.Description.Should().Be("Share of all responses");
+        panel.Type.Should().Be(VisualizationType.StackedBar);
+    }
+
+    [Fact]
+    public async Task UpdateDashboard_RefusesALongPanelDescription()
+    {
+        var dashboard = new Dashboard { Title = "Web traffic" };
+        _storage.Setup(s => s.GetByIdAsync(dashboard.Id, It.IsAny<CancellationToken>())).ReturnsAsync(dashboard);
+
+        var result = await _controller.UpdateDashboard(dashboard.Id, new UpdateDashboardRequest
+        {
+            Panels = [new UpdatePanelRequest { Title = "x", Query = "find *", Description = new string('a', 501) }],
+        });
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
     public async Task DeleteDashboard_Existing_ReturnsNoContent()
     {
         _storage.Setup(s => s.DeleteAsync("dash-1", It.IsAny<CancellationToken>()))

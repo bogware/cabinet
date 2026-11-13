@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="livetail.css">
     <link rel="stylesheet" href="setup.css">
     <link rel="stylesheet" href="settings.css">
+    <link rel="stylesheet" href="screens.css">
 </head>
 <body>
     <a class="skip-link" href="#mainContent">Skip to content</a>
@@ -281,14 +282,20 @@
             <!-- ===== DASHBOARDS PAGE ===== -->
             <div class="page" id="page-dashboards">
                 <header class="toolbar">
-                    <div class="toolbar-title"><h1>Dashboards</h1><p class="toolbar-purpose">Panels of searches that keep themselves up to date</p></div>
-                    <div class="toolbar-actions">
-                        <button class="btn btn-secondary" data-click="loadDashboards">Refresh</button>
+                    <div class="toolbar-title"><button type="button" class="btn-link toolbar-crumb" id="dashCrumb" data-click="closeDashboard" hidden>Dashboards &rsaquo;</button><h1 id="dashViewTitle">Dashboards</h1><p class="toolbar-purpose" id="dashPurpose" role="status">Panels of searches that keep themselves up to date</p></div>
+                    <div class="toolbar-actions" id="dashListActions">
                         <button class="btn btn-primary" data-click="showDashboardModal">New dashboard&hellip;</button>
                     </div>
+                    <div class="toolbar-actions" id="dashViewActions" hidden>
+                        <button type="button" class="popup" id="dashRefreshButton" data-click="openDashboardRefreshMenu" data-args='["$this"]' aria-haspopup="menu" aria-expanded="false"><span class="popup-label">Refresh</span> <span id="dashRefreshValue">Off</span></button>
+                        <button type="button" class="popup" id="dashTimeButton" data-click="openDashboardTimeMenu" data-args='["$this"]' aria-haspopup="menu" aria-expanded="false"><span class="popup-label">Time</span> <span id="dashTimeValue">Last 24 hours</span></button>
+                        <button type="button" class="btn" id="dashEditButton" data-click="toggleDashboardEdit" aria-pressed="false">Edit layout</button>
+                        <button type="button" class="btn" data-click="showPanelModal">Add panel&hellip;</button>
+                    </div>
                 </header>
-                <div class="page-body">
-                <div id="dashboardsList" class="health-grid"></div>
+                <div class="page-body dash-body">
+                <div id="dashboardsList" class="dash-list"></div>
+                <div id="dashboardView" hidden></div>
                 </div>
             </div>
 
@@ -428,16 +435,13 @@
                 <header class="toolbar">
                     <div class="toolbar-title"><h1>Detection rules</h1><p class="toolbar-purpose">Checked on every event as it arrives</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-secondary" data-click="loadRules">Refresh</button>
+                        <button class="btn btn-secondary" data-click="showSigmaModal">Import Sigma&hellip;</button>
                         <button class="btn btn-primary" data-click="showRuleModal">New rule&hellip;</button>
                     </div>
                 </header>
-                <div class="page-body">
-                <p class="page-note">Rules run on every event as it's ingested, and what they find appears under Alerts. The built-in rules are off until you turn them on.</p>
-                <div class="panel"><div class="scroll-y"><table>
-                    <thead><tr><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Fires on</th><th scope="col">Technique</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-                    <tbody id="rulesBody"></tbody>
-                </table></div></div>
+                <div class="page-body rules-layout">
+                    <div class="rules-table" id="rulesTable" role="table" aria-label="Detection rules"></div>
+                    <div class="rules-coverage" id="rulesCoverage"></div>
                 </div>
             </div>
 
@@ -523,19 +527,25 @@
             <!-- ===== CASES PAGE ===== -->
             <div class="page" id="page-cases">
                 <header class="toolbar">
-                    <div class="toolbar-title"><h1>Cases</h1><p class="toolbar-purpose">Investigations, each as one timeline of alerts, events and notes</p></div>
-                    <div class="toolbar-actions">
+                    <div class="toolbar-title"><button type="button" class="btn-link toolbar-crumb" id="caseCrumb" data-click="loadCases" hidden>Cases &rsaquo;</button><h1 id="caseTitle">Cases</h1><p class="toolbar-purpose" id="casePurpose">Investigations, each as one timeline of alerts, events and notes</p></div>
+                    <div class="toolbar-actions" id="caseListActions">
                         <select id="caseStatusFilter" data-change="loadCases" aria-label="Status"><option value="">Any status</option><option>Open</option><option>Investigating</option><option>Resolved</option><option>Closed</option></select>
                         <button class="btn btn-primary" data-click="newCase">New case&hellip;</button>
                     </div>
+                    <div class="toolbar-actions" id="caseViewActions" hidden>
+                        <button type="button" class="btn" data-click="exportCaseReport">Export report</button>
+                        <button type="button" class="btn btn-primary" id="caseCloseButton" data-click="closeCaseDialog">Close case&hellip;</button>
+                    </div>
                 </header>
                 <div class="page-body">
+                <div id="caseList">
                 <p class="page-note">Investigations that gather alerts, events, searches and notes. A case's timeline shows each reader only the events they may read.</p>
-                <div class="panel"><div class="scroll-y"><table>
-                    <thead><tr><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Severity</th><th scope="col">Assignee</th><th scope="col">Updated</th></tr></thead>
+                <div class="panel"><div class="scroll-y"><table class="cases-table">
+                    <thead><tr><th scope="col"><span class="sr-only">Number</span></th><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Severity</th><th scope="col">Owner</th><th scope="col">Updated</th></tr></thead>
                     <tbody id="casesBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="caseView" hidden style="padding:16px;margin-top:16px"></div>
+                </div>
+                <div id="caseView" hidden></div>
                 </div>
             </div>
 
@@ -543,21 +553,16 @@
             <div class="page" id="page-coverage">
                 <header class="toolbar">
                     <div class="toolbar-title"><h1>ATT&amp;CK coverage</h1><p class="toolbar-purpose">Which attacker techniques your detection rules can see</p></div>
-                    <div class="toolbar-actions"><button class="btn btn-secondary" data-click="loadCoverage">Refresh</button></div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-secondary" data-click="navigate" data-args='["rules"]'>Detection rules</button>
+                        <button class="btn btn-primary" data-click="showSigmaModal">Import Sigma&hellip;</button>
+                    </div>
                 </header>
                 <div class="page-body">
-                <p class="page-note">Which MITRE ATT&amp;CK techniques your detection rules cover. Shaded cells have a rule that's on; outlined ones only rules that are off; the rest are gaps.</p>
-                <div class="panel"><div id="coverageMatrix" class="scroll-y" style="display:flex;gap:8px;overflow-x:auto;padding:12px"></div></div>
-                <section class="group-panel" style="margin-top:16px">
-                    <h2 class="group-panel-title">Import Sigma rules</h2>
-                    <p class="page-note" style="margin-top:0">Paste one or more Sigma rules (YAML, separated by ---). They're added turned off, so you can check them against your logs before turning them on.</p>
-                    <div class="form-group"><label for="sigmaYaml">Sigma YAML</label><textarea id="sigmaYaml" rows="10" class="mono" spellcheck="false"></textarea></div>
-                    <div class="modal-actions start">
-                        <button class="btn btn-secondary" data-click="importSigma" data-args='[false]'>Preview</button>
-                        <button class="btn btn-primary" data-click="importSigma" data-args='[true]'>Import</button>
-                    </div>
-                    <div id="sigmaResult" aria-live="polite"></div>
-                </section>
+                <div class="cov-headline" id="coverageSummary"></div>
+                <div class="cov-legend"><span><i class="matrix-key matrix-on"></i>Covered</span><span><i class="matrix-key matrix-off"></i>Rule exists, turned off</span><span><i class="matrix-key matrix-none"></i>Not covered</span></div>
+                <div class="panel"><div id="coverageMatrix" class="tech-matrix"></div></div>
+                <p class="matrix-detail" id="coverageDetail" aria-live="polite">Choose a technique to see the rules that cover it, and turn them on or off.</p>
                 </div>
             </div>
 
@@ -766,15 +771,12 @@
                         <div class="st-banner" id="settingsRestartBanner" role="status" hidden></div>
                         <div class="st-notice" id="settingsAccessNotice" hidden></div>
 
-                        <section class="st-section" data-section="overview" aria-labelledby="st-h-overview">
-                            <h2 id="st-h-overview">Storage</h2>
-                            <p class="st-intro">Where Cabinet keeps your events, settings, rules, keys and history, and moving them to another folder, another drive, or PostgreSQL. The database in use now is never changed or deleted by a move.</p>
-                            <div id="storageWhere"><div class="st-loading">Loading...</div></div>
-                            <div class="st-cards" id="storageOverview"></div>
-
+                        <div id="settingsHeads"></div>
+                        <section class="st-section st-storage" data-section="overview" data-in="overview" aria-label="Storage" hidden>
+                            <div id="storageWhere"><div class="st-loading">Loading&hellip;</div></div>
                             <div class="st-card st-migration" id="storageProgress" hidden></div>
-
                             <div class="st-actions" id="storageActions" hidden>
+                                <p class="st-intro st-actions-intro">Moving copies your events, settings, rules, keys and history. The database in use now is never changed or deleted by a move.</p>
                                 <div class="st-card" id="moveSqliteCard">
                                     <h3>Move to another folder or drive</h3>
                                     <p class="st-desc">Copies the database file whole: events, settings, rules, keys and history. New events wait a few seconds while it copies, then Cabinet restarts on the new file. The old file stays where it is until you delete it.</p>
@@ -840,9 +842,12 @@
                                     <div class="st-result" id="freshResult" role="status"></div>
                                 </div>
                             </div>
+                            <div id="storageEngine"></div>
+                            <div id="storageKeep"></div>
+                            <div class="st-cards" id="storageOverview"></div>
                         </section>
 
-                        <section class="st-section" data-section="keys" aria-labelledby="st-h-keys" hidden>
+                        <section class="st-section" data-section="keys" data-in="keys" aria-labelledby="st-h-keys" hidden>
                             <h2 id="st-h-keys">API keys</h2>
                             <p class="st-intro">Every client and agent signs in with a key. Give each one its own, with the lowest tier it needs: <b>Ingest</b> for agents, which can send but not read. A key is shown once, when it's created.</p>
                             <div class="st-new-key" id="newKeyResult" hidden></div>
@@ -863,42 +868,42 @@
                             <div class="st-table-wrap"><table class="st-table" id="keysTable"><thead><tr><th>Name</th><th>Tier</th><th>Key</th><th>Created</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
                         </section>
 
-                        <section class="st-section" data-section="updates" aria-labelledby="st-h-updates" hidden>
-                            <h2 id="st-h-updates">Install updates</h2>
-                            <p class="st-intro">New releases install from here. Cabinet restarts on the new version and goes back if it doesn't start; agents follow within the hour. How often to check, and the GitHub token, are under <a href="#settings" data-click="showSettingsSection" data-args='["group:Updates"]'>Updates settings</a>.</p>
+                        <section class="st-section" data-section="updates" data-in="updates" aria-labelledby="st-h-updates" hidden>
+                            <h2 id="st-h-updates">Updates</h2>
+                            <p class="st-intro">New releases install from here. Cabinet restarts on the new version and goes back if it doesn't start; agents follow within the hour. How often to check, and the GitHub token, are below.</p>
                             <div class="st-card">
                                 <div id="updateStatus"><div class="st-loading">Loading...</div></div>
                                 <div style="display:flex;gap:6px;margin-top:12px">
                                     <button class="btn btn-secondary btn-sm" data-click="checkForUpdates">Check now</button>
-                                    <button class="btn btn-primary btn-sm" id="applyUpdateButton" data-click="applyUpdate" disabled>Update now</button>
+                                    <button class="btn btn-secondary btn-sm" id="applyUpdateButton" data-click="applyUpdate" disabled>Update now</button>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="st-section" data-section="retention" aria-labelledby="st-h-retention" hidden>
-                            <h2 id="st-h-retention">Retention by index</h2>
-                            <p class="st-intro">How long each index keeps events, checked on the schedule in <a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Retention settings</a>. An index without a policy uses the default there.</p>
+                        <section class="st-section st-group" data-section="retention" data-in="retention" aria-labelledby="st-h-retention" hidden>
+                            <h3 class="st-group-title" id="st-h-retention">Retention by index</h3>
+                            <p class="st-group-intro">How long each index keeps events, checked on the schedule below. An index without a policy uses "Keep events for".</p>
                             <div class="st-card">
                                 <div id="retentionList"><div class="st-loading">Loading...</div></div>
                                 <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">Add policy</button>
                             </div>
                         </section>
 
-                        <section class="st-section" data-section="roles" aria-labelledby="st-h-roles" hidden>
-                            <h2 id="st-h-roles">Roles &amp; access</h2>
+                        <section class="st-section st-group" data-section="roles" data-in="signin" aria-labelledby="st-h-roles" hidden>
+                            <h3 class="st-group-title" id="st-h-roles">Roles &amp; access</h3>
                             <div class="st-card"><div id="rolesList"><div class="st-loading">Loading...</div></div></div>
                         </section>
 
-                        <section class="st-section" data-section="browser" aria-labelledby="st-h-browser" hidden>
-                            <h2 id="st-h-browser">This browser</h2>
-                            <p class="st-intro">Saved in this browser only.</p>
+                        <section class="st-section st-group" data-section="browser" data-in="general" aria-labelledby="st-h-browser" hidden>
+                            <h3 class="st-group-title" id="st-h-browser">This browser</h3>
+                            <p class="st-group-intro">Saved in this browser only, as you change them.</p>
                             <div class="st-card">
                                 <div class="form-group">
                                     <label for="settingsApiKey">Your API key</label>
                                     <div style="display:flex;gap:6px">
                                         <input type="password" id="settingsApiKey" placeholder="Enter API key">
                                         <button class="btn btn-secondary btn-sm" data-click="toggleApiKeyVisibility" title="Show/hide">Show</button>
-                                        <button class="btn btn-primary btn-sm" data-click="saveApiSettings">Save</button>
+                                        <button class="btn btn-secondary btn-sm" data-click="saveApiSettings">Save key</button>
                                     </div>
                                 </div>
                                 <div class="form-group">
@@ -947,13 +952,13 @@
                         </section>
 
                         <div id="settingsGroups"></div>
-                        <div class="st-empty" id="settingsNoMatch" hidden>No setting matches.</div>
+                        <div class="st-empty" id="settingsNoMatch" hidden>No setting matches. Try another word, such as retention, timeout or email.</div>
+                        <div class="st-footer" id="settingsSaveBar" role="region" aria-label="Changes to apply" hidden>
+                            <span id="settingsSaveText" role="status">No changes</span>
+                            <button class="btn" id="settingsRevertButton" data-click="discardSettings" disabled>Revert</button>
+                            <button class="btn btn-primary" id="settingsSaveButton" data-click="saveSettings" disabled>Apply</button>
+                        </div>
                     </div>
-                </div>
-                <div class="st-savebar" id="settingsSaveBar" role="region" aria-label="Unsaved changes" hidden>
-                    <span id="settingsSaveText"></span>
-                    <button class="btn btn-secondary btn-sm" data-click="discardSettings">Discard</button>
-                    <button class="btn btn-primary btn-sm" id="settingsSaveButton" data-click="saveSettings">Save changes</button>
                 </div>
             </div>
 
@@ -1214,19 +1219,42 @@
     <!-- Dashboard Modal -->
     <div class="modal-bg" id="dashboardModal">
         <div class="modal modal-wide">
-            <h3 id="dashboardModalTitle">New Dashboard</h3>
+            <h3 id="dashboardModalTitle">New dashboard</h3>
             <input type="hidden" id="dashboardEditId">
-            <div class="form-group"><label>Title</label><input type="text" id="dashTitle" placeholder="My Dashboard"></div>
+            <div class="form-group"><label for="dashTitle">Title</label><input type="text" id="dashTitle" placeholder="Web traffic"></div>
             <div class="form-group"><label for="dashRefresh">Refresh</label><select id="dashRefresh">
                 <option value="0">Off</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option><option value="300">Every 5 minutes</option>
             </select></div>
-            <div class="form-group"><label>Description</label><textarea id="dashDescription" placeholder="Dashboard description"></textarea></div>
+            <div class="form-group"><label for="dashDescription">Description</label><textarea id="dashDescription" placeholder="What this dashboard is for"></textarea></div>
             <h4 class="modal-subhead">Panels</h4>
             <div id="panelEditorList"></div>
             <button type="button" class="btn btn-secondary btn-sm" data-click="addPanelRow">Add panel</button>
             <div class="modal-actions">
+                <button type="button" class="btn btn-danger" id="dashboardDeleteButton" data-click="deleteDashboard" style="margin-right:auto" hidden>Delete dashboard&hellip;</button>
                 <button class="btn btn-secondary" data-click="closeModal" data-args='["dashboardModal"]'>Cancel</button>
                 <button class="btn btn-primary" data-click="saveDashboard">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- One dashboard panel -->
+    <div class="modal-bg" id="panelModal">
+        <div class="modal modal-wide enter-scope">
+            <h3 id="panelModalTitle">Add panel</h3>
+            <input type="hidden" id="panelEditId">
+            <div class="form-group"><label for="panelTitle">Title</label><input type="text" id="panelTitle" maxlength="200" placeholder="Requests per hour"></div>
+            <div class="form-group"><label for="panelQuery">Search</label><textarea id="panelQuery" rows="3" class="mono" spellcheck="false" placeholder="find * | timechart span=1h count" data-change="describePanelQuery"></textarea></div>
+            <div class="form-group"><label for="panelDescription">What it measures</label><input type="text" id="panelDescription" maxlength="500">
+                <p class="form-hint">Shown under the title. Left empty, the panel says what its search measures, as shown here.</p></div>
+            <div class="form-row">
+                <div class="form-group"><label for="panelType">Chart</label><select id="panelType"></select></div>
+                <div class="form-group"><label for="panelWidth">Width</label><select id="panelWidth"></select></div>
+            </div>
+            <button type="button" class="btn btn-sm" data-click="previewPanel">Preview</button>
+            <div id="panelPreview" class="panel-preview" aria-live="polite"></div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["panelModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="savePanelModal">Save panel</button>
             </div>
         </div>
     </div>
@@ -1257,8 +1285,9 @@
 
     <div class="modal-bg" id="ruleModal">
         <div class="modal modal-wide">
-            <h3 id="ruleModalTitle">New Rule</h3>
+            <h3 id="ruleModalTitle">New rule</h3>
             <input type="hidden" id="ruleEditId">
+            <p class="page-note" id="ruleBuiltinNote" hidden>Built-in rules can only be turned on and off. To change one, write a new rule from it.</p>
             <div class="form-group"><label for="ruleName">Name</label><input type="text" id="ruleName"></div>
             <div class="form-group"><label for="ruleSeverity">Severity</label><select id="ruleSeverity">
                 <option>Info</option><option selected>Warning</option><option>Error</option><option>Critical</option>
@@ -1272,18 +1301,68 @@
                 <div class="form-group"><label for="ruleWindow">Within seconds</label><input type="number" id="ruleWindow" min="1" value="300"></div>
                 <div class="form-group"><label for="ruleCooldown">Quiet for seconds after firing</label><input type="number" id="ruleCooldown" min="0" value="300"></div>
             </div>
+            <div class="form-row">
+                <div class="form-group"><label for="ruleTechnique">ATT&amp;CK technique</label><input type="text" id="ruleTechnique" placeholder="Optional, such as T1110" spellcheck="false"></div>
+            </div>
             <div class="form-group"><label for="ruleDescription">Description</label><textarea id="ruleDescription"></textarea></div>
             <h4 class="modal-subhead">When it fires</h4>
             <p class="page-note">With nothing here, it notifies through every configured channel. Add actions to also write a searchable event or call a webhook. Placeholders: <code>{rule} {group} {count} {host} {event_id} {line}</code>.</p>
             <div id="ruleActions"></div>
-            <button type="button" class="btn btn-secondary btn-sm" data-click="addRuleAction">Add action</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ruleAddAction" data-click="addRuleAction">Add action</button>
             <h4 class="modal-subhead">Try it</h4>
             <div class="form-group"><label for="ruleTestLine">A log line</label><input type="text" id="ruleTestLine"></div>
             <button type="button" class="btn btn-secondary btn-sm" data-click="testRule">Test</button>
             <p id="ruleTestResult" class="page-note" role="status"></p>
+            <h4 class="modal-subhead">Backtest</h4>
+            <p class="page-note">Runs the rule over stored events to see how often it would have fired. Nothing is alerted.</p>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="backtestRuleForm">Backtest it on last 30 days</button>
+            <div id="ruleBacktestResult" aria-live="polite"></div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" data-click="closeModal" data-args='["ruleModal"]'>Cancel</button>
-                <button class="btn btn-primary" data-click="saveRule">Save</button>
+                <button type="button" class="btn btn-danger" id="ruleDeleteButton" data-click="deleteRule" style="margin-right:auto" hidden>Delete rule&hellip;</button>
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["ruleModal"]'>Close</button>
+                <button class="btn btn-primary" id="ruleSaveButton" data-click="saveRule">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sigma import -->
+    <div class="modal-bg" id="sigmaModal">
+        <div class="modal modal-wide">
+            <h3>Import Sigma rules</h3>
+            <p class="page-note">Paste one or more Sigma rules (YAML, separated by ---). They're added turned off, so you can check them against your logs before turning them on.</p>
+            <div class="form-group"><label for="sigmaYaml">Sigma YAML</label><textarea id="sigmaYaml" rows="12" class="mono" spellcheck="false"></textarea></div>
+            <div id="sigmaResult" aria-live="polite"></div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["sigmaModal"]'>Close</button>
+                <button class="btn btn-secondary" data-click="importSigma" data-args='[false]'>Preview</button>
+                <button class="btn btn-primary" data-click="importSigma" data-args='[true]'>Import, turned off</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New case -->
+    <div class="modal-bg" id="newCaseModal">
+        <div class="modal enter-scope">
+            <h3>New case</h3>
+            <div class="form-group"><label for="newCaseTitle">Title</label><input type="text" id="newCaseTitle" maxlength="200" placeholder="Brute force against auth-01"></div>
+            <div class="form-group"><label for="newCaseSeverity">Severity</label><select id="newCaseSeverity"><option>Info</option><option selected>Warning</option><option>Error</option><option>Critical</option></select></div>
+            <div class="form-group"><label for="newCaseDescription">What it's about</label><textarea id="newCaseDescription" rows="3" placeholder="Optional"></textarea></div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["newCaseModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="createCase">Open case</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Close a case -->
+    <div class="modal-bg" id="closeCaseModal">
+        <div class="modal">
+            <h3 id="closeCaseTitle">Close case</h3>
+            <p class="page-note">Closing keeps the case and its timeline; you can reopen it.</p>
+            <div class="form-group"><label for="closeCaseNote">How it ended</label><textarea id="closeCaseNote" rows="3" placeholder="Optional, such as: blocked 203.0.113.7; no sign the attempts got in"></textarea></div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["closeCaseModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="confirmCloseCase">Close case</button>
             </div>
         </div>
     </div>
@@ -1441,6 +1520,8 @@
     <script src="v3.js"></script>
     <script src="livetail.js"></script>
     <script src="setup.js"></script>
+    <script src="dashboard.js"></script>
+    <script src="respond.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

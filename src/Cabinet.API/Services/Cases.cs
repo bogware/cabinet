@@ -21,6 +21,13 @@ public sealed class Case
 {
     public string Id { get; set; } = Cabinet.Core.Utilities.Ulid.NewUlid();
     public required string Title { get; set; }
+
+    /// <summary>
+    /// The number people call it by (#42), one more than the highest so far. 0 for a case opened
+    /// before cases were numbered.
+    /// </summary>
+    public int Number { get; set; }
+
     public string? Description { get; set; }
     public CaseStatus Status { get; set; } = CaseStatus.Open;
     public string Severity { get; set; } = "Warning";
