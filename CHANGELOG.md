@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Planned as 3.0.0. It has breaking changes to search semantics, listed under Changed.
+## [3.0.0] - 2026-11-13
+
+It has breaking changes to search semantics and single sign-on, listed under Changed.
 
 **License:** from 3.0, Cabinet is licensed under the AGPL-3.0, except the forwarding agent, which stays Apache-2.0. Running Cabinet for your own organization carries no obligations; offering a modified server to others over a network means offering them the modified source. Earlier releases remain Apache-2.0.
 
