@@ -78,7 +78,7 @@ public static class BrowserSession
             builder.AddOpenIdConnect(OidcScheme, options =>
             {
                 options.SignInScheme = Scheme;
-                options.Authority = oidc.Authority;
+                options.Authority = OidcProviders.Authority(oidc);
                 options.ClientId = oidc.ClientId;
                 options.ClientSecret = oidc.ClientSecret;
                 options.CallbackPath = oidc.CallbackPath;
@@ -87,7 +87,7 @@ public static class BrowserSession
                 options.SaveTokens = false;
                 options.GetClaimsFromUserInfoEndpoint = true;
                 options.MapInboundClaims = false;
-                options.RequireHttpsMetadata = !oidc.Authority.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase);
+                options.RequireHttpsMetadata = !OidcProviders.Authority(oidc).StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase);
                 options.Scope.Clear();
                 foreach (var scope in oidc.Scopes)
                 {
@@ -101,6 +101,7 @@ public static class BrowserSession
                 {
                     if (context.Principal?.Identity is ClaimsIdentity identity)
                     {
+                        OidcProviders.Normalize(identity, oidc, context.HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("Cabinet.Sso"));
                         context.HttpContext.RequestServices.GetRequiredService<ClaimRoleMapper>().MapClaims(identity, sso, "oidc");
                     }
 

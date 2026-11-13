@@ -196,38 +196,32 @@ try
 
     if (ssoConfig?.Enabled == true && ssoConfig.Oidc != null)
     {
+        if (Cabinet.API.Authentication.OidcProviders.Problem(ssoConfig.Oidc) is { } oidcProblem)
+        {
+            throw new InvalidOperationException($"Single sign-on settings: {oidcProblem}");
+        }
+
         authBuilder.AddJwtBearer("Bearer", options =>
         {
-            options.Authority = ssoConfig.Oidc.Authority;
-            options.Audience = ssoConfig.Oidc.ClientId;
-            options.RequireHttpsMetadata = !ssoConfig.Oidc.Authority.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase);
-            options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.FromMinutes(2)
-            };
+            // Entra, Cognito or any OIDC provider: issuers, audiences and claim names per provider
+            Cabinet.API.Authentication.OidcProviders.ConfigureBearer(options, ssoConfig.Oidc);
             options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
             {
                 OnTokenValidated = context =>
                 {
                     // Map OIDC claims to Cabinet claims for RBAC
-                    var mapper = context.HttpContext.RequestServices.GetService<ClaimRoleMapper>();
-                    if (mapper != null && context.Principal != null)
+                    if (context.Principal?.Identity is System.Security.Claims.ClaimsIdentity identity)
                     {
-                        var identity = context.Principal.Identity as System.Security.Claims.ClaimsIdentity;
-                        if (identity != null)
-                        {
-                            mapper.MapClaims(identity, ssoConfig);
-                        }
+                        var services = context.HttpContext.RequestServices;
+                        Cabinet.API.Authentication.OidcProviders.Normalize(identity, ssoConfig.Oidc, services.GetService<ILoggerFactory>()?.CreateLogger("Cabinet.Sso"));
+                        services.GetService<ClaimRoleMapper>()?.MapClaims(identity, ssoConfig);
                     }
+
                     return Task.CompletedTask;
                 }
             };
         });
-        Log.Information("OIDC/JWT Bearer authentication enabled (Authority: {Authority})", ssoConfig.Oidc.Authority);
+        Log.Information("OIDC bearer tokens accepted from {Provider} at {Authority}", ssoConfig.Oidc.Provider, Cabinet.API.Authentication.OidcProviders.Authority(ssoConfig.Oidc));
     }
     else
     {
