@@ -45,6 +45,14 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 ### Changed
 
 - API keys are compared with every stored key in constant time.
+- **Breaking: `SSO:AutoProvision` is off by default.** Someone no role mapping matches can't sign in, where before they got `SSO:DefaultRole`, which let every account the identity provider or directory knows search every index. Turn it on to keep the old behavior.
+- Dashboard sign-ins end after `SSO:MaxSessionHours` (24) however much they're used, so a role taken away at the identity provider takes effect. Everyone signs in again once after upgrading.
+- Reading cases needs Search on every index, since notes and searches can quote any of them, and adding to a case needs Alerts.
+- Ingest keys no longer have the system health view: the agent list with hosts and versions, and index retention.
+- Agents update themselves only over https with the server's certificate verified or pinned. Over http, or with `VerifySsl` off and no pin, they keep their version and log why.
+- A server running a release candidate is offered the newest release, candidates included.
+- `/api/health/version` gives the version as released, such as `3.0.0-rc.3`.
+- Installers: the Windows agent installer requires a key (it fell back to a development key), takes `-CertificateSha256`, and makes its settings and spool readable by administrators only; the Linux agent installer takes `--pin`; the systemd units set a umask, so spooled copies of logs aren't readable by other users; the Windows server installer locks down its database and backup folders.
 - **Breaking: `/query/translate` is gone**, with the rule-based translator. `/query/understand` replaces it. The query engine no longer guesses at English: interactive searches are read before they reach it, and saved searches, alerts and rules run exactly as written.
 - **Breaking: comparisons with a missing value are false**, for `!=` too, as in SPL: `where x != "a"` drops events without `x`. Use `isnull()` to find those.
 - **Breaking: `stats ... by` leaves out events missing a by-field**, as in SPL, both in the pipeline and when storage aggregates.
@@ -60,6 +68,12 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 
 ### Fixed
 
+- Moving off the Cabinet engine opened a second engine on the running one's folder, which replayed and deleted its write-ahead log. The move now reads through the running engine.
+- A write to the engine's log cancelled or failed partway left half a record, and recovery dropped every batch after it. Records are written whole, and the log is cut back after a failed write.
+- A release candidate and its release were downloaded into the same folder, so updating to the release could reinstall the candidate, and agents could be offered it in a loop.
+- Outbound calls (webhook actions, connectors, the settings webhook) went through a configured proxy, which reached private addresses the guard would refuse, and NAT64 and 6to4 addresses weren't counted as private.
+- A sign-in return path with a tab or line break in it could send people to another site after signing in.
+- Agent packages were downloaded again by every agent that asked at once, and after a failure on every request.
 - Whole numbers in fields read back from PostgreSQL and OpenSearch came back as decimals (4 as 4.0), since a conditional boxed them as `double`.
 - Webhook actions and connectors can't reach private, loopback or link-local addresses unless allowed, and never follow redirects. Actions see events masked as for a Viewer, and an action that writes an event needs ingest on that index. Rule changes are audited.
 - Data-model acceleration divided by zero for buckets under an hour, read at most 100,000 events silently, and instances that weren't the leader overwrote its summaries.
