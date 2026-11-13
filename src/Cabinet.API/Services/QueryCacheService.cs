@@ -112,12 +112,13 @@ public sealed class QueryCacheService
 
     private bool WrittenSince(CacheEntry entry)
     {
-        if (Interlocked.Read(ref _lastWriteAny) <= entry.Version)
+        // A write in the same clock tick the query started in may not be in its result, so it counts
+        if (Interlocked.Read(ref _lastWriteAny) < entry.Version)
             return false;
 
         // A query of every index sees any write; one of a single index only that index's
         return entry.DataIndex == null
-            || (_lastWriteByIndex.TryGetValue(entry.DataIndex, out var written) && written > entry.Version);
+            || (_lastWriteByIndex.TryGetValue(entry.DataIndex, out var written) && written >= entry.Version);
     }
 
     private void Remove(string key)

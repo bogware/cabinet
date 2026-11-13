@@ -213,16 +213,7 @@ public sealed class AuthController : ControllerBase
     }
 
     /// <summary>Which kind of OIDC provider is configured: Entra, Cognito or Generic, for the sign-in button's label.</summary>
-    private string OidcProviderName()
-    {
-        var configured = HttpContext.RequestServices.GetService<IConfiguration>()?.GetSection("SSO:Oidc")["Provider"];
-        return configured?.Trim().ToLowerInvariant() switch
-        {
-            "entra" or "entraid" or "azuread" => "Entra",
-            "cognito" => "Cognito",
-            _ => "Generic",
-        };
-    }
+    private string OidcProviderName() => (_sso?.Oidc?.Provider ?? OidcProvider.Generic).ToString();
 
     private Task AuditAsync(string principal, string description, bool success) =>
         _audit.LogAsync(new AuditEvent
