@@ -23,4 +23,10 @@
     <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The key releases are signed with, so the agent checks the build its server offers came
+         from the publisher. The same file the server embeds. -->
+    <EmbeddedResource Include="..\..\build\release-signing.pub.pem" LogicalName="Cabinet.ReleaseSigning.pub.pem" Link="release-signing.pub.pem" />
+  </ItemGroup>
+
 </Project>

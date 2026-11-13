@@ -25,15 +25,19 @@ COPY tests/Cabinet.Tests/Cabinet.Tests.csproj tests/Cabinet.Tests/
 # Restore API project and its dependencies (not full solution — avoids restoring test/CLI/agent deps)
 RUN dotnet restore src/Cabinet.API/Cabinet.API.csproj
 
-# Copy source code
+# Copy source code, and the release signing public key the API embeds
 COPY src/ src/
+COPY build/release-signing.pub.pem build/
+
+# The release version, such as 3.0.1 or 3.1.0-rc.1; the release workflow passes it
+ARG VERSION=
 
 # Build API
 WORKDIR /src/src/Cabinet.API
-RUN dotnet build -c Release -o /app/build --no-restore
+RUN dotnet build -c Release -o /app/build --no-restore ${VERSION:+-p:Version=$VERSION}
 
 FROM build AS publish
-RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false ${VERSION:+-p:Version=$VERSION}
 
 FROM base AS final
 WORKDIR /app

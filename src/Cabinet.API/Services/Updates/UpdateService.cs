@@ -29,8 +29,12 @@ public sealed class UpdateStatus
 /// <summary>An agent that has checked for updates.</summary>
 public sealed record AgentVersion(string Host, string Platform, string Version, DateTimeOffset LastSeen);
 
-/// <summary>A verified agent build for agents to download.</summary>
-public sealed record AgentPackage(string Path, string Sha256, long Size, string Version);
+/// <summary>
+/// A verified agent build for agents to download, with the publisher's signature over it (base64
+/// DER), which agents check themselves. Null only for an unsigned build that
+/// <c>Updates:AllowUnsigned</c> let through.
+/// </summary>
+public sealed record AgentPackage(string Path, string Sha256, long Size, string Version, string? Signature = null);
 
 /// <summary>
 /// Finds new releases, downloads and verifies them, applies them to this server on request, and
@@ -47,6 +51,11 @@ public sealed class UpdateService
     private readonly ConcurrentDictionary<string, AgentPackage> _agentPackages = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _agentStageFailed = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _agentStageLock = new(1, 1);
+    private readonly byte[] _releaseKeyInfo;
+    private readonly bool _allowUnsigned;
+
+    /// <summary>Written into a staged release once its archive's signature has been checked.</summary>
+    private const string VerifiedMarker = ".verified";
 
     private ReleaseInfo? _latest;
     private DateTimeOffset? _lastChecked;
@@ -54,14 +63,27 @@ public sealed class UpdateService
     private string _state = "Idle";
     private string? _message;
 
-    public UpdateService(IReleaseSource source, UpdateApplier applier, UpdateOptions options, ILogger<UpdateService> logger)
+    /// <param name="releaseKey">The publisher's public key. Null, as in production, uses the one built in.</param>
+    public UpdateService(IReleaseSource source, UpdateApplier applier, UpdateOptions options, ILogger<UpdateService> logger, ECDsa? releaseKey = null)
     {
         _source = source;
         _applier = applier;
         _logger = logger;
+
+        // Kept as bytes, and loaded for each check: an agent's download and an update can verify at once
+        using (var embedded = releaseKey == null ? ReleaseSignature.LoadEmbeddedKey() : null)
+        {
+            _releaseKeyInfo = (releaseKey ?? embedded!).ExportSubjectPublicKeyInfo();
+        }
+
+        _allowUnsigned = options.AllowUnsigned;
         _workDirectory = string.IsNullOrWhiteSpace(options.WorkDirectory)
             ? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "updates"))
             : options.WorkDirectory;
+        if (_allowUnsigned)
+        {
+            _logger.LogWarning("Updates:AllowUnsigned is on: this server will install releases, and give agents builds, that have no publisher signature. Use it only with development builds, and turn it off afterwards.");
+        }
     }
 
     /// <summary>This program's platform, as release archives name it.</summary>
@@ -141,8 +163,8 @@ public sealed class UpdateService
 
             _state = "Applying";
             _message = $"Restarting on {latest.Tag}";
-            _logger.LogWarning("Updating from {Current} to {Latest}; the server will restart", ReleaseVersions.Current, latest.Version);
-            _applier.Launch(staged, latest.Version);
+            _logger.LogWarning("Updating from {Current} to {Latest}; the server will restart", ReleaseVersions.CurrentFull, latest.Tag);
+            _applier.Launch(staged, ReleaseVersions.CurrentFull, latest.Tag);
             return GetStatus();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -194,15 +216,48 @@ public sealed class UpdateService
                 return null;
             }
 
-            var staged = await StageAsync(release, platform, cancellationToken);
-            var binary = Path.Combine(staged, "agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
+            string staged;
+            try
+            {
+                // The archive's own signature is checked here, so the agent comes from a verified release
+                staged = await StageAsync(release, platform, cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning("Not offering agents the {Platform} build of {Tag}: {Message}", platform, release.Tag, ex.Message);
+                return null;
+            }
+
+            var binary = Path.Combine(staged, ReleaseVersions.AgentBinaryPath(platform));
             if (!File.Exists(binary))
             {
                 return null;
             }
 
+            // Agents check the publisher's signature over the program itself, since they never see the archive
+            string? signature = null;
+            var signatureAsset = release.Asset(ReleaseVersions.AgentSignatureName(platform));
+            if (signatureAsset != null)
+            {
+                signature = (await ReadSmallAssetAsync(signatureAsset, cancellationToken)).Trim();
+                if (!VerifyFile(binary, signature))
+                {
+                    _logger.LogError("The {Platform} agent in {Tag} doesn't match its signature ({Asset}); not offering it to agents", platform, release.Tag, signatureAsset.Name);
+                    return null;
+                }
+            }
+            else if (_allowUnsigned)
+            {
+                _logger.LogWarning("Offering agents the unsigned {Platform} agent from {Tag} because Updates:AllowUnsigned is on; agents refuse it unless they allow unsigned builds too", platform, release.Tag);
+            }
+            else
+            {
+                _logger.LogWarning("{Tag} has no signature for the {Platform} agent ({Asset}); not offering it to agents", release.Tag, platform, ReleaseVersions.AgentSignatureName(platform));
+                return null;
+            }
+
             await using var stream = File.OpenRead(binary);
-            var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull);
+            var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull, signature);
             _agentPackages[platform] = package;
             _agentStageFailed.TryRemove(platform, out _);
             return package;
@@ -253,16 +308,42 @@ public sealed class UpdateService
         }
     }
 
+    /// <summary>Reads a checksum or signature asset: a few kilobytes at most.</summary>
+    private async Task<string> ReadSmallAssetAsync(ReleaseAsset asset, CancellationToken cancellationToken)
+    {
+        await using var stream = await _source.OpenAssetAsync(asset, cancellationToken);
+        using var reader = new StreamReader(stream);
+        var buffer = new char[4096];
+        var read = await reader.ReadBlockAsync(buffer.AsMemory(), cancellationToken);
+        return new string(buffer, 0, read);
+    }
+
+    /// <summary>Whether a file carries the publisher's signature.</summary>
+    private bool VerifyFile(string path, string signature)
+    {
+        using var key = ECDsa.Create();
+        key.ImportSubjectPublicKeyInfo(_releaseKeyInfo, out _);
+        return ReleaseSignature.VerifyFile(path, signature, key);
+    }
+
+    /// <summary>Whether a staged release can be reused: signed, or unsigned while that's allowed.</summary>
+    private bool IsAcceptable(string marker) =>
+        marker.StartsWith("signed", StringComparison.Ordinal) || (_allowUnsigned && marker.StartsWith("unsigned", StringComparison.Ordinal));
+
     /// <summary>
-    /// Downloads a release's archive for a platform, checks it against the release's SHA-256, and
-    /// unpacks it. Reuses an earlier download.
+    /// Downloads a release's archive for a platform, checks it against the release's SHA-256 and
+    /// the publisher's signature (<c>&lt;archive&gt;.sig</c>), and only then unpacks it. A release
+    /// without a signature is refused unless <c>Updates:AllowUnsigned</c> is on; a wrong signature
+    /// always is. Reuses an earlier download that was verified the same way.
     /// </summary>
     public async Task<string> StageAsync(ReleaseInfo release, string platform, CancellationToken cancellationToken = default)
     {
         var folder = FolderFor(release.Tag, release.Version);
         var directory = Path.Combine(_workDirectory, folder, platform);
-        var complete = Path.Combine(directory, ".complete");
-        if (File.Exists(complete))
+
+        // Not the ".complete" of releases before 3.0.1, which unpacked without checking a signature
+        var verified = Path.Combine(directory, VerifiedMarker);
+        if (File.Exists(verified) && IsAcceptable(await File.ReadAllTextAsync(verified, cancellationToken)))
         {
             return directory;
         }
@@ -270,13 +351,16 @@ public sealed class UpdateService
         var archiveName = ReleaseVersions.ArchiveName(platform);
         var archive = release.Asset(archiveName) ?? throw new InvalidOperationException($"{release.Tag} has no {archiveName}");
         var checksum = release.Asset(archiveName + ".sha256") ?? throw new InvalidOperationException($"{release.Tag} has no checksum for {archiveName}");
-
-        string expected;
-        await using (var checksumStream = await _source.OpenAssetAsync(checksum, cancellationToken))
-        using (var reader = new StreamReader(checksumStream))
+        var signatureAsset = release.Asset(archiveName + ".sig");
+        if (signatureAsset == null && !_allowUnsigned)
         {
-            expected = (await reader.ReadToEndAsync(cancellationToken)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+            throw new InvalidOperationException(
+                $"{release.Tag} has no signature for {archiveName} ({archiveName}.sig), so nothing shows it came from the Cabinet publisher. Nothing was changed. "
+                + "Releases before 3.0.1 aren't signed: install those with the installer instead.");
         }
+
+        var expected = (await ReadSmallAssetAsync(checksum, cancellationToken)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        var signature = signatureAsset == null ? null : await ReadSmallAssetAsync(signatureAsset, cancellationToken);
 
         if (Directory.Exists(directory))
         {
@@ -304,6 +388,19 @@ public sealed class UpdateService
                 throw new InvalidOperationException($"{archiveName} doesn't match its checksum (expected {expected}, got {actual}). Nothing was changed.");
             }
 
+            // Before unpacking: a forged archive must never reach the disk as files
+            if (signature != null)
+            {
+                if (!VerifyFile(download, signature))
+                {
+                    throw new InvalidOperationException($"{archiveName} from {release.Tag} isn't signed by the Cabinet release key, so it may not come from the Cabinet publisher. Nothing was changed.");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Accepting {Archive} from {Tag} without a signature because Updates:AllowUnsigned is on", archiveName, release.Tag);
+            }
+
             if (archiveName.EndsWith(".zip", StringComparison.Ordinal))
             {
                 ZipFile.ExtractToDirectory(download, directory, overwriteFiles: true);
@@ -315,8 +412,8 @@ public sealed class UpdateService
                 await TarFile.ExtractToDirectoryAsync(gzip, directory, overwriteFiles: true, cancellationToken);
             }
 
-            await File.WriteAllTextAsync(complete, actual, cancellationToken);
-            _logger.LogInformation("Downloaded and verified {Archive} from {Tag}", archiveName, release.Tag);
+            await File.WriteAllTextAsync(verified, $"{(signature != null ? "signed" : "unsigned")} {actual}", cancellationToken);
+            _logger.LogInformation("Downloaded and verified {Archive} from {Tag} ({Signed})", archiveName, release.Tag, signature != null ? "signed" : "unsigned");
             RemoveOtherReleases(folder);
             return directory;
         }

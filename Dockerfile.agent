@@ -6,6 +6,7 @@ COPY src/Cabinet.Agent/Cabinet.Agent.csproj src/Cabinet.Agent/
 RUN dotnet restore src/Cabinet.Agent/Cabinet.Agent.csproj
 
 COPY src/Cabinet.Agent/ src/Cabinet.Agent/
+COPY build/release-signing.pub.pem build/
 RUN dotnet publish src/Cabinet.Agent/Cabinet.Agent.csproj \
     --configuration Release \
     --output /app \
