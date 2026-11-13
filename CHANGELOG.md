@@ -53,7 +53,7 @@ Enterprise sign-in and signed releases. Upgrading: dashboard sessions end once, 
 - The Linux installer copies everything published with the server, including SQLite's native library, which it left out.
 - The alert log went to a `cabinet` folder in the program's folder when the service account has no home, as Linux services don't; it goes beside the server's logs.
 - `scripts/build-release.sh` had a syntax error and couldn't run.
-- A leader whose lease loop stalled (a starved thread pool or a hung connection) kept counting itself the leader, beside whichever instance took the lock next. Leadership now lapses unless confirmed within 20 seconds.
+- A leader whose lease loop stalled (a starved thread pool or a hung connection) kept counting itself the leader, beside whichever instance took the lock next. Leadership now lapses unless confirmed within 20 seconds, and confirming asks PostgreSQL whether this session still holds the lock rather than whether any query answers.
 - The Cabinet engine stored list-valued fields (the IP addresses and quoted strings the generic parser finds) as the text "System.Collections.Generic.List`1[System.String]"; it stores them as JSON, as the other backends do.
 - A search could be cached without a write made in the same clock tick as it started, so it showed one event too few until the cache expired.
 

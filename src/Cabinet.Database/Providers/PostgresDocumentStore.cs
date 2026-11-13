@@ -215,9 +215,19 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                     }
                     else
                     {
-                        // Notices a lost connection, which means the lock is gone too
-                        await connection.ExecuteScalarAsync<int>(
-                            new CommandDefinition("SELECT 1", commandTimeout: (int)CheckTimeout.TotalSeconds, cancellationToken: cancellationToken));
+                        // Asks whether this session still holds the lock, not just whether a connection
+                        // answers: a lost connection fails, and a session without the lock steps down
+                        var held = await connection.ExecuteScalarAsync<bool>(
+                            new CommandDefinition(
+                                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid() AND objid = (@Key & 4294967295)::oid AND classid = (@Key >> 32)::oid)",
+                                new { Key = LockKey },
+                                commandTimeout: (int)CheckTimeout.TotalSeconds,
+                                cancellationToken: cancellationToken));
+                        if (!held)
+                        {
+                            throw new InvalidOperationException("This session no longer holds the leader lock");
+                        }
+
                         Confirmed();
                     }
 
