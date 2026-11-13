@@ -38,6 +38,27 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
     /// <summary>Where the data is.</summary>
     public string DataPath => _root;
 
+    /// <summary>Events, and usually metadata, are kept here: readable by the server only.</summary>
+    private void SecureFolder(string path)
+    {
+        if (!_options.SecureFolder)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Cabinet.Core.Utilities.PrivateFolder.Secure(path))
+            {
+                _logger.LogWarning("Made {Path} readable only by this server's account, SYSTEM and Administrators; other users could read its events", path);
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException or PlatformNotSupportedException)
+        {
+            _logger.LogWarning(ex, "Couldn't make {Path} private; other users on this machine may be able to read it", path);
+        }
+    }
+
     /// <inheritdoc />
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -55,6 +76,7 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
             }
 
             Directory.CreateDirectory(_root);
+            SecureFolder(_root);
             foreach (var directory in Directory.EnumerateDirectories(_root))
             {
                 if (IndexShard.IndexNameIn(directory) is not { } index)

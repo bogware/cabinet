@@ -42,7 +42,26 @@ public sealed class SettingsOverrideStore
     {
         var store = new SettingsOverrideStore(path);
         var directory = System.IO.Path.GetDirectoryName(store.Path)!;
+        var created = !Directory.Exists(directory);
         Directory.CreateDirectory(directory);
+
+        // Settings made in the dashboard can include secrets (a client secret, a mail password), and
+        // the default folder sits under Program Files, which every user can read. Only a folder of
+        // its own is changed, never one it shares.
+        if (created || System.IO.Path.GetFileName(directory).Equals("settings", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (Cabinet.Core.Utilities.PrivateFolder.Secure(directory))
+                {
+                    Serilog.Log.Warning("Made {Path} readable only by this server's account, SYSTEM and Administrators", directory);
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException or PlatformNotSupportedException)
+            {
+                Serilog.Log.Warning(ex, "Couldn't make {Path} private; other users on this machine may be able to read the settings saved there", directory);
+            }
+        }
 
         var source = new SettingsOverridesSource
         {

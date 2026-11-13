@@ -8,6 +8,12 @@ namespace Cabinet.Storage.Engine;
 /// <summary>How the engine trades memory, durability and file count.</summary>
 public sealed class EngineOptions
 {
+    /// <summary>
+    /// On Windows, make the data folder readable only by this server's account, SYSTEM and
+    /// Administrators, as it holds every event and usually the metadata database.
+    /// </summary>
+    public bool SecureFolder { get; set; } = true;
+
     /// <summary>Events an index holds in memory before writing them as a segment.</summary>
     public int FlushEvents { get; set; } = 100_000;
 
