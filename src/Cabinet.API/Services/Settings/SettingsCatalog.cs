@@ -126,6 +126,8 @@ public static class SettingsCatalog
             "The largest OpenTelemetry request, as sent.", "MB", 1, 1024),
         Limit(nameof(ServerLimits.OtlpMaxDecompressedMB), "Ingest", "Largest OTLP request, decompressed",
             "The largest an OpenTelemetry request may be once decompressed. A small compressed request can expand a lot, so this stops one using all memory.", "MB", 1, 4096),
+        Limit(nameof(ServerLimits.ScimMaxRequestMB), "Accounts", "Largest SCIM request",
+            "The largest request an identity provider may send to SCIM. Users and groups are small; a group PUT with many thousands of members is the largest.", "MB", 1, 64),
         S("MultiLine:Pattern", "Ingest", "Multi-line pattern", SettingType.String, null,
             "For lines sent to /api/v1/logs/ingest: a regular expression matching the first line of each event, so stack traces stay with their message. Empty uses lines starting with a timestamp. Agents merge their own lines."),
         S("MultiLine:Mode", "Ingest", "Multi-line mode", SettingType.Enum, "start",

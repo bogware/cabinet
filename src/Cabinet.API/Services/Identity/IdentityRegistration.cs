@@ -36,6 +36,10 @@ public static class IdentityRegistration
             sp.GetRequiredService<SignInThrottle>(),
             sp.GetRequiredService<ILogger<LocalAccountService>>()));
 
+        // SCIM's own tokens and scheme, used only on /scim
+        services.AddSingleton(sp => new ScimTokenService(sp.GetRequiredService<IDocumentStore>()));
+        services.AddAuthentication().AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ScimAuthenticationHandler>(ScimAuthenticationHandler.SchemeName, null);
+
         // OIDC bearer tokens for a user the directory deactivated are refused. This wraps whatever
         // the bearer setup does when a token validates, so it runs after the claims are mapped.
         services.PostConfigure<JwtBearerOptions>("Bearer", bearer =>

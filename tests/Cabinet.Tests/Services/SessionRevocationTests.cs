@@ -128,6 +128,22 @@ public sealed class SessionRevocationTests
     }
 
     [Fact]
+    public async Task ScimDeprovisioning_EndsAnSsoUsersSession()
+    {
+        var user = await _directory.CreateAsync(new DirectoryUser { Id = string.Empty, UserName = "dana@example.com", Source = UserSource.Scim, ExternalId = "oid-dana" });
+        var identity = new ClaimsIdentity([new Claim("ClientId", "oidc-oid-dana"), new Claim("oid", "oid-dana")], "Session");
+        (await DirectoryClaims.LinkSsoAsync(identity, _directory, session: true)).Should().BeTrue();
+        var session = new ClaimsPrincipal(identity);
+        (await DirectoryClaims.SessionIsValidAsync(session, _directory)).Should().BeTrue();
+
+        // As Entra deactivates someone
+        await _directory.UpdateAsync(user.Id, u => ScimMapper.PatchUser(u, System.Text.Json.Nodes.JsonNode.Parse(
+            """{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}""")!.AsObject()));
+
+        (await DirectoryClaims.SessionIsValidAsync(session, _directory)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task AStoredPrincipal_StillWins()
     {
         var (user, session) = await SignedInAsync();

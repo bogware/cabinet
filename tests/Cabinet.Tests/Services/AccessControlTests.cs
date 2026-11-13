@@ -55,7 +55,8 @@ public sealed class EndpointCapabilityTests
     // caller is signed in as one; or, for SCIM, a SCIM token, which can call nothing else
     private static bool IsChecked(MemberInfo member) =>
         member.GetCustomAttribute<RequireCapabilityAttribute>() != null
-        || member.GetCustomAttribute<RequireLocalAccountAttribute>() != null;
+        || member.GetCustomAttribute<RequireLocalAccountAttribute>() != null
+        || member.GetCustomAttribute<RequireScimTokenAttribute>() != null;
 
     [Theory]
     [InlineData(SystemRole.SuperAdmin, Capability.UserManagement, true)]

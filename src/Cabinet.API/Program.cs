@@ -184,6 +184,9 @@ try
     {
         options.ForwardDefaultSelector = context =>
         {
+            // SCIM takes only SCIM tokens, which work nowhere else
+            if (context.Request.Path.StartsWithSegments(Cabinet.API.Authentication.ScimAuthenticationHandler.PathPrefix))
+                return Cabinet.API.Authentication.ScimAuthenticationHandler.SchemeName;
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
                 return "Bearer";
