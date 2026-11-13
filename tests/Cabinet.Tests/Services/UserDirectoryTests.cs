@@ -190,6 +190,25 @@ public sealed class UserDirectoryTests
     }
 
     [Fact]
+    public async Task SsoSignIn_IsTiedToItsDirectoryUser_AndRefusedWhenTheyreDeactivated()
+    {
+        var directory = Directory();
+        var alice = await directory.CreateAsync(new DirectoryUser { Id = string.Empty, UserName = "alice@example.com", Source = UserSource.Scim, ExternalId = "00u-alice", SessionVersion = 3 });
+
+        var identity = new ClaimsIdentity([new Claim("sub", "00u-alice"), new Claim(Cabinet.API.Authentication.DirectoryClaims.UserId, "someone-else")], "saml");
+        (await Cabinet.API.Authentication.DirectoryClaims.LinkSsoAsync(identity, directory, session: true)).Should().BeTrue();
+        identity.FindAll(Cabinet.API.Authentication.DirectoryClaims.UserId).Select(claim => claim.Value).Should().Equal(alice.Id);
+        identity.FindFirst(Cabinet.API.Authentication.DirectoryClaims.SessionVersion)!.Value.Should().Be("3");
+
+        await directory.UpdateAsync(alice.Id, user => user.Active = false);
+        (await Cabinet.API.Authentication.DirectoryClaims.LinkSsoAsync(new ClaimsIdentity([new Claim("sub", "00u-alice")]), directory, session: true)).Should().BeFalse();
+
+        var stranger = new ClaimsIdentity([new Claim("sub", "nobody"), new Claim(Cabinet.API.Authentication.DirectoryClaims.UserId, alice.Id)]);
+        (await Cabinet.API.Authentication.DirectoryClaims.LinkSsoAsync(stranger, directory, session: false)).Should().BeTrue();
+        stranger.FindFirst(Cabinet.API.Authentication.DirectoryClaims.UserId).Should().BeNull("a claim the provider sent can't name a directory user");
+    }
+
+    [Fact]
     public async Task Match_IgnoresAnEmailTheProviderHasntVerified()
     {
         var directory = Directory();

@@ -58,9 +58,11 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Providers()
     {
         var session = await HttpContext.AuthenticateAsync(BrowserSession.Scheme);
+        var oidc = await _schemes.GetSchemeAsync(BrowserSession.OidcScheme) != null;
         return Ok(new
         {
-            oidc = await _schemes.GetSchemeAsync(BrowserSession.OidcScheme) != null,
+            oidc,
+            oidcProvider = oidc ? OidcProviderName() : null,
             saml = _saml != null,
             ldap = _ldap != null,
             local = _directory != null && _directory.Options.LocalSignIn && await _directory.HasLocalUsersAsync(HttpContext.RequestAborted),
@@ -208,6 +210,18 @@ public sealed class AuthController : ControllerBase
         await BrowserSession.SignInAsync(HttpContext, identity);
         await AuditAsync(who, $"Signed in with {provider.ToUpperInvariant()}", true);
         return Ok(new { name = identity.FindFirst(ClaimTypes.Name)?.Value ?? who });
+    }
+
+    /// <summary>Which kind of OIDC provider is configured: Entra, Cognito or Generic, for the sign-in button's label.</summary>
+    private string OidcProviderName()
+    {
+        var configured = HttpContext.RequestServices.GetService<IConfiguration>()?.GetSection("SSO:Oidc")["Provider"];
+        return configured?.Trim().ToLowerInvariant() switch
+        {
+            "entra" or "entraid" or "azuread" => "Entra",
+            "cognito" => "Cognito",
+            _ => "Generic",
+        };
     }
 
     private Task AuditAsync(string principal, string description, bool success) =>

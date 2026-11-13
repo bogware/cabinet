@@ -202,6 +202,61 @@ public sealed class IdentityApiTests : IDisposable
     }
 
     [Fact]
+    public async Task BearerTokens_ForDirectoryUsers_GetTheDirectorysRole_AndAreRefusedOnceDeactivated()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        await using var provider = await AccessControlApiTests.OidcTestProvider.StartAsync(new Microsoft.IdentityModel.Tokens.RsaSecurityKey(rsa) { KeyId = "test-key" });
+        await using var api = StartApi(_directory, new Dictionary<string, string>
+        {
+            ["Sso__Enabled"] = "true",
+            ["Sso__Oidc__Authority"] = provider.Authority,
+            ["Sso__Oidc__ClientId"] = "cabinet",
+            ["Sso__RoleMappings__0__ClaimType"] = "groups",
+            ["Sso__RoleMappings__0__ClaimValue"] = "team",
+            ["Sso__RoleMappings__0__Role"] = "Viewer",
+        });
+        await api.WaitUntilReadyAsync();
+
+        var dave = await AdminAsync(api.Client, HttpMethod.Post, "/api/v1/users", new { userName = "dave@example.com", sso = true, externalId = "oid-dave" });
+        var daveId = dave.GetProperty("user").GetProperty("id").GetString();
+        var admins = await AdminAsync(api.Client, HttpMethod.Post, "/api/v1/groups", new { displayName = "cabinet-admins", role = "Admin", members = new[] { daveId } });
+        var erin = await AdminAsync(api.Client, HttpMethod.Post, "/api/v1/users", new { userName = "erin@example.com", sso = true });
+
+        async Task<(HttpStatusCode Status, string Body)> MeWithAsync(string token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/roles/me");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            using var response = await api.Client.SendAsync(request);
+            return (response.StatusCode, await response.Content.ReadAsStringAsync());
+        }
+
+        // Matched by the provider's object ID; the directory's group gives the role, not the token's groups
+        var asDave = await MeWithAsync(provider.CreateToken("dave-sub", "team", "cabinet", new() { ["oid"] = "oid-dave" }));
+        asDave.Status.Should().Be(HttpStatusCode.OK);
+        asDave.Body.Should().Contain("\"role\":\"Admin\"");
+
+        // Matched by sign-in name; with no role in the directory, the claim mappings still apply
+        var asErin = await MeWithAsync(provider.CreateToken("erin-sub", "team", "cabinet", new() { ["preferred_username"] = "Erin@Example.com" }));
+        asErin.Body.Should().Contain("\"role\":\"Viewer\"");
+
+        // A token can't name a directory user for itself
+        var forged = await MeWithAsync(provider.CreateToken("mallory", "nothing", "cabinet", new() { ["cabinet.uid"] = daveId!, ["cabinet.sv"] = "1" }));
+        forged.Status.Should().Be(HttpStatusCode.Forbidden);
+
+        // Deactivated in the directory: refused, whatever the identity provider says
+        await AdminAsync(api.Client, HttpMethod.Put, $"/api/v1/users/{daveId}", new { active = false });
+        (await MeWithAsync(provider.CreateToken("dave-sub", "team", "cabinet", new() { ["oid"] = "oid-dave" }))).Status.Should().Be(HttpStatusCode.Unauthorized);
+        await AdminAsync(api.Client, HttpMethod.Put, $"/api/v1/users/{erin.GetProperty("user").GetProperty("id").GetString()}", new { active = false });
+        (await MeWithAsync(provider.CreateToken("erin-sub", "team", "cabinet", new() { ["preferred_username"] = "erin@example.com" }))).Status.Should().Be(HttpStatusCode.Unauthorized);
+
+        // A principal stored through the roles API still wins over the directory
+        await AdminAsync(api.Client, HttpMethod.Put, $"/api/v1/users/{daveId}", new { active = true });
+        await AdminAsync(api.Client, HttpMethod.Put, "/api/v1/roles/oidc-dave-sub", new { role = "Viewer" });
+        (await MeWithAsync(provider.CreateToken("dave-sub", "team", "cabinet", new() { ["oid"] = "oid-dave" }))).Body.Should().Contain("\"role\":\"Viewer\"");
+        admins.GetProperty("id").GetString().Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task AccountEndpoints_AreOnlyForLocalAccounts_AndUserManagementNeedsTheCapability()
     {
         await using var api = StartApi(_directory);

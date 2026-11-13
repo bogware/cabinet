@@ -701,7 +701,7 @@ public sealed class AccessControlApiTests : IDisposable
         using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = api.Client.BaseAddress };
 
         var providers = await (await noRedirects.GetAsync("/auth/providers")).Content.ReadAsStringAsync();
-        providers.Should().Contain("\"oidc\":true").And.Contain("\"signedIn\":false");
+        providers.Should().Contain("\"oidc\":true").And.Contain("\"oidcProvider\":\"Generic\"").And.Contain("\"signedIn\":false");
 
         using var login = await noRedirects.GetAsync("/auth/login/oidc?returnUrl=https://evil.example/");
         login.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -746,7 +746,7 @@ public sealed class AccessControlApiTests : IDisposable
 
         var providers = await api.Client.GetStringAsync("/auth/providers");
 
-        providers.Should().Contain("\"oidc\":false").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
+        providers.Should().Contain("\"oidc\":false").And.Contain("\"oidcProvider\":null").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
         (await api.Client.GetAsync("/auth/login/oidc")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await api.Client.PostAsJsonAsync("/auth/login/ldap", new { username = "a", password = "b" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
