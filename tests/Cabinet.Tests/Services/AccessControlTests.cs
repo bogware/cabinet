@@ -377,7 +377,8 @@ public sealed class PostgresLeaderLeaseTests
         }
 
         var isolated = new NpgsqlConnectionStringBuilder(ConnectionString) { Database = database }.ConnectionString;
-        var lease = new PostgresLeaderLease(isolated, NullLogger<PostgresLeaderLease>.Instance);
+        var log = new LeaseLog();
+        var lease = new PostgresLeaderLease(isolated, log);
         try
         {
             await WaitUntilAsync(() => lease.IsLeader);
@@ -416,7 +417,7 @@ public sealed class PostgresLeaderLeaseTests
             }
 
             reconnected.Should().BeTrue(
-                $"the loop keeps trying after losing the connection, and leads on a new one (killed {killed}, before [{string.Join(',', before)}], after [{string.Join(',', after)}], leader {lease.IsLeader})");
+                $"the loop keeps trying after losing the connection, and leads on a new one (killed {killed}, before [{string.Join(',', before)}], after [{string.Join(',', after)}], leader {lease.IsLeader}; lease log: {log})");
         }
         finally
         {
@@ -985,4 +986,20 @@ public sealed class AccessControlApiTests : IDisposable
             _stopping.Dispose();
         }
     }
+}
+
+/// <summary>What the lease logged, with times, for a failure message.</summary>
+internal sealed class LeaseLog : Microsoft.Extensions.Logging.ILogger<PostgresLeaderLease>
+{
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lines = new();
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+        _lines.Enqueue($"[{_clock.Elapsed.TotalSeconds:F1}s {logLevel}] {formatter(state, exception)}{(exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})")}");
+
+    public override string ToString() => string.Join(" | ", _lines);
 }
