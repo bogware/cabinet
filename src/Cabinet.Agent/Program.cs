@@ -213,10 +213,6 @@ public static class Program
         return errors;
     }
 
-    private static string GetVersion()
-    {
-        var assembly = typeof(Program).Assembly;
-        var version = assembly.GetName().Version;
-        return version?.ToString(3) ?? "0.0.1";
-    }
+    /// <summary>The version as released, with any pre-release label, such as 3.0.0-rc.3.</summary>
+    private static string GetVersion() => Updating.AgentUpdater.CurrentFull;
 }
