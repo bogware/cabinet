@@ -545,6 +545,9 @@ jobs:
         # v3.0.0-rc.1 and the like are pre-releases: servers' update checks never offer them
         prerelease: ${{ contains(github.ref_name, '-') }}
         make_latest: ${{ !contains(github.ref_name, '-') }}
+        # Releases are immutable once published, and a pre-release publishes as it's created,
+        # before its assets: so upload to a draft, then publish it whole below
+        draft: true
         files: |
           artifacts/**/*.tar.gz
           artifacts/**/*.tar.gz.sha256
@@ -556,6 +559,14 @@ jobs:
           artifacts/install-server.ps1
           artifacts/install-agent.sh
           artifacts/install-agent.ps1
+
+    - name: Publish the release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        if [[ "$TAG" == *-* ]]; then latest=false; else latest=true; fi
+        gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
 
     - name: Remove job state
       if: always()
