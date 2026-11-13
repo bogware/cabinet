@@ -210,7 +210,7 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                         {
                             Confirmed();
                             _isLeader = true;
-                            _logger.LogInformation("This instance is now the leader");
+                            _logger.LogInformation("This instance is now the leader, holding the lock on database connection {ProcessId}", connection.ProcessID);
                         }
                     }
                     else
