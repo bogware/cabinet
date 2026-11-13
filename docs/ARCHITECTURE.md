@@ -216,11 +216,11 @@ Configuration holds the raw key. It is hashed when loaded, and only the hash is 
 **Status:** OIDC is partial. JWT Bearer validation and claim mapping run, but `[RequireCapability]` resolves capabilities through `IRbacService`, which has no principal for an OIDC subject, so routes that require a capability return 403 for those tokens. SAML 2.0 and LDAP are **not implemented** — only their configuration models (`SamlSettings`, `LdapSettings` in `Cabinet.Core/Models/SsoConfiguration.cs`) exist. Selecting SAML or LDAP as the SSO provider logs a warning and does not configure any authentication handler.
 
 **Rationale:**
-- OIDC is the modern standard — supported by all major identity providers (Entra ID, Okta, Keycloak, Auth0, Google Workspace)
+- OIDC is the modern standard — supported by all major identity providers (Microsoft Entra ID and Amazon Cognito, with presets, and Okta, Auth0, Google Workspace and others)
 - ASP.NET Core has first-party OIDC/JWT support via `Microsoft.AspNetCore.Authentication.JwtBearer` — no third-party packages required
 - SAML 2.0 requires `Sustainsys.Saml2` (third-party) and has a more complex integration surface (XML signatures, assertion parsing, artifact resolution)
 - LDAP requires `Novell.Directory.Ldap.NETStandard` (third-party) and adds connection pool management, bind credential handling, and direct coupling to directory infrastructure
-- Most organizations that still use SAML or LDAP also have an OIDC-capable identity provider (or can front LDAP with one like Keycloak)
+- Most organizations that still use SAML or LDAP also have an OIDC-capable identity provider (or can front LDAP with one, as Entra ID does through its directory sync)
 
 **Implementation details:**
 - `SsoConfiguration` (`Core/Models/SsoConfiguration.cs`) — top-level config with `Provider` enum (`Oidc`, `Saml`, `Ldap`)

@@ -75,7 +75,7 @@ public enum SsoProviderType
     /// <summary>
     /// OpenID Connect — the recommended and only implemented SSO provider.
     /// Supports JWT Bearer tokens via any OIDC-compliant identity provider
-    /// (Entra ID, Okta, Keycloak, Auth0, etc.).
+    /// (Microsoft Entra ID, Amazon Cognito, Okta, Auth0, etc.).
     /// </summary>
     Oidc,
 
@@ -95,7 +95,7 @@ public enum SsoProviderType
 /// <summary>
 /// OpenID Connect authentication settings. This is the only SSO provider currently
 /// implemented in Cabinet. Configured via the <c>Sso:Oidc</c> configuration section.
-/// Supports any OIDC-compliant identity provider (Entra ID, Okta, Keycloak, Auth0, etc.).
+/// Supports any OIDC-compliant identity provider (Microsoft Entra ID, Amazon Cognito, Okta, Auth0, etc.).
 /// </summary>
 public sealed class OidcSettings
 {
@@ -166,7 +166,7 @@ public sealed class OidcSettings
 /// <summary>Identity providers whose differences Cabinet knows.</summary>
 public enum OidcProvider
 {
-    /// <summary>Any standard OpenID Connect provider: Okta, Keycloak, Auth0, Google Workspace, Ping and others.</summary>
+    /// <summary>Any other standard OpenID Connect provider, such as Okta, Auth0, Google Workspace or Ping, with the authority given.</summary>
     Generic,
 
     /// <summary>Microsoft Entra ID (Azure AD): tenant issuers v1 and v2, oid as the stable user ID, app roles and group object IDs.</summary>
