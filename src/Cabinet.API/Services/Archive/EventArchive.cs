@@ -4,8 +4,15 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
+using Cabinet.Storage;
 
 namespace Cabinet.API.Services.Archive;
+
+/// <summary>A search of the archive that would hold more events than it may.</summary>
+public sealed class ArchiveTooLargeException(int maxEvents)
+    : Exception(string.Create(CultureInfo.InvariantCulture, $"More than {maxEvents:N0} archived events are in that range. Search a shorter time, or rehydrate it into an index."))
+{
+}
 
 /// <summary>One archived file: an index's events from part of one day.</summary>
 public sealed record ArchiveChunk(string Key, string Index, DateTime Day, long SizeBytes);
@@ -250,6 +257,43 @@ public sealed class EventArchiver
 
         _logger.LogInformation("Rehydrated {Count} events of {Index} into {Target}", restored, index, target);
         return restored;
+    }
+
+    /// <summary>
+    /// An index's archived events between two times, in memory to search where they are, reading
+    /// only the days the range covers. More than <paramref name="maxEvents"/> throws, so a search
+    /// can't fill the server's memory; a narrower range gets under it.
+    /// </summary>
+    public async Task<InMemoryStorage> LoadAsync(string index, DateTime from, DateTime to, int maxEvents, CancellationToken cancellationToken)
+    {
+        var storage = new InMemoryStorage(maxEvents: maxEvents + 1);
+        var batch = new List<LogEvent>(1000);
+        long loaded = 0;
+        foreach (var chunk in (await _archive.ListAsync(index, cancellationToken)).Where(c => c.Day <= to && c.Day.AddDays(1) > from).OrderBy(c => c.Day))
+        {
+            await foreach (var logEvent in ReadAsync(chunk.Key, cancellationToken))
+            {
+                if (logEvent.Timestamp < from || logEvent.Timestamp > to)
+                {
+                    continue;
+                }
+
+                if (++loaded > maxEvents)
+                {
+                    throw new ArchiveTooLargeException(maxEvents);
+                }
+
+                batch.Add(logEvent);
+                if (batch.Count == 1000)
+                {
+                    await storage.StoreBatchAsync(batch, cancellationToken);
+                    batch.Clear();
+                }
+            }
+        }
+
+        await storage.StoreBatchAsync(batch, cancellationToken);
+        return storage;
     }
 
     private async IAsyncEnumerable<LogEvent> ReadAsync(string key, [EnumeratorCancellation] CancellationToken cancellationToken)

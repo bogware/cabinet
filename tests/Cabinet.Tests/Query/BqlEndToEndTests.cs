@@ -506,6 +506,44 @@ public sealed class SqliteBqlEndToEndTests : BqlEndToEndTests
     }
 }
 
+/// <summary>Cabinet's own engine, with the events still in memory and its log.</summary>
+public sealed class EngineInMemoryBqlEndToEndTests : BqlEndToEndTests
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-e2e-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    protected override ILogStorage CreateStorage() => _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path);
+
+    public override Task DisposeAsync()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Cabinet's own engine, with the events written to segments.</summary>
+public sealed class EngineSegmentBqlEndToEndTests : BqlEndToEndTests
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-e2e-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    protected override ILogStorage CreateStorage() => _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path);
+
+    protected override Task OnSeededAsync() => _engine!.FlushAsync();
+
+    public override Task DisposeAsync()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+        return Task.CompletedTask;
+    }
+}
+
 [Trait("Category", "Integration")]
 public sealed class PostgresBqlEndToEndTests : BqlEndToEndTests
 {
@@ -555,5 +593,33 @@ public sealed class OpenSearchBqlEndToEndTests : BqlEndToEndTests
         var url = Url!.TrimEnd('/');
         (await client.DeleteAsync($"{url}/{_indexPrefix}-*")).EnsureSuccessStatusCode();
         (await client.DeleteAsync($"{url}/_template/{_indexPrefix}-template")).EnsureSuccessStatusCode();
+    }
+}
+
+[Trait("Category", "Integration")]
+public sealed class ClickHouseBqlEndToEndTests : BqlEndToEndTests
+{
+    private static readonly string? Url = Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_URL");
+
+    private ClickHouseLogStorage? _storage;
+
+    protected override bool IsAvailable => !string.IsNullOrEmpty(Url);
+
+    // A table per test class run, so runs don't see each other's events
+    protected override ILogStorage CreateStorage() => _storage = new ClickHouseLogStorage(
+        Url!,
+        NullLogger<ClickHouseLogStorage>.Instance,
+        database: "cabinet_tests",
+        table: $"e2e_{Guid.NewGuid():N}",
+        username: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER"),
+        password: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS"));
+
+    public override async Task DisposeAsync()
+    {
+        if (_storage != null)
+        {
+            await _storage.DropAsync();
+            _storage.Dispose();
+        }
     }
 }

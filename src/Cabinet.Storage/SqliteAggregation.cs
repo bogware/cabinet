@@ -20,7 +20,8 @@ public partial class SqliteLogStorage : IAggregatingLogStorage
     /// <inheritdoc />
     public async Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
     {
-        if (request.GroupBy.Any(field => !AggregateFields.CanPush(field))
+        if (request.ExactTextKeys
+            || request.GroupBy.Any(field => !AggregateFields.CanPush(field))
             || request.Aggregates.Any(spec => (spec.Field != null && !AggregateFields.CanPush(spec.Field))
                 || spec.Kind is AggregateKind.Percentile or AggregateKind.SampleDeviation or AggregateKind.PopulationDeviation
                     or AggregateKind.SampleVariance or AggregateKind.PopulationVariance)

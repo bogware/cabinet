@@ -28,6 +28,13 @@ public sealed class AggregateRequest
 
     /// <summary>More groups than this fail the query, so storage can stop at one more.</summary>
     public int MaxGroups { get; init; } = 100_000;
+
+    /// <summary>
+    /// Whether groups must be told apart exactly as .NET writes their values as text, which is how
+    /// <c>top</c> and <c>rare</c> count. Storage that writes some values differently (SQL casts of
+    /// reals, for one) returns null when this is set.
+    /// </summary>
+    public bool ExactTextKeys { get; init; }
 }
 
 /// <summary>Functions storage can be asked for.</summary>

@@ -132,8 +132,8 @@ try
             Description = "Log ingestion, search and alerting API",
             License = new OpenApiLicense
             {
-                Name = "Apache-2.0",
-                Url = new Uri("https://www.apache.org/licenses/LICENSE-2.0")
+                Name = "AGPL-3.0-only",
+                Url = new Uri("https://www.gnu.org/licenses/agpl-3.0.html")
             }
         });
 
@@ -473,7 +473,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     if (!string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase))
     {
         if (storageType.Equals("SQLite", StringComparison.OrdinalIgnoreCase))
-            Log.Warning("SQLite storage is not recommended for production. Consider PostgreSQL or OpenSearch.");
+            Log.Warning("SQLite storage is not recommended for production. Consider the Cabinet engine, PostgreSQL or OpenSearch.");
         if (storageType.Equals("Memory", StringComparison.OrdinalIgnoreCase))
             Log.Warning("In-Memory storage is ephemeral. Data will be lost on restart.");
     }
@@ -481,7 +481,7 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     // Configure options
     services.Configure<Cabinet.Core.Configuration.CabinetConfiguration>(configuration);
 
-    // Storage — supports SQLite, Memory, PostgreSQL, and OpenSearch.
+    // Storage — supports SQLite, Memory, PostgreSQL, OpenSearch and the Cabinet engine.
     // The "base" store is everything below detection. Detection events are written to it directly,
     // so they're stored, encrypted and searchable but never fed back into the detection engine.
     services.AddKeyedSingleton<ILogStorage>("base", (sp, _) =>
@@ -666,7 +666,8 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
     services.AddScoped<Cabinet.Query.Bql.BqlParser>();
     services.AddScoped<Cabinet.Query.Bql.BqlOptimizer>();
     services.AddScoped<Cabinet.Query.IQueryParser>(sp => sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>());
-    services.AddScoped<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator, Cabinet.Query.NaturalLanguage.RuleBasedTranslator>();
+    services.AddSingleton<Cabinet.Query.Natural.QueryUnderstander>();
+    services.AddSingleton<Cabinet.API.Services.FieldCatalogService>();
 
     // The engine reads through the caller's index scope, so subsearches, joins and macros are
     // limited the same as the query around them.
@@ -675,7 +676,6 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         sp.GetRequiredService<Cabinet.Query.Bql.BqlParser>(),
         sp.GetRequiredService<Cabinet.Query.Bql.BqlOptimizer>(),
         sp.GetRequiredService<ILogger<Cabinet.Query.Bql.BqlQueryEngine>>(),
-        sp.GetService<Cabinet.Query.NaturalLanguage.INaturalLanguageTranslator>(),
         sp.GetService<IKnowledgeStorage>(),
         sp.GetRequiredService<Cabinet.Query.Bql.QueryLimits>()));
     services.AddSingleton(configuration.GetSection("Query:Limits").Get<Cabinet.Query.Bql.QueryLimits>() ?? new Cabinet.Query.Bql.QueryLimits());
@@ -850,7 +850,7 @@ void ValidateConfiguration(IConfiguration configuration)
 {
     var validStorageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch"
+        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch", "Cabinet", "Engine", "ClickHouse"
     };
 
     var storageType = configuration["Storage:Type"] ?? "SQLite";
@@ -867,6 +867,12 @@ void ValidateConfiguration(IConfiguration configuration)
         var connStr = configuration["Storage:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connStr))
             throw new InvalidOperationException("Storage:ConnectionString is required for PostgreSQL backend");
+    }
+
+    if (storageType.Equals("ClickHouse", StringComparison.OrdinalIgnoreCase)
+        && string.IsNullOrWhiteSpace(configuration["Storage:ConnectionString"]))
+    {
+        throw new InvalidOperationException("Storage:ConnectionString is required for ClickHouse: its HTTP address, such as http://clickhouse:8123");
     }
 
     if (storageType.Equals("OpenSearch", StringComparison.OrdinalIgnoreCase) ||
@@ -915,7 +921,7 @@ void ValidateConfiguration(IConfiguration configuration)
 async Task InitializeStorageWithRetryAsync(ILogStorage storage, IConfiguration configuration)
 {
     var storageType = configuration["Storage:Type"] ?? "SQLite";
-    var isRemoteBackend = storageType.ToUpperInvariant() is "POSTGRESQL" or "POSTGRES" or "OPENSEARCH" or "ELASTICSEARCH";
+    var isRemoteBackend = storageType.ToUpperInvariant() is "POSTGRESQL" or "POSTGRES" or "OPENSEARCH" or "ELASTICSEARCH" or "CLICKHOUSE";
 
     if (!isRemoteBackend)
     {

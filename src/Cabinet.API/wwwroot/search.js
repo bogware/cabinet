@@ -635,8 +635,110 @@ const CabinetSearch = (() => {
         return `${amount} ${UNIT_NAMES[match[2]]}${amount === 1 ? '' : 's'}`;
     }
 
+    /** Builder time choices, as BQL. */
+    const BUILDER_TIMES = {
+        '': '', '15m': ' from last 15m', '1h': ' from last 1h', '4h': ' from last 4h', '24h': ' from last 24h', '7d': ' from last 7d',
+        '30d': ' from last 30d', today: ' earliest=@d', yesterday: ' earliest=-1d@d latest=@d', week: ' earliest=@w',
+    };
+
+    /** Chart buckets that suit each builder time. */
+    const BUILDER_SPANS = { '': '1h', '15m': '1m', '1h': '1m', '4h': '5m', '24h': '1h', '7d': '1d', '30d': '1d', today: '1h', yesterday: '1h', week: '1d' };
+
+    function literal(value) {
+        const text = String(value ?? '');
+        return /^-?\d+(\.\d+)?$/.test(text) ? text : '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    }
+
+    function condition(c) {
+        const like = String(c.value ?? '').replace(/"/g, '').replace(/\*/g, '%');
+        switch (c.op) {
+            case 'contains': return `${c.field} like "%${like}%"`;
+            case 'not contains': return `NOT ${c.field} like "%${like}%"`;
+            case 'starts': return `${c.field} like "${like}%"`;
+            case 'exists': return `isnotnull(${c.field})`;
+            case 'missing': return `isnull(${c.field})`;
+            default: return `${c.field} ${c.op || '='} ${literal(c.value)}`;
+        }
+    }
+
+    /**
+     * The BQL for a search built by picking: words, conditions, a time, and what to show (the
+     * events, a count, a measure, top or rare values, or a chart over time), grouped and limited.
+     */
+    function buildQuery(spec) {
+        const words = (spec.words || '').trim();
+        let query = 'find ' + (words || '*') + (BUILDER_TIMES[spec.time || ''] ?? '');
+        const conditions = (spec.conditions || []).filter(c => c.field && (c.op === 'exists' || c.op === 'missing' || String(c.value ?? '').trim() !== ''));
+        if (conditions.length) query += ' | where ' + conditions.map(condition).join(' and ');
+
+        const by = (spec.by || []).filter(Boolean);
+        const byText = by.length ? ' by ' + by.join(', ') : '';
+        const measure = spec.measure && spec.measure.fn && spec.measure.field
+            ? { bql: `${spec.measure.fn}(${spec.measure.field})`, column: `${spec.measure.fn}_${spec.measure.field}` }
+            : null;
+        const limit = parseInt(spec.limit, 10);
+        switch (spec.show) {
+            case 'count':
+                query += ' | stats count' + byText + (by.length ? ' | sort by count desc' : '');
+                break;
+            case 'measure':
+                if (measure) query += ` | stats ${measure.bql} as ${measure.column}${byText}` + (by.length ? ` | sort by ${measure.column} desc` : '');
+                break;
+            case 'top':
+            case 'rare':
+                if (spec.field) query += ` | ${spec.show} ${limit > 0 ? limit : 10} ${spec.field}`;
+                return query;
+            case 'overtime':
+                query += ` | timechart span=${BUILDER_SPANS[spec.time || ''] || '1h'} ${measure ? measure.bql : 'count'}${by.length ? ' by ' + by[0] : ''}`;
+                return query;
+            case 'table':
+                if ((spec.columns || []).length) query += ' | table ' + spec.columns.join(', ');
+                break;
+        }
+
+        if (limit > 0) query += ` | head ${limit}`;
+        return query;
+    }
+
+    /**
+     * The text with each problem marked, for an overlay under the editor. Text is escaped; only the
+     * marks are markup. Problems are [{start, length, message}], in any order.
+     */
+    function markProblems(text, problems) {
+        const sorted = (problems || []).filter(p => p.length > 0 && p.start >= 0 && p.start < text.length).sort((a, b) => a.start - b.start);
+        let html = '';
+        let at = 0;
+        for (const problem of sorted) {
+            if (problem.start < at) continue;
+            const end = Math.min(text.length, problem.start + problem.length);
+            html += escapeHtml(text.slice(at, problem.start));
+            html += `<mark class="sx-problem" title="${escapeHtml(problem.message || '')}">${escapeHtml(text.slice(problem.start, end))}</mark>`;
+            at = end;
+        }
+
+        return html + escapeHtml(text.slice(at));
+    }
+
+    /**
+     * Suggestions from the server merged into the page's own, keeping the page's first: server
+     * ones bring values from the data and question starters. Each keeps where it applies.
+     */
+    function mergeCompletions(local, server, from, to) {
+        const fromServer = (server || []).map(c => ({ label: c.text, kind: c.kind, detail: c.description, insert: c.text, from: c.start, to: c.start + c.length }));
+        // Values from the data are the most specific suggestion there is, so they lead
+        const ordered = [...fromServer.filter(i => i.kind === 'value'), ...local.map(item => ({ ...item, from: item.from ?? from, to: item.to ?? to })), ...fromServer.filter(i => i.kind !== 'value')];
+        const seen = new Set();
+        return ordered.filter(item => {
+            const key = String(item.insert).toLowerCase().trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        }).slice(0, 14);
+    }
+
     return {
         PRESETS, COMMANDS, FUNCTIONS, AGGREGATES, SEVERITIES, BUILTIN_FIELDS,
+        buildQuery, markProblems, mergeCompletions,
         escapeHtml, parseTime, resolveRange, formatDateTime, toLocalInput, chooseSpan, spanLabel,
         splitPipeline, returnsEvents, baseSearch, timelineQuery, fieldName, addFilter,
         searchTerms, highlight, summarizeFields, filterValue, displayValue,

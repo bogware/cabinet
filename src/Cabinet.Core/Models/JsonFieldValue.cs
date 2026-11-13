@@ -14,7 +14,8 @@ public static class JsonFieldValue
     public static object? Unwrap(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.String => value.GetString(),
-        JsonValueKind.Number => value.TryGetInt64(out var integer) ? integer : value.GetDouble(),
+        // Boxed apart, or the conditional's type would be double and every whole number a double
+        JsonValueKind.Number => value.TryGetInt64(out var integer) ? (object)integer : value.GetDouble(),
         JsonValueKind.True => true,
         JsonValueKind.False => false,
         JsonValueKind.Null or JsonValueKind.Undefined => null,

@@ -21,7 +21,8 @@ public sealed partial class PostgresLogStorage : IAggregatingLogStorage
     /// <inheritdoc />
     public async Task<AggregateResult?> AggregateAsync(AggregateRequest request, CancellationToken cancellationToken = default)
     {
-        if (request.GroupBy.Any(field => !AggregateFields.CanPush(field))
+        if (request.ExactTextKeys
+            || request.GroupBy.Any(field => !AggregateFields.CanPush(field))
             || request.Aggregates.Any(spec => spec.Field != null && !AggregateFields.CanPush(spec.Field)))
         {
             return null;

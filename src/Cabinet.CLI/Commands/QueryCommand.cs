@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Cabinet.Core.Interfaces;
 using Cabinet.Query;
+using Cabinet.Query.Natural;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Spectre.Console;
@@ -11,9 +12,9 @@ namespace Cabinet.CLI.Commands;
 
 public class QueryCommand : Command
 {
-    public QueryCommand() : base("query", "Execute queries against logs using Splunk-like syntax")
+    public QueryCommand() : base("query", "Search logs in plain words, BQL or SPL")
     {
-        var queryArgument = new Argument<string>("query", "Query expression (e.g., 'error | stats count by source')");
+        var queryArgument = new Argument<string>("query", "What to find: 'errors by host since yesterday', or BQL such as 'find error | stats count by host'");
         var modeOption = new Option<string>("--mode", () => "indexed", "Query mode: 'indexed' or 'direct'");
         var pathOption = new Option<string>("--path", "Path for direct mode queries");
         var formatOption = new Option<string>("--format", () => "table", "Output format: table, json, ndjson, csv");
@@ -28,9 +29,11 @@ public class QueryCommand : Command
         AddOption(formatOption);
         AddOption(limitOption);
         AddOption(timeRangeOption);
+        var exactOption = new Option<bool>("--exact", "Run the query exactly as typed, without reading plain words into BQL or fixing typos");
         AddOption(serverOption);
+        AddOption(exactOption);
 
-        this.SetHandler(HandleCommand, queryArgument, modeOption, pathOption, formatOption, limitOption, timeRangeOption, serverOption);
+        this.SetHandler(HandleCommand, queryArgument, modeOption, pathOption, formatOption, limitOption, timeRangeOption, serverOption, exactOption);
     }
 
     private async Task<int> HandleCommand(
@@ -40,7 +43,8 @@ public class QueryCommand : Command
         string format,
         int limit,
         string? timeRange,
-        string? server)
+        string? server,
+        bool exact)
     {
         if (mode == "direct" && string.IsNullOrEmpty(path))
         {
@@ -57,7 +61,24 @@ public class QueryCommand : Command
                 return 1;
             }
 
-            return await HandleRemoteAsync(server, query, format, limit, timeRange);
+            return await HandleRemoteAsync(server, query, format, limit, timeRange, exact);
+        }
+
+        // Plain words become BQL, said on stderr so json and csv output stay clean
+        if (!exact && mode != "direct")
+        {
+            var understanding = new QueryUnderstander().Understand(query);
+            if (!understanding.WillRun)
+            {
+                return NotUnderstood(understanding.Problems.FirstOrDefault()?.Message, understanding.Alternatives.Select(a => (a.Query, a.Description)));
+            }
+
+            if (understanding.Kind != UnderstandingKind.Exact)
+            {
+                Understood(understanding.Query!, understanding.Explanation, understanding.Corrections.Select(c => (c.From, c.To)));
+            }
+
+            query = understanding.Query!;
         }
 
         var host = Host.CreateDefaultBuilder()
@@ -171,7 +192,37 @@ public class QueryCommand : Command
         }
     }
 
-    private async Task<int> HandleRemoteAsync(string server, string query, string format, int limit, string? timeRange)
+    /// <summary>Says on stderr what a query ran as.</summary>
+    private static void Understood(string query, string? explanation, IEnumerable<(string From, string To)> corrections)
+    {
+        Console.Error.WriteLine($"Understood as: {query}");
+        if (!string.IsNullOrEmpty(explanation))
+        {
+            Console.Error.WriteLine($"  {explanation}");
+        }
+
+        var fixes = corrections.ToList();
+        if (fixes.Count > 0)
+        {
+            Console.Error.WriteLine("  Read " + string.Join(", ", fixes.Select(f => $"{f.From} as {f.To}")));
+        }
+
+        Console.Error.WriteLine("  (--exact runs it as typed)");
+    }
+
+    /// <summary>Says why a query wasn't run, and what it might have meant.</summary>
+    private static int NotUnderstood(string? message, IEnumerable<(string Query, string Description)> alternatives)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Not sure what you mean.[/] {Markup.Escape(message ?? string.Empty)}");
+        foreach (var (query, description) in alternatives)
+        {
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(description)}:[/] {Markup.Escape(query)}");
+        }
+
+        return 1;
+    }
+
+    private async Task<int> HandleRemoteAsync(string server, string query, string format, int limit, string? timeRange, bool exact)
     {
         var apiKey = Environment.GetEnvironmentVariable("CABINET_API_KEY");
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -190,10 +241,26 @@ public class QueryCommand : Command
                 limit,
                 startTime = string.IsNullOrEmpty(timeRange) ? (DateTime?)null : ParseTimeRange(timeRange),
                 endTime = string.IsNullOrEmpty(timeRange) ? (DateTime?)null : DateTime.UtcNow,
+                exact,
             };
 
             using var response = await http.PostAsJsonAsync("api/v1/query/execute", request);
             var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode && RemoteUnderstanding(body, out var unclear) && unclear.TryGetProperty("willRun", out var runs) && !runs.GetBoolean())
+            {
+                return NotUnderstood(RemoteError(body), Alternatives(unclear));
+            }
+
+            if (response.IsSuccessStatusCode && RemoteUnderstanding(body, out var understood) && understood.TryGetProperty("query", out var ran))
+            {
+                Understood(
+                    ran.GetString() ?? query,
+                    understood.TryGetProperty("explanation", out var said) ? said.GetString() : null,
+                    understood.TryGetProperty("corrections", out var fixes) && fixes.ValueKind == JsonValueKind.Array
+                        ? fixes.EnumerateArray().Select(f => (f.GetProperty("from").GetString() ?? string.Empty, f.GetProperty("to").GetString() ?? string.Empty)).ToList()
+                        : []);
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 AnsiConsole.MarkupLine($"[red]Error ({(int)response.StatusCode}):[/] {Markup.Escape(RemoteError(body) ?? response.ReasonPhrase ?? "request failed")}");
@@ -261,6 +328,33 @@ public class QueryCommand : Command
         JsonValueKind.Null or JsonValueKind.Undefined => null,
         _ => value.GetRawText(),
     };
+
+    /// <summary>How the server understood a query: in a result, or in a 400's extensions.</summary>
+    private static bool RemoteUnderstanding(string body, out JsonElement understanding)
+    {
+        understanding = default;
+        try
+        {
+            var root = JsonDocument.Parse(body).RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("understanding", out var found) && found.ValueKind == JsonValueKind.Object)
+            {
+                understanding = found.Clone();
+                return true;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON: there's nothing to say about how it was understood
+            return false;
+        }
+
+        return false;
+    }
+
+    private static List<(string Query, string Description)> Alternatives(JsonElement understanding) =>
+        understanding.TryGetProperty("alternatives", out var list) && list.ValueKind == JsonValueKind.Array
+            ? list.EnumerateArray().Select(a => (a.GetProperty("query").GetString() ?? string.Empty, a.GetProperty("description").GetString() ?? string.Empty)).ToList()
+            : [];
 
     private static string? RemoteError(string body)
     {

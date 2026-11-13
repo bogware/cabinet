@@ -125,6 +125,10 @@ public abstract class AggregatePushdownTests : IAsyncLifetime
         "find * | timechart span=30m sum(bytes) by status",
         "find * | timechart span=7d count",
         "find * | where status = \"none\" | stats count by host",
+        "find * | top 3 status",
+        "find * | top 2 bytes",
+        "find * | rare 2 user",
+        "find * | top 5 host",
     };
 
     private async Task<(List<Dictionary<string, object?>> Rows, int Reads)> RunAsync(ILogStorage storage, string query)
@@ -220,9 +224,10 @@ public sealed class SqliteAggregatePushdownTests : AggregatePushdownTests
 
     protected override bool IsAvailable => true;
 
+    // top and rare count values as .NET writes them, which SQL doesn't always match
     protected override bool PushesDown(string query) =>
         !query.Contains("median", StringComparison.Ordinal) && !query.Contains("min(name)", StringComparison.Ordinal)
-        && !query.Contains("where", StringComparison.Ordinal);
+        && !query.Contains("where", StringComparison.Ordinal) && !query.Contains("| top", StringComparison.Ordinal) && !query.Contains("| rare", StringComparison.Ordinal);
 
     protected override ILogStorage CreateStorage()
     {
@@ -251,7 +256,8 @@ public sealed class PostgresAggregatePushdownTests : AggregatePushdownTests
     protected override bool IsAvailable => !string.IsNullOrEmpty(ConnectionString);
 
     protected override bool PushesDown(string query) =>
-        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal)
+        && !query.Contains("| top", StringComparison.Ordinal) && !query.Contains("| rare", StringComparison.Ordinal);
 
     private PostgresLogStorage? _storage;
 
@@ -297,5 +303,82 @@ public sealed class OpenSearchAggregatePushdownTests : AggregatePushdownTests
         var url = Url!.TrimEnd('/');
         await client.DeleteAsync($"{url}/{_indexPrefix}-*");
         await client.DeleteAsync($"{url}/_template/{_indexPrefix}-template");
+    }
+}
+
+/// <summary>The engine with events still in memory, before any segment is written.</summary>
+public sealed class EngineInMemoryAggregatePushdownTests : AggregatePushdownTests, IDisposable
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-agg-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    // Min and max of text alone stay in the pipeline
+    protected override bool PushesDown(string query) =>
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
+
+    protected override ILogStorage CreateStorage() => _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path);
+
+    public void Dispose()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+    }
+}
+
+/// <summary>The engine reading compressed segments, with small ones so groups span several.</summary>
+public sealed class EngineSegmentAggregatePushdownTests : AggregatePushdownTests, IDisposable
+{
+    private readonly string _path = Directory.CreateTempSubdirectory("cabinet-engine-agg-").FullName;
+    private Cabinet.Storage.Engine.EngineLogStorage? _engine;
+
+    protected override bool IsAvailable => true;
+
+    protected override bool PushesDown(string query) =>
+        !query.Contains("min(name)", StringComparison.Ordinal) && !query.Contains("where", StringComparison.Ordinal);
+
+    protected override ILogStorage CreateStorage() =>
+        _engine = new Cabinet.Storage.Engine.EngineLogStorage(_path, new Cabinet.Storage.Engine.EngineOptions { FlushEvents = 1000 });
+
+    protected override Task OnSeededAsync() => _engine!.FlushAsync();
+
+    public void Dispose()
+    {
+        _engine?.Dispose();
+        Directory.Delete(_path, recursive: true);
+    }
+}
+
+[Trait("Category", "Integration")]
+public sealed class ClickHouseAggregatePushdownTests : AggregatePushdownTests
+{
+    private static readonly string? Url = Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_URL");
+
+    private ClickHouseLogStorage? _storage;
+
+    protected override bool IsAvailable => !string.IsNullOrEmpty(Url);
+
+    // Counts by built-in fields and time buckets; everything else runs in the pipeline
+    protected override bool PushesDown(string query) => query is
+        "find * | stats count" or "find * | stats count by host" or "find * | timechart span=1h count" or "find * | timechart span=1h count by host"
+        or "find * | timechart span=7d count" or "find \"alpha\" | stats count by sourcetype" or "find * | stats count by host | sort - count | head 2"
+        or "find * | top 5 host";
+
+    protected override ILogStorage CreateStorage() => _storage = new ClickHouseLogStorage(
+        Url!,
+        NullLogger<ClickHouseLogStorage>.Instance,
+        database: "cabinet_tests",
+        table: $"agg_{Guid.NewGuid():N}",
+        username: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER"),
+        password: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS"));
+
+    public override async Task DisposeAsync()
+    {
+        if (_storage != null)
+        {
+            await _storage.DropAsync();
+            _storage.Dispose();
+        }
     }
 }

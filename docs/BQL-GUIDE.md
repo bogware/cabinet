@@ -1,17 +1,68 @@
-# BQL Query Language Reference
+# Searching in Cabinet
 
-BQL (Bog Query Language) is Cabinet's native query language. It's designed to be natural-language-inspired while maintaining full backward compatibility with Splunk's SPL (Search Processing Language).
+Ask Cabinet a question in plain words, or write a query in BQL, its query language. Both run the same engine, and Splunk's SPL works too.
+
+```
+errors on web servers since yesterday by host        # plain words
+find * | where severity >= error | stats count by host   # BQL
+search error | stats count by host | sort -count       # SPL
+```
 
 Every query in this guide runs as part of the test suite, and `BqlLanguageTests` checks what each function and stage returns.
 
-## Quick Start
+## Ask in Plain Words (Natural Language)
 
-```
-find errors from last 24h                            # Search with time range
-find * | where severity >= 4 and host = "web-01"     # Filter
-find * | stats count by host                         # Aggregate
-find * | sort by timestamp desc | limit 20           # Sort + limit
-```
+Type what you want to know. Cabinet reads it into BQL, runs that, and shows you what it understood: the query, what it does in words, and any words it corrected. Word order doesn't matter, and many words mean the same thing: *show*, *list*, *find* and *give me* all just ask; *by*, *per* and *for each* all group.
+
+| You type | Cabinet runs |
+|---|---|
+| `errors on web servers since yesterday by host` | `find * earliest=-1d@d \| where severity >= error and host like "web%" \| stats count by host \| sort by count desc` |
+| `how many errors per host in the last 24 hours` | `find * from last 24h \| where severity >= error \| stats count by host \| sort by count desc` |
+| `show me warnings and errors between 2pm and 4pm` | `find * earliest=2026-11-12T14:00:00Z latest=2026-11-12T16:00:00Z \| where severity >= warning` |
+| `what happened on web-02 in the last 15 minutes` | `find * from last 15m \| where host = "web-02"` |
+| `average response time by endpoint over the last 7 days` | `find * from last 7d \| stats avg(duration_ms) as avg_duration_ms by path \| sort by avg_duration_ms desc` |
+| `p99 latency per host` | `find * \| stats perc99(duration_ms) as p99_duration_ms by host \| sort by p99_duration_ms desc` |
+| `top 5 slowest endpoints` | `find * \| stats avg(duration_ms) as avg_duration_ms by path \| sort by avg_duration_ms desc \| head 5` |
+| `how many unique users per day` | `find * \| timechart span=1d dc(user)` |
+| `hourly errors by host` | `find * \| where severity >= error \| timechart span=1h count by host` |
+| `which host has the most errors` | `find * \| where severity >= error \| top 1 host` |
+| `least common status codes` | `find * \| rare 10 status` |
+| `count of 5xx errors per endpoint` | `find * \| where status >= 500 and status <= 599 \| stats count by path \| sort by count desc` |
+| `POST requests over 1000 ms` | `find * \| where duration_ms > 1000 and method = "POST"` |
+| `events where user is alice or bob` | `find * \| where user in ("alice", "bob")` |
+| `errors excluding web-01 and web-02` | `find * \| where severity >= error and NOT host in ("web-01", "web-02")` |
+| `show host, path and status for errors` | `find * \| where severity >= error \| table host, path, status` |
+| `latest event per host` | `find * \| dedup host` |
+| `oldest 5 events` | `find * \| sort by _time asc \| head 5` |
+
+The exact query depends on your data: field names come from what your events have, so *response time* becomes `duration_ms` in one place and `latency` in another, and *alice* is recognized as a user because your events have a user called alice.
+
+### What it understands
+
+| Kind | Examples |
+|---|---|
+| Times | *last 24 hours*, *past week*, *in the last 15 min*, *today*, *yesterday*, *this week*, *since monday*, *since 10am*, *between 2pm and 4pm*, *2 hours ago* |
+| Levels | *errors*, *warnings*, *critical*, *fatal*, each meaning that level or worse; *errors and warnings* means warning or worse |
+| Hosts | *on web-01*, *from db-2*, *on web servers* (every host starting with web), *not on web-01*, *excluding web-01 and web-02* |
+| Comparisons | *status is 500*, *status 500*, *status is at least 500*, *over 1000 ms*, *greater than 2 seconds*, *between 200 and 299*, *user is alice or bob*, *path starts with /api*, *message contains timeout*, *404s*, *5xx* |
+| Counting and measures | *how many*, *count of*, *number of*, *how many unique users*, *average*, *total*, *max*, *min*, *median*, *p95*, *95th percentile*, *standard deviation* |
+| Grouping | *by host*, *per endpoint*, *for each user*, *grouped by*, *broken down by*, *split by* |
+| Over time | *over time*, *trend*, *timeline*, *per hour*, *hourly*, *daily*, *every 5 minutes*, *in 10 minute buckets*, *error rate* |
+| Most and least | *top 10 hosts*, *most common paths*, *busiest hosts*, *which host has the most errors*, *least common status codes*, *slowest endpoints*, *biggest responses* |
+| Columns and order | *show host, path and status*, *list hosts*, *unique ips*, *sorted by bytes*, *highest first*, *oldest first*, *latest 20*, *first 10* |
+| Text | *containing "connection refused"*, and any other words, which are searched for |
+
+Fields have everyday names too: *server*, *machine* and *node* mean `host`; *level* means `severity`; *ip* and *client ip* mean `src_ip` or whichever your data has; *endpoint*, *url* and *page* mean `path`; *latency* and *response time* mean a duration field.
+
+### When it isn't sure
+
+- **Small fixes are applied and shown.** *erors by hots* runs as errors by host, and says so. A mistyped command (`| sotr by count`) or a field your data doesn't have but nearly matches (`by hostt`) is corrected the same way.
+- **Words can mean two things.** *errors* is read as the error level, and the plain word *error* is offered as an alternative with one click. So is searching for exactly what you typed.
+- **If it can't tell, it doesn't run.** You get the readings it considered, the part it didn't follow, and the option to ask the AI assistant.
+- **Strict queries always run as written.** Anything with a pipe, `field=value`, `OR`, `AND`, `NOT`, wildcards or BQL time syntax is BQL or SPL, and plain words like `connection refused timeout` stay a word search.
+- **Saved searches keep their BQL.** Saving a question stores the query it was understood as, with your words as its description, and alerts, reports and detection rules never reinterpret.
+
+In the API, `POST /api/v1/query/understand` says what a query would run as without running it, and `"exact": true` on `/query/execute` runs it exactly as typed. In the CLI, `cabinet query` prints what it understood to stderr, and `--exact` turns reading off.
 
 ## Syntax Overview
 
@@ -502,17 +553,6 @@ BQL supports SPL syntax for backward compatibility:
 | `* \| sort -timestamp` | `find * \| sort by timestamp desc` |
 | `* \| dedup host` | `find * \| unique by host` |
 | `* \| rex field=msg "(?<ip>\\d+\\.\\d+)"` | `find * \| extract "(?<ip>\\d+\\.\\d+)" from msg` |
-
-## Natural Language Queries
-
-Cabinet supports natural language queries that are automatically translated to BQL:
-
-| Natural Language | Translated BQL |
-|-----------------|---------------|
-| `show me errors from the last 24 hours` | `find * \| where severity >= 4 from last 24h` |
-| `how many errors` | `find * \| where severity >= 4 \| stats count` |
-| `top 10 errors by host` | `find * \| where severity >= 4 \| top 10 host` |
-| `show warnings from web servers` | `find * \| where severity >= 3 and host like "%web%"` |
 
 ## Query Optimization Tips
 

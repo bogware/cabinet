@@ -57,6 +57,20 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 18
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: cabinet
+          CLICKHOUSE_PASSWORD: cabinet-ci
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123
+        options: >-
+          --ulimit nofile=262144:262144
+          --health-cmd "clickhouse-client --user cabinet --password cabinet-ci --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
@@ -105,6 +119,9 @@ jobs:
         # connections quickly keep them under the service's default of 100 connections
         CABINET_TEST_POSTGRES_CONNSTR: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Database=cabinet;Username=cabinet;Password=cabinet-ci;Maximum Pool Size=20;Connection Idle Lifetime=10;Connection Pruning Interval=5
         CABINET_TEST_OPENSEARCH_URL: http://localhost:${{ job.services.opensearch.ports['9200'] }}
+        CABINET_TEST_CLICKHOUSE_URL: http://localhost:${{ job.services.clickhouse.ports['8123'] }}
+        CABINET_TEST_CLICKHOUSE_USER: cabinet
+        CABINET_TEST_CLICKHOUSE_PASS: cabinet-ci
       run: dotnet test --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage"
 
     - name: PostgreSQL backup and restore drill

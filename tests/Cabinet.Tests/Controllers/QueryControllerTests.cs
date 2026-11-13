@@ -4,7 +4,6 @@ using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using Cabinet.Query;
 using Cabinet.Query.Bql;
-using Cabinet.Query.NaturalLanguage;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;

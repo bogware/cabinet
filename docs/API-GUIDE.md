@@ -628,7 +628,7 @@ Emitted events carry source type `detection` and are written below the detection
 
 ### Archive
 
-`GET /api/v1/archive` lists what each readable index has archived. `POST /api/v1/archive/rehydrate` with `index`, `from`, `to` and optionally `targetIndex` brings events back. See the deployment guide.
+`GET /api/v1/archive` lists what each readable index has archived. `POST /api/v1/archive/search` with `index`, `from`, `to` and `query` (BQL, SPL or plain words; `exact` runs it as typed) searches archived events where they are, without bringing them back, and answers like `/query/execute`. `POST /api/v1/archive/rehydrate` with `index`, `from`, `to` and optionally `targetIndex` brings events back. See the deployment guide.
 
 ### Reports
 

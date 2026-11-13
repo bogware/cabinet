@@ -15,6 +15,12 @@ public enum StorageBackend
     Memory,
     Postgres,
     OpenSearch,
+
+    /// <summary>Cabinet's own columnar engine, kept in files under <c>Storage:DataPath</c>.</summary>
+    Cabinet,
+
+    /// <summary>A ClickHouse server, for volumes past one machine's disk.</summary>
+    ClickHouse,
 }
 
 /// <summary>
@@ -39,23 +45,29 @@ public static class StorageRegistration
             "MEMORY" => StorageBackend.Memory,
             "POSTGRESQL" or "POSTGRES" => StorageBackend.Postgres,
             "OPENSEARCH" or "ELASTICSEARCH" => StorageBackend.OpenSearch,
+            "CABINET" or "ENGINE" => StorageBackend.Cabinet,
+            "CLICKHOUSE" => StorageBackend.ClickHouse,
             _ => StorageBackend.Sqlite,
         };
 
     /// <summary>
-    /// Where shared state lives. OpenSearch has no store for it, so it stays on a local SQLite
-    /// database unless <c>Storage:MetadataPostgresConnectionString</c> names a shared one.
+    /// Where shared state lives. OpenSearch and the Cabinet engine have no store for it, so it stays
+    /// on a local SQLite database unless <c>Storage:MetadataPostgresConnectionString</c> names a shared one.
     /// </summary>
     public static StorageBackend ResolveMetadataBackend(IConfiguration configuration)
     {
         var backend = ResolveBackend(configuration);
-        return backend == StorageBackend.OpenSearch && !string.IsNullOrEmpty(configuration["Storage:MetadataPostgresConnectionString"])
+        return HoldsEventsOnly(backend) && !string.IsNullOrEmpty(configuration["Storage:MetadataPostgresConnectionString"])
             ? StorageBackend.Postgres
             : backend;
     }
 
+    /// <summary>Whether a backend stores events but nothing else, so metadata goes elsewhere.</summary>
+    public static bool HoldsEventsOnly(StorageBackend backend) =>
+        backend is StorageBackend.OpenSearch or StorageBackend.Cabinet or StorageBackend.ClickHouse;
+
     private static string? ResolveMetadataPostgres(IConfiguration configuration) =>
-        ResolveBackend(configuration) == StorageBackend.OpenSearch
+        HoldsEventsOnly(ResolveBackend(configuration))
             ? configuration["Storage:MetadataPostgresConnectionString"]
             : configuration["Storage:ConnectionString"];
 

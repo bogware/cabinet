@@ -3,7 +3,6 @@ using System.Dynamic;
 using System.Runtime.CompilerServices;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
-using Cabinet.Query.NaturalLanguage;
 using Microsoft.Extensions.Logging;
 
 namespace Cabinet.Query.Bql;
@@ -18,7 +17,6 @@ public sealed class BqlQueryEngine : IQueryEngine
     private readonly ILogStorage _storage;
     private readonly BqlParser _parser;
     private readonly BqlOptimizer _optimizer;
-    private readonly INaturalLanguageTranslator? _nlTranslator;
     private readonly IKnowledgeStorage? _knowledgeStorage;
     private readonly ILogger<BqlQueryEngine> _logger;
     private readonly QueryLimits _limits;
@@ -34,7 +32,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         BqlParser parser,
         BqlOptimizer optimizer,
         ILogger<BqlQueryEngine> logger,
-        INaturalLanguageTranslator? nlTranslator = null,
         IKnowledgeStorage? knowledgeStorage = null,
         QueryLimits? limits = null)
     {
@@ -43,7 +40,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         _parser = parser;
         _optimizer = optimizer;
         _logger = logger;
-        _nlTranslator = nlTranslator;
         _knowledgeStorage = knowledgeStorage;
     }
 
@@ -61,16 +57,6 @@ public sealed class BqlQueryEngine : IQueryEngine
         var sw = Stopwatch.StartNew();
         var queryString = context.Query;
 
-        // Try natural language translation if available
-        if (_nlTranslator != null && _nlTranslator.IsNaturalLanguage(queryString))
-        {
-            var translation = await _nlTranslator.TranslateAsync(queryString, cancellationToken);
-            if (translation.Success && translation.BqlQuery != null)
-            {
-                _logger.LogDebug("NL translated: '{Original}' → '{BQL}'", queryString, translation.BqlQuery);
-                queryString = translation.BqlQuery;
-            }
-        }
 
         // Parse the query into a BQL AST
         var bqlQuery = _parser.ParseBql(queryString);
@@ -177,6 +163,10 @@ public sealed class BqlQueryEngine : IQueryEngine
                 [new AggregateFunction(timechart.Aggregation, timechart.AggregationField)],
                 timechart.ByField == null ? [] : [timechart.ByField],
                 timechart.Span),
+
+            // top and rare count each value as text, so only storage that writes values as .NET does can
+            TopStage { ByField: null } top => CountValuesRequest(optimized.StorageContext, top.Field),
+            RareStage rare => CountValuesRequest(optimized.StorageContext, rare.Field),
             _ => null,
         };
 
@@ -196,16 +186,21 @@ public sealed class BqlQueryEngine : IQueryEngine
             ? aggregate.Rows.Where(values => grouped.GroupByFields.All(f => values.TryGetValue(f, out var v) && v != null)).ToList()
             : aggregate.Rows;
         budget.CheckGroupCount(rows.Count);
-        IEnumerable<dynamic> result = rows.Select(values =>
+        IEnumerable<dynamic> result = optimized.RemainingStages[0] switch
         {
-            var row = new BqlRow();
-            foreach (var (key, value) in values)
+            TopStage top => new LegacyTopOperator(top.Count, top.Field).FromCounts(ValueCounts(rows, top.Field)),
+            RareStage rare => new LegacyRareOperator(rare.Count, rare.Field).FromCounts(ValueCounts(rows, rare.Field)),
+            _ => rows.Select(values =>
             {
-                row[key] = value;
-            }
+                var row = new BqlRow();
+                foreach (var (key, value) in values)
+                {
+                    row[key] = value;
+                }
 
-            return (dynamic)row;
-        }).ToList();
+                return (dynamic)row;
+            }).ToList(),
+        };
 
         foreach (var stage in optimized.RemainingStages.Skip(1))
         {
@@ -236,6 +231,25 @@ public sealed class BqlQueryEngine : IQueryEngine
             },
         };
     }
+
+    /// <summary>A count of each value of a field, grouped as top and rare group them.</summary>
+    private AggregateRequest CountValuesRequest(QueryContext filter, string field)
+    {
+        var unbounded = filter.Clone();
+        unbounded.Limit = QueryContext.MaxLimit;
+        return new AggregateRequest
+        {
+            Filter = unbounded,
+            GroupBy = [field],
+            Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count")],
+            MaxGroups = _limits.MaxGroups,
+            ExactTextKeys = true,
+        };
+    }
+
+    private static IEnumerable<KeyValuePair<string, long>> ValueCounts(IEnumerable<Dictionary<string, object?>> rows, string field) =>
+        rows.Where(row => row.TryGetValue(field, out var value) && value != null)
+            .Select(row => new KeyValuePair<string, long>(row[field]!.ToString() ?? string.Empty, Convert.ToInt64(row["count"], System.Globalization.CultureInfo.InvariantCulture)));
 
     private AggregateRequest? BuildAggregateRequest(
         QueryContext filter,
@@ -456,11 +470,16 @@ public sealed class BqlQueryEngine : IQueryEngine
     {
         EventCursor? after = null;
 
+        // With filters ahead of a sink that needs few rows, pages start near that many and grow,
+        // so "find x | search ... | head 100" doesn't read 10,000 matches to keep 100
+        var growing = plan.Sink.Remaining is { } needed ? Math.Clamp(needed, 100, PageSize) : PageSize;
+
         while (true)
         {
             // Without filters ahead of it, a sink needing few rows needs only that many events.
             var wanted = plan.RowOperators.Count == 0 ? plan.Sink.Remaining : null;
-            var pageSize = wanted is { } remaining ? Math.Clamp(remaining, 1, PageSize) : PageSize;
+            var pageSize = wanted is { } remaining ? Math.Clamp(remaining, 1, PageSize) : growing;
+            growing = Math.Min(PageSize, growing * 4);
 
             var page = template.Clone();
             page.Limit = pageSize;
@@ -560,16 +579,6 @@ public sealed class BqlQueryEngine : IQueryEngine
 
         var queryString = context.Query;
 
-        // Try natural language translation if available
-        if (_nlTranslator != null && _nlTranslator.IsNaturalLanguage(queryString))
-        {
-            var translation = await _nlTranslator.TranslateAsync(queryString, token);
-            if (translation.Success && translation.BqlQuery != null)
-            {
-                _logger.LogDebug("NL translated for stream: '{Original}' → '{BQL}'", queryString, translation.BqlQuery);
-                queryString = translation.BqlQuery;
-            }
-        }
 
         // Parse and optimize
         var bqlQuery = _parser.ParseBql(queryString);
