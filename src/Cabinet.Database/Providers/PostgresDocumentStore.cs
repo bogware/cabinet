@@ -169,7 +169,7 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
     /// hung socket), this instance stops counting itself the leader within this time, rather
     /// than carrying on beside whoever takes the lock next.
     /// </summary>
-    internal static readonly TimeSpan ConfirmationLasts = PollInterval * 2 + CheckTimeout;
+    public static readonly TimeSpan ConfirmationLasts = PollInterval * 2 + CheckTimeout;
 
     public PostgresLeaderLease(string connectionString, ILogger<PostgresLeaderLease> logger)
     {
