@@ -104,15 +104,22 @@ mkdir -p "$CONFIG_DIR"
 echo "[3/7] Checking for Cabinet binaries"
 
 BINARY_FOUND=false
-if [[ -f "$INSTALL_DIR/api/Cabinet.API" ]]; then
+if [[ -f "./Cabinet.API" ]]; then
+    # Run from a new release's folder, this installs or upgrades; settings and data are kept
+    if systemctl is-active --quiet cabinet-api 2>/dev/null; then
+        echo "  Stopping cabinet-api to replace it"
+        systemctl stop cabinet-api
+        RESTART_AFTER=true
+    fi
+    echo "  Copying the API from the current directory"
+    # Everything published beside it: the dashboard, settings and native libraries such as SQLite's
+    # but not appsettings.Production.json: it's a link to $CONFIG_DIR/appsettings.json, and
+    # copying over it would replace this server's settings with the release's defaults
+    find . -maxdepth 1 -mindepth 1 ! -name 'install-*.sh' ! -name 'appsettings.Production.json' -exec cp -r {} "$INSTALL_DIR/api/" \;
+    BINARY_FOUND=true
+elif [[ -f "$INSTALL_DIR/api/Cabinet.API" ]]; then
     BINARY_FOUND=true
     echo "  Found existing API binary"
-elif [[ -f "./Cabinet.API" ]]; then
-    echo "  Copying API binary from current directory"
-    cp -r ./Cabinet.API* "$INSTALL_DIR/api/" 2>/dev/null || true
-    cp -r ./appsettings*.json "$INSTALL_DIR/api/" 2>/dev/null || true
-    cp -r ./wwwroot "$INSTALL_DIR/api/" 2>/dev/null || true
-    BINARY_FOUND=true
 fi
 
 if [[ -f "./cabinet" ]] || [[ -f "./cabinet.dll" ]]; then
@@ -283,6 +290,10 @@ SVCEOF
 
     systemctl daemon-reload
     echo "  Systemd service installed: cabinet-api"
+    if [[ "${RESTART_AFTER:-false}" == true ]]; then
+        systemctl start cabinet-api
+        echo "  Started cabinet-api on the new version"
+    fi
 else
     echo "  Warning: systemd not found. You'll need to start Cabinet manually."
 fi

@@ -31,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Agents check the publisher's signature over the agent program their server offers, with the key built into the agent, so a server that has been taken over can't give agents a program the publisher didn't sign. The server passes the signature (`cabinet-agent-<platform>.sig` in the release) with its offer; agents before 3.0.1 ignore it. Agents from 3.0.1 don't update from servers before 3.0.1, which send no signature. `Agent:Update:AllowUnsigned` is the development-only escape hatch.
 - Workflows ask for the least permissions per job, pass inputs to scripts only through checked environment variables, and only the release job sees the signing key, which it removes when it's done.
 
+### Fixed
+
+- The Linux installer upgrades in place when run from a newer release: it stops the service, copies the new build and starts it again. It used to keep the old program if one was installed, and copying a release by hand over an install replaced the server's settings with the release's defaults, through the settings link.
+- The Linux installer copies everything published with the server, including SQLite's native library, which it left out.
+- The alert log went to a `cabinet` folder in the program's folder when the service account has no home, as Linux services don't; it goes beside the server's logs.
+- `scripts/build-release.sh` had a syntax error and couldn't run.
+
 ## [3.0.0] - 2026-11-13
 
 It has breaking changes to search semantics and single sign-on, listed under Changed.

@@ -117,17 +117,31 @@ public class FileAlertChannel : IAlertChannel
 
     public FileAlertChannel(string? filePath = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "cabinet",
-            "alerts.log"
-        );
+        _filePath = filePath ?? DefaultPath();
 
         var directory = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
+    }
+
+    /// <summary>
+    /// Beside the server's logs (CABINET_LOG_DIR, which Linux services set to their data folder),
+    /// else the user's local application data. A system account has none, and a relative path
+    /// would land in the program's folder, which a hardened service can't write.
+    /// </summary>
+    public static string DefaultPath()
+    {
+        if (Environment.GetEnvironmentVariable("CABINET_LOG_DIR") is { Length: > 0 } logs)
+        {
+            return Path.Combine(logs, "alerts.log");
+        }
+
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return string.IsNullOrEmpty(local)
+            ? Path.Combine(Path.GetTempPath(), "cabinet", "alerts.log")
+            : Path.Combine(local, "cabinet", "alerts.log");
     }
 
     public async Task SendAsync(Alert alert, CancellationToken cancellationToken = default)
