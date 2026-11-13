@@ -67,6 +67,20 @@ public sealed class CasesControllerTests
     }
 
     [Fact]
+    public async Task Cases_AreNumbered_OneMoreThanTheHighest()
+    {
+        var (controller, _, _) = await CreateAsync();
+        var first = (Case)((CreatedAtActionResult)await controller.Create(new CaseRequest { Title = "first" }, CancellationToken.None)).Value!;
+        var second = (Case)((CreatedAtActionResult)await controller.Create(new CaseRequest { Title = "second" }, CancellationToken.None)).Value!;
+        await controller.Delete(first.Id, CancellationToken.None);
+        var third = (Case)((CreatedAtActionResult)await controller.Create(new CaseRequest { Title = "third" }, CancellationToken.None)).Value!;
+
+        first.Number.Should().Be(1);
+        second.Number.Should().Be(2);
+        third.Number.Should().Be(3, "a number isn't given out again while a higher one exists");
+    }
+
+    [Fact]
     public async Task AddingTheSameEventTwice_KeepsOne()
     {
         var (controller, visible, _) = await CreateAsync();

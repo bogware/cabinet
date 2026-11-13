@@ -2,22 +2,32 @@
  * The search page: wires CabinetSearch's logic to the page. Log content only reaches the page
  * through esc() or CabinetSearch's escaping. Handlers are named in data-click attributes, as the
  * content security policy forbids inline script.
+ *
+ * Layout (Platinum 3a and 3c): the Ask field and the default Search button; "Understood as" with
+ * the sentence, one chip per pipeline step and the actions; a result card whose view (Ranked, Over
+ * time, Table, Events) is chosen from the query's shape and can be overridden per question; a
+ * right column with "Ask next", "About this result" and Save / Add to dashboard / Alert me. In the
+ * Events view the right column becomes the inspector: the selected event and the fields in these
+ * results.
  */
 
 const searchState = {
     range: { preset: '24h' },
     index: '',
+    indexes: [],
     zoom: [],
     results: null,
     rows: [],
     isEvents: true,
     view: 'events',
+    auto: { view: 'events', reason: '' },
+    overridden: false,
     page: 0,
     pageSize: 100,
     sort: { column: null, direction: 1 },
     selectedFields: [],
     openFields: new Set(),
-    expanded: new Set(),
+    selected: -1,
     buckets: [],
     spanMs: 0,
     total: null,
@@ -25,9 +35,11 @@ const searchState = {
     summary: [],
     running: 0,
     ranQuery: '',
+    query: '',
     suggestion: { items: [], active: -1, from: 0, to: 0 },
     understood: null,
     examples: [],
+    next: [],
     catalog: null,
     builder: { conditions: [] },
 };
@@ -40,9 +52,17 @@ const SEARCH_EXAMPLES = [
     'find * | top 10 host',
 ];
 
+/** The view someone chose for a question, kept per question in this browser. */
+const VIEW_CHOICES_KEY = 'cabinet_view_choices';
+
 function storedJson(key, fallback) {
     try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; }
     catch (e) { return fallback; }
+}
+
+function storeJson(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); }
+    catch (e) { console.warn('This browser would not keep a setting', e); }
 }
 
 function eventLimit() {
@@ -55,16 +75,18 @@ function initSearchPage() {
     searchState.selectedFields = storedJson('cabinet_selected_fields', ['Host', 'SourceType']);
     searchState.pageSize = parseInt(localStorage.getItem('cabinet_page_size'), 10) || 100;
     document.getElementById('resultPageSize').value = String(searchState.pageSize);
-    if (localStorage.getItem('cabinet_wrap') === 'false') document.getElementById('eventList').classList.add('nowrap');
-    if (localStorage.getItem('cabinet_fields_open') !== 'false') document.getElementById('fieldSidebar').hidden = false;
+    if (localStorage.getItem('cabinet_wrap') === 'true') document.getElementById('eventList').classList.add('wrap');
 
     const saved = localStorage.getItem('cabinet_default_range');
     if (saved !== null) searchState.range = saved === '' ? { preset: 'all' } : { preset: saved };
 
     renderPresets();
     renderTimeButton();
+    renderIndexPicker();
     renderQueryHistory();
     renderEmptyState();
+    renderResultsChrome();
+    renderAskNext();
     loadSearchIndexes();
 
     const input = document.getElementById('queryInput');
@@ -78,7 +100,6 @@ function initSearchPage() {
     input.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
     input.addEventListener('click', updateSuggestions);
 
-    document.getElementById('searchIndex').addEventListener('change', e => { searchState.index = e.target.value; if (searchState.ranQuery) executeQuery(); });
     document.getElementById('resultPageSize').addEventListener('change', e => {
         searchState.pageSize = parseInt(e.target.value, 10) || 100;
         localStorage.setItem('cabinet_page_size', String(searchState.pageSize));
@@ -86,14 +107,21 @@ function initSearchPage() {
         renderResultsView();
     });
     document.getElementById('fieldFilter').addEventListener('input', renderFields);
+    document.getElementById('eventList').addEventListener('keydown', onEventListKey);
 
     document.addEventListener('click', e => {
         if (!e.target.closest('.sx-time')) closeTimePicker();
         if (!e.target.closest('.sx-more')) closeSearchMenu();
+        if (!e.target.closest('.sx-pop')) closeIndexPicker();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeIndexPicker();
     });
 
     window.addEventListener('hashchange', () => restoreSearchFromHash(false));
-    window.addEventListener('resize', () => { if (searchState.buckets.length && !document.getElementById('timelinePanel').hidden) renderTimeline(); });
+    window.addEventListener('resize', () => {
+        if (searchState.buckets.length && !document.getElementById('timelinePanel').hidden) renderTimeline();
+    });
 
     ['builderWords', 'builderTime', 'builderShow', 'builderFn', 'builderField', 'builderColumns', 'builderBy', 'builderLimit'].forEach(id => {
         const el = document.getElementById(id);
@@ -116,24 +144,61 @@ function restoreSearchFromHash(onLoad) {
     searchState.range = state.range;
     searchState.index = state.index;
     searchState.zoom = [];
-    document.getElementById('searchIndex').value = state.index;
+    renderIndexPicker();
     renderTimeButton();
     if (state.query || !onLoad) executeQuery();
     return true;
 }
 
+/* ===== Index pop-up ===== */
+
 async function loadSearchIndexes() {
-    const select = document.getElementById('searchIndex');
     try {
         const data = await api('GET', '/api/v1/indexes');
         const items = Array.isArray(data) ? data : (data.indexes || data.data || []);
-        const names = items.map(i => typeof i === 'string' ? i : (i.name || i.index || i.Name)).filter(Boolean);
-        select.innerHTML = '<option value="">All indexes</option>' + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-        select.value = searchState.index;
+        searchState.indexes = items.map(i => typeof i === 'string' ? i : (i.name || i.index || i.Name)).filter(Boolean);
+        renderIndexPicker();
     } catch (e) {
-        // Without the list, searching every index still works
-        select.title = 'Indexes could not be listed: ' + e.message;
+        // Without the list, searching every index still works; the pop-up says why it's short
+        searchState.indexes = [];
+        document.getElementById('indexPickerButton').title = 'Indexes could not be listed: ' + e.message;
     }
+}
+
+function renderIndexPicker() {
+    document.getElementById('indexPickerValue').textContent = searchState.index || 'All';
+    const names = ['', ...searchState.indexes.filter(n => n !== '')];
+    if (searchState.index && !names.includes(searchState.index)) names.push(searchState.index);
+    document.getElementById('indexPicker').innerHTML = names.map(name =>
+        `<button type="button" class="menu-item" role="menuitemradio" aria-checked="${name === searchState.index}" data-click="chooseIndex" data-args="${esc(JSON.stringify([name]))}">` +
+        `<span>${name ? esc(name) : 'All indexes'}</span><span aria-hidden="true">${name === searchState.index ? '&#10003;' : ''}</span></button>`).join('');
+}
+
+function toggleIndexPicker() {
+    const menu = document.getElementById('indexPicker');
+    menu.hidden = !menu.hidden;
+    document.getElementById('indexPickerButton').setAttribute('aria-expanded', String(!menu.hidden));
+    if (!menu.hidden) {
+        closeTimePicker();
+        closeSearchMenu();
+        const current = menu.querySelector('[aria-checked="true"]') || menu.querySelector('button');
+        if (current) current.focus();
+    }
+}
+
+function closeIndexPicker() {
+    const menu = document.getElementById('indexPicker');
+    if (menu && !menu.hidden) {
+        menu.hidden = true;
+        document.getElementById('indexPickerButton').setAttribute('aria-expanded', 'false');
+    }
+}
+
+function chooseIndex(name) {
+    searchState.index = name;
+    closeIndexPicker();
+    renderIndexPicker();
+    if (searchState.ranQuery) executeQuery();
 }
 
 /* ===== Editor ===== */
@@ -151,7 +216,7 @@ function syncEditor() {
     // A trailing newline keeps the overlay's last line as tall as the textarea's
     document.getElementById('queryHighlight').innerHTML = CabinetSearch.highlightQuery(input.value) + '\n';
     input.style.height = 'auto';
-    input.style.height = Math.min(200, Math.max(38, input.scrollHeight + 2)) + 'px';
+    input.style.height = Math.min(200, Math.max(44, input.scrollHeight + 2)) + 'px';
     document.getElementById('queryHighlight').scrollTop = input.scrollTop;
 }
 
@@ -164,7 +229,6 @@ function knownFields() {
 function updateSuggestions() {
     const input = document.getElementById('queryInput');
     if (document.activeElement !== input) return;
-    const box = document.getElementById('querySuggestions');
     let items;
     let from = 0;
     let to = input.value.length;
@@ -279,10 +343,10 @@ function queryHasOwnTime(query) {
 }
 
 function renderTimeButton() {
-    const button = document.getElementById('timePickerButton');
     const query = document.getElementById('queryInput').value;
-    const label = queryHasOwnTime(query) ? 'Time set in query' : CabinetSearch.resolveRange(searchState.range).label;
-    button.innerHTML = `${esc(label)} &#9662;`;
+    const ownTime = queryHasOwnTime(query) || (query.trim() !== '' && query.trim() === searchState.ranQuery && queryHasOwnTime(searchState.query));
+    const label = ownTime ? 'Set in the question' : CabinetSearch.resolveRange(searchState.range).label;
+    document.getElementById('timePickerValue').textContent = label;
     renderPresets();
     const range = CabinetSearch.resolveRange(searchState.range);
     document.getElementById('timeFrom').value = CabinetSearch.toLocalInput(range.start);
@@ -294,6 +358,8 @@ function toggleTimePicker() {
     panel.hidden = !panel.hidden;
     document.getElementById('timePickerButton').setAttribute('aria-expanded', String(!panel.hidden));
     if (!panel.hidden) {
+        closeIndexPicker();
+        closeSearchMenu();
         const first = panel.querySelector('button[aria-pressed="true"]') || panel.querySelector('button');
         if (first) first.focus();
     }
@@ -350,11 +416,11 @@ function zoomOut() {
 async function executeQuery(exactQuery) {
     const input = document.getElementById('queryInput');
     const typed = input.value.trim() || 'find *';
-    const errorBox = document.getElementById('searchError');
     const button = document.getElementById('searchBtn');
     hideSuggestions();
     clearTimeout(previewTimer);
-    errorBox.style.display = 'none';
+    previewRequest++;
+    document.getElementById('searchError').style.display = 'none';
     renderTimeButton();
 
     const run = ++searchState.running;
@@ -374,8 +440,9 @@ async function executeQuery(exactQuery) {
                 searchState.results = null;
                 searchState.rows = [];
                 searchState.buckets = [];
+                searchState.selected = -1;
                 renderSearch();
-                renderStatus({ error: true });
+                renderStatus({ unclear: true });
                 button.disabled = false;
                 return;
             }
@@ -383,10 +450,10 @@ async function executeQuery(exactQuery) {
             query = understood.query;
         } catch (e) {
             // Without understanding, the server runs what was typed and says if it's wrong
-            renderUnderstood(null);
+            renderUnderstood({ kind: 'exact', query: typed, willRun: true }, false);
         }
     } else {
-        renderUnderstood(null);
+        renderUnderstood({ kind: 'exact', query: exactQuery, willRun: true }, false);
         renderProblems([]);
     }
 
@@ -398,19 +465,22 @@ async function executeQuery(exactQuery) {
     // Events: as many as the page shows. Anything computed: the server's own maximum.
     if (isEvents) body.limit = eventLimit();
 
-    // The timeline counts every match, so it also says how many there are in all
+    // The timeline counts every match by severity, so it also says how many there are in all
     const timelineStart = range.start ?? null;
     const timelineEnd = range.end ?? Date.now();
     let timelinePromise = Promise.resolve(null);
     let spanMs = 0;
+    const span = CabinetSearch.chooseSpan(timelineStart ?? timelineEnd - 30 * 86400000, timelineEnd);
     if (isEvents) {
-        const span = CabinetSearch.chooseSpan(timelineStart ?? timelineEnd - 30 * 86400000, timelineEnd);
         spanMs = span.ms;
-        const timelineQuery = CabinetSearch.timelineQuery(query, span.span);
-        if (timelineQuery) {
-            const timelineBody = { ...body, query: timelineQuery };
+        const bySeverity = CabinetSearch.severityTimelineQuery(query, span.span);
+        if (bySeverity) {
+            const timelineBody = { ...body, query: bySeverity };
             delete timelineBody.limit;
-            timelinePromise = api('POST', '/api/v1/query/execute', timelineBody).catch(() => null);
+            const plain = { ...timelineBody, query: CabinetSearch.timelineQuery(query, span.span) };
+            timelinePromise = api('POST', '/api/v1/query/execute', timelineBody)
+                .catch(() => api('POST', '/api/v1/query/execute', plain))
+                .catch(() => null);
         }
     }
 
@@ -421,9 +491,11 @@ async function executeQuery(exactQuery) {
         searchState.rows = data.results || [];
         searchState.isEvents = isEvents;
         searchState.page = 0;
-        searchState.expanded = new Set();
+        searchState.selected = isEvents && searchState.rows.length ? 0 : -1;
         searchState.sort = { column: null, direction: 1 };
         searchState.ranQuery = input.value.trim();
+        searchState.query = query;
+        searchState.span = span.span;
         searchState.terms = CabinetSearch.searchTerms(query);
         searchState.summary = isEvents ? CabinetSearch.summarizeFields(searchState.rows) : [];
         searchState.spanMs = spanMs;
@@ -438,15 +510,15 @@ async function executeQuery(exactQuery) {
 
         addToHistory(typed);
         history.replaceState({ page: 'search' }, '', '/' + CabinetSearch.encodeState({ query: searchState.ranQuery, range: searchState.range, index: searchState.index }));
-        // Events open on Events (or the table, if chosen); a computed result opens as a chart when it can be drawn
-        if (isEvents && searchState.view === 'chart') searchState.view = 'events';
-        if (!isEvents && searchState.view === 'events') searchState.view = CabinetCharts.shape(searchState.rows).kind === 'table' ? 'table' : 'chart';
+        pickView();
         renderSearch();
     } catch (e) {
         if (run !== searchState.running) return;
-        errorBox.textContent = e.message;
-        errorBox.style.display = 'block';
-        renderStatus({ error: true });
+        searchState.results = null;
+        searchState.rows = [];
+        searchState.buckets = [];
+        renderSearch();
+        renderStatus({ error: e.message });
     } finally {
         if (run === searchState.running) button.disabled = false;
     }
@@ -461,46 +533,254 @@ function showSearchResults(rows, label) {
     searchState.buckets = [];
     searchState.total = null;
     searchState.page = 0;
+    searchState.selected = searchState.isEvents && rows.length ? 0 : -1;
     searchState.terms = [];
-    searchState.view = searchState.isEvents ? 'events' : 'table';
+    searchState.query = '';
+    searchState.auto = searchState.isEvents
+        ? { view: 'events', reason: `Showing ${label}.` }
+        : { view: CabinetCharts.shape(rows).kind === 'bar' ? 'ranked' : 'table', reason: `Showing ${label}.` };
+    searchState.view = searchState.auto.view;
+    searchState.overridden = false;
+    renderUnderstood(null);
     renderSearch();
     renderStatus({ label });
 }
 
+/* ===== Choosing the view ===== */
+
+function viewKey() {
+    return (searchState.ranQuery || searchState.query || '').trim().toLowerCase();
+}
+
+/** The view from the question's shape, unless someone chose another for this question. */
+function pickView() {
+    searchState.auto = CabinetSearch.chooseView(searchState.query);
+    if (!searchState.isEvents && searchState.auto.view === 'events') searchState.auto = { view: 'table', reason: 'Chosen because this search builds a table of its own.' };
+    const chosen = storedJson(VIEW_CHOICES_KEY, {})[viewKey()];
+    const usable = chosen && (searchState.isEvents || chosen !== 'events');
+    searchState.view = usable ? chosen : searchState.auto.view;
+    searchState.overridden = !!usable && chosen !== searchState.auto.view;
+}
+
+function chooseResultView(view) {
+    const choices = storedJson(VIEW_CHOICES_KEY, {});
+    const key = viewKey();
+    if (key) {
+        if (view === searchState.auto.view) delete choices[key];
+        else choices[key] = view;
+        // Only the most recent questions are remembered
+        const keys = Object.keys(choices);
+        if (keys.length > 200) keys.slice(0, keys.length - 200).forEach(k => delete choices[k]);
+        storeJson(VIEW_CHOICES_KEY, choices);
+    }
+    searchState.view = view;
+    searchState.overridden = view !== searchState.auto.view;
+    searchState.page = 0;
+    renderSearch();
+}
+
+function useSuggestedView() {
+    chooseResultView(searchState.auto.view);
+}
+
+function showJsonView() {
+    closeSearchMenu();
+    searchState.view = 'json';
+    searchState.overridden = true;
+    renderSearch();
+}
+
+/* ===== Drawing the results ===== */
+
 function renderSearch() {
+    renderResultsChrome();
     renderStatus();
     renderTimeline();
-    renderFields();
-    selectTab(searchState.view);
+    renderSide();
     renderResultsView();
+}
+
+/** The result card's bar: the view switcher, why this view, and how many. */
+function renderResultsChrome() {
+    const has = !!searchState.results;
+    const view = searchState.view;
+    document.getElementById('viewSwitch').hidden = !has;
+    document.querySelectorAll('#viewSwitch [data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+    const reason = document.getElementById('viewReason');
+    if (!has) {
+        reason.innerHTML = '<span class="sx-reason-intro">Results appear here. The view is chosen from what you ask.</span>';
+    } else if (searchState.overridden && view !== 'json') {
+        reason.innerHTML = `You chose this view for this question. <button type="button" class="btn-link" data-click="useSuggestedView">Use the suggested view</button>`;
+    } else if (view === 'json') {
+        reason.innerHTML = `The rows as the server sent them. <button type="button" class="btn-link" data-click="useSuggestedView">Back to the suggested view</button>`;
+    } else {
+        reason.textContent = searchState.auto.reason;
+    }
+    const count = document.getElementById('resultCount');
+    if (!has) { count.textContent = ''; return; }
+    const shown = searchState.rows.length;
+    const total = searchState.isEvents && searchState.total !== null ? Math.max(searchState.total, shown) : shown;
+    count.textContent = `${fmt(total)} ${searchState.isEvents ? (total === 1 ? 'event' : 'events') : (total === 1 ? 'row' : 'rows')}`;
 }
 
 function renderStatus(options = {}) {
     const box = document.getElementById('searchStatus');
-    if (options.loading) { box.innerHTML = '<span class="sx-spinner" aria-hidden="true"></span><span>Searching...</span>'; return; }
-    if (options.error) { box.innerHTML = ''; return; }
+    if (options.loading) { box.innerHTML = loadingHtml('Searching…'); box.hidden = false; return; }
+    if (options.error) {
+        box.innerHTML = errorHtml(`The search didn't run: ${options.error}`, 'Edit the question', 'focusQuery');
+        box.hidden = false;
+        return;
+    }
+    if (options.unclear) {
+        box.innerHTML = errorHtml('Nothing ran, because the question wasn’t clear. Pick a reading above, or rephrase it.', 'Edit the question', 'focusQuery');
+        box.hidden = false;
+        return;
+    }
     const data = searchState.results;
-    if (!data) { box.innerHTML = ''; return; }
-    const parts = [];
-    const shown = searchState.rows.length;
-    if (options.label) parts.push(`<span>${esc(options.label)}</span>`);
-    if (searchState.isEvents && searchState.total !== null) {
-        parts.push(`<span><strong>${fmt(searchState.total)}</strong> matching events</span>`);
-        if (searchState.total > shown) parts.push(`<span>showing the newest ${fmt(shown)}</span>`);
-    } else {
-        parts.push(`<span><strong>${fmt(data.count)}</strong> ${searchState.isEvents ? 'events' : 'rows'}</span>`);
+    const notes = [];
+    if (options.label) notes.push(esc(options.label));
+    if (data) {
+        const shown = searchState.rows.length;
+        if (searchState.isEvents && searchState.total !== null && searchState.total > shown) {
+            notes.push(`Showing the newest ${fmt(shown)} of ${fmt(searchState.total)}${shown >= eventLimit() ? ` (loads up to ${fmt(eventLimit())}; change it in Settings, Display)` : ''}.`);
+        }
+        if (data.truncated) notes.push('<span class="sx-note-warn">Incomplete: a step held as many rows as a query may. Narrow the time range, or raise Query limits in Settings.</span>');
+    }
+    box.innerHTML = notes.map(n => `<span>${n}</span>`).join('');
+    box.hidden = notes.length === 0;
+}
+
+function focusQuery() {
+    const input = document.getElementById('queryInput');
+    input.focus();
+    input.select();
+}
+
+function renderResultsView() {
+    const view = searchState.view;
+    const shown = { events: view === 'events', table: view === 'table', chart: view === 'ranked' || view === 'timeseries', json: view === 'json' };
+    Object.entries(shown).forEach(([v, on]) => document.getElementById('resultView-' + v).classList.toggle('hide', !on));
+    if (!searchState.results) {
+        document.getElementById('resultView-events').classList.remove('hide');
+        ['table', 'chart', 'json'].forEach(v => document.getElementById('resultView-' + v).classList.add('hide'));
+        renderEvents();
+        document.getElementById('resultPager').hidden = true;
+        return;
     }
 
-    if (data.executionTimeMs !== undefined) parts.push(`<span>${fmt(data.executionTimeMs)} ms</span>`);
-    if (data.eventsScanned) parts.push(`<span>${fmt(data.eventsScanned)} events read</span>`);
-    if (data.pushedDown) parts.push('<span class="sx-note" title="The database computed this, rather than reading each event">computed in the database</span>');
-    if (data.truncated) parts.push('<span class="sx-note warn" title="A stage held as many rows as a query may; raise Query limits in Settings, or narrow the time range">incomplete: hit a row limit</span>');
-    if (data.approximate) parts.push('<span class="sx-note" title="Percentiles from a sample of the values">approximate percentiles</span>');
-    if (searchState.isEvents && searchState.total !== null && searchState.total > shown && shown >= eventLimit()) {
-        parts.push(`<span class="sx-note" title="Change it under Settings, Display">loads up to ${fmt(eventLimit())} events</span>`);
-    }
+    if (view === 'events') renderEvents();
+    else if (view === 'table') renderTable();
+    else if (view === 'ranked' || view === 'timeseries') renderChart(view);
+    else document.getElementById('resultView-json').textContent = JSON.stringify(searchState.rows.slice(0, 5000), null, 2) + (searchState.rows.length > 5000 ? '\n// first 5,000 shown; export for all' : '');
 
-    box.innerHTML = parts.join('');
+    const paged = (view === 'events' && searchState.isEvents) || view === 'table';
+    document.getElementById('resultPager').hidden = !paged || searchState.rows.length <= Math.min(25, searchState.pageSize);
+    if (paged) renderPager(searchState.rows.length);
+}
+
+function renderChart(view) {
+    const container = document.getElementById('chartContainer');
+    const rows = searchState.rows;
+    if (rows.length === 0) { container.innerHTML = '<div class="sx-empty">Nothing matched. Try a longer time range or fewer filters.</div>'; return; }
+    const viz = view === 'ranked' ? 'bar' : 'line';
+    const kind = CabinetCharts.shape(rows, viz).kind;
+    if (kind === 'table') {
+        const why = view === 'ranked'
+            ? (searchState.isEvents ? 'These are events, so there is nothing to rank yet. Ask for a count by a field, such as "count by host".' : 'These rows have no number to rank by, so here they are as a table.')
+            : (searchState.isEvents ? 'These are events. Ask how many over time, such as "count per hour", to see a chart.' : 'These rows have no times, so here they are as a table.');
+        container.innerHTML = `<p class="chart-note">${esc(why)}</p>` + CabinetCharts.tableHtml(CabinetSearch.columnsOf(rows), rows, 50);
+        return;
+    }
+    CabinetCharts.render(container, rows, { viz, height: 300, title: 'Search results' });
+}
+
+function renderEmptyState() {
+    const stored = typeof storedEventCount === 'number' ? `<p>${fmt(storedEventCount)} events stored.</p>` : '';
+    const examples = searchState.examples.length
+        ? searchState.examples
+        : SEARCH_EXAMPLES.map(q => ({ category: 'Examples', text: q, query: q }));
+    const groups = {};
+    examples.forEach(e => (groups[e.category] = groups[e.category] || []).push(e));
+    const gallery = Object.entries(groups).map(([category, items]) =>
+        `<div class="sx-gallery-group"><h4>${esc(category)}</h4>` +
+        items.map(e => `<button type="button" data-click="runExample" data-args="${esc(JSON.stringify([e.text]))}">${esc(e.text)}` +
+            `${e.query && e.query !== e.text ? `<code>${esc(e.query)}</code>` : ''}</button>`).join('') + '</div>').join('');
+    document.getElementById('searchEmpty').innerHTML =
+        `${stored}<p>Ask in plain words or write BQL. Start with one of these, or build a search by picking fields:</p><div class="sx-gallery">${gallery}</div>`;
+}
+
+/** Starter questions that fit the data the caller can read. */
+async function loadExamples() {
+    try {
+        const examples = await api('GET', '/api/v1/query/examples');
+        if (Array.isArray(examples)) {
+            searchState.examples = examples;
+            if (!searchState.results) renderEmptyState();
+            renderAskNext();
+        }
+    } catch (e) {
+        // The built-in examples stay
+    }
+}
+
+/* ===== The right column ===== */
+
+function renderSide() {
+    const side = document.getElementById('searchSide');
+    const inspecting = !!searchState.results && searchState.view === 'events' && searchState.isEvents;
+    side.classList.toggle('sx-side-wide', inspecting);
+    document.getElementById('eventInspector').hidden = !inspecting;
+    document.getElementById('fieldSidebar').hidden = !inspecting;
+    document.getElementById('askNext').hidden = inspecting;
+    if (inspecting) { renderInspector(); renderFields(); }
+    else renderAskNext();
+    renderAbout();
+}
+
+function renderAbout() {
+    const box = document.getElementById('aboutResult');
+    const data = searchState.results;
+    box.hidden = !data;
+    if (!data) return;
+    const item = (label, value) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`;
+    const rows = searchState.rows.length;
+    const where = data.pushedDown ? 'Computed in storage' : (data.eventsScanned ? 'Read event by event' : (searchState.query ? 'In Cabinet' : 'From a background search'));
+    let html = item('Rows', fmt(rows));
+    if (data.executionTimeMs !== undefined) html += item('Took', `${fmt(data.executionTimeMs)} ms`);
+    if (data.eventsScanned) html += item('Read', `${fmt(data.eventsScanned)} ${data.eventsScanned === 1 ? 'event' : 'events'}`);
+    html += item('Where', where);
+    if (data.approximate) html += item('Note', 'Percentiles from a sample of the values');
+    if (data.truncated) html += item('Note', 'Incomplete: hit a row limit');
+    document.getElementById('aboutResultBody').innerHTML = html;
+}
+
+function renderAskNext() {
+    const body = document.getElementById('askNextBody');
+    if (!body) return;
+    const items = [];
+    if (searchState.results && searchState.query) {
+        CabinetSearch.followUps(searchState.query, {
+            rows: searchState.rows,
+            fields: searchState.summary.map(f => f.name),
+            span: searchState.span,
+        }).forEach(f => items.push({ label: f.label, query: f.query, exact: true }));
+    }
+    const current = (searchState.ranQuery || '').toLowerCase();
+    const starters = searchState.examples.length ? searchState.examples : SEARCH_EXAMPLES.map(q => ({ text: q }));
+    starters.filter(e => e.text.toLowerCase() !== current && !items.some(i => i.label === e.text))
+        .slice(0, Math.max(0, 5 - items.length))
+        .forEach(e => items.push({ label: e.text, query: e.text, exact: false }));
+    searchState.next = items;
+    body.innerHTML = items.length
+        ? items.map((item, i) => `<button type="button" class="sx-next-item" data-click="runNext" data-args="[${i}]">${esc(item.label)}</button>`).join('')
+        : '<p class="sx-side-note">Questions to try appear after your first search.</p>';
+}
+
+function runNext(index) {
+    const item = searchState.next[index];
+    if (!item) return;
+    setQuery(item.query);
+    if (item.exact) executeQuery(item.query); else executeQuery();
 }
 
 /* ===== Timeline ===== */
@@ -508,19 +788,21 @@ function renderStatus(options = {}) {
 function renderTimeline() {
     const panel = document.getElementById('timelinePanel');
     const buckets = searchState.buckets;
-    if (!searchState.isEvents || buckets.length === 0) { panel.hidden = true; return; }
+    if (!searchState.results || !searchState.isEvents || searchState.view !== 'events' || buckets.length === 0) { panel.hidden = true; return; }
     panel.hidden = false;
     document.getElementById('timelineZoomOut').hidden = searchState.zoom.length === 0;
-    document.getElementById('timelineTitle').innerHTML = `<strong>Events over time</strong>, ${esc(CabinetSearch.spanLabel(searchState.spanMs))} per bar`;
+    const warnings = buckets.reduce((sum, b) => sum + (b.warn || 0), 0);
+    document.getElementById('timelineTitle').innerHTML = `<strong>${esc(CabinetSearch.spanLabel(searchState.spanMs))} per bar</strong>` +
+        (warnings ? ` <span class="sx-legend-warn">${esc(fmt(warnings))} warnings or worse</span>` : '');
 
     const plot = document.getElementById('timelinePlot');
     const width = Math.max(320, Math.round(plot.clientWidth || 800));
-    const height = 96;
-    plot.innerHTML = CabinetSearch.timelineSvg(buckets, width, height, null) + '<div class="chart-tooltip" hidden></div>';
+    const height = 64;
+    plot.innerHTML = CabinetSearch.timelineSvg(buckets, width, height, null, { compact: true }) + '<div class="chart-tooltip" hidden></div>';
     const svg = plot.querySelector('svg');
     const tooltip = plot.querySelector('.chart-tooltip');
     if (!svg) return;
-    const layout = CabinetSearch.timelineLayout(buckets, width, height);
+    const layout = CabinetSearch.timelineLayout(buckets, width, height, true);
     const hover = svg.querySelector('.chart-hover');
     const toIndex = event => {
         const rect = svg.getBoundingClientRect();
@@ -532,9 +814,10 @@ function renderTimeline() {
     const show = i => {
         current = i;
         const b = buckets[i];
-        hover.innerHTML = `<rect x="${layout.x(i).toFixed(1)}" y="${layout.margin.top}" width="${layout.step.toFixed(1)}" height="${layout.plotHeight}" fill="var(--text-primary)" fill-opacity="0.06"/>`;
+        hover.innerHTML = `<rect x="${layout.x(i).toFixed(1)}" y="${layout.margin.top}" width="${layout.step.toFixed(1)}" height="${layout.plotHeight}" fill="var(--ink)" fill-opacity="0.06"/>`;
         tooltip.innerHTML = `<div class="chart-tooltip-title">${esc(CabinetSearch.formatDateTime(b.start))} to ${esc(CabinetSearch.formatDateTime(b.end))}</div>` +
-            `<div class="chart-tooltip-row"><span class="chart-swatch" style="background:var(--series-1)"></span><span>Events</span><strong>${esc(fmt(b.count))}</strong></div>`;
+            `<div class="chart-tooltip-row"><span class="chart-swatch" style="background:var(--moss)"></span><span>Events</span><strong>${esc(fmt(b.count))}</strong></div>` +
+            (b.warn ? `<div class="chart-tooltip-row"><span class="chart-swatch" style="background:var(--amber-bottom)"></span><span>Warnings or worse</span><strong>${esc(fmt(b.warn))}</strong></div>` : '');
         tooltip.hidden = false;
         const rect = svg.getBoundingClientRect();
         const left = (layout.x(i) / width) * rect.width;
@@ -588,14 +871,7 @@ function renderTimeline() {
     });
 }
 
-/* ===== Fields ===== */
-
-function toggleFieldSidebar() {
-    const sidebar = document.getElementById('fieldSidebar');
-    sidebar.hidden = !sidebar.hidden;
-    localStorage.setItem('cabinet_fields_open', String(!sidebar.hidden));
-    if (!sidebar.hidden) renderFields();
-}
+/* ===== Fields in these results ===== */
 
 function fieldArgs(...values) {
     return esc(JSON.stringify(values));
@@ -606,55 +882,48 @@ function renderFields() {
     const body = document.getElementById('fieldSidebarBody');
     if (sidebar.hidden) return;
     const all = searchState.summary;
-    if (!searchState.isEvents || all.length === 0) {
-        document.getElementById('fieldCount').textContent = 'Fields';
-        body.innerHTML = `<div class="sx-empty">${searchState.results ? 'Fields appear for searches that return events.' : 'Run a search to see its fields.'}</div>`;
+    if (all.length === 0) {
+        body.innerHTML = '<p class="sx-side-note">Fields appear for searches that return events.</p>';
         return;
     }
 
     const filter = document.getElementById('fieldFilter').value.trim().toLowerCase();
     const shown = all.filter(f => !filter || f.name.toLowerCase().includes(filter));
-    document.getElementById('fieldCount').textContent = `${all.length} fields`;
-    const selected = shown.filter(f => searchState.selectedFields.includes(f.name));
-    const others = shown.filter(f => !searchState.selectedFields.includes(f.name));
     const total = searchState.rows.length;
 
     const fieldHtml = f => {
         const open = searchState.openFields.has(f.name);
-        const meta = `${Math.round(f.coverage * 100)}% &middot; ${f.distinctIsLowerBound ? '&gt;' : ''}${fmt(f.distinct)}`;
+        const values = `${f.distinctIsLowerBound ? 'over ' : ''}${fmt(f.distinct)} ${f.distinct === 1 ? 'value' : 'values'}`;
         let detail = '';
         if (open) {
-            const stats = [`In ${fmt(f.count)} of ${fmt(total)} events loaded`, `${f.distinctIsLowerBound ? 'over ' : ''}${fmt(f.distinct)} distinct values`];
-            if (f.numeric) stats.push(`min ${fmt(f.numeric.min)}, max ${fmt(f.numeric.max)}, mean ${CabinetCharts.formatNumber(f.numeric.mean)}`);
+            const stats = [`In ${fmt(f.count)} of ${fmt(total)} events loaded`];
+            if (f.numeric) stats.push(`lowest ${fmt(f.numeric.min)}, highest ${fmt(f.numeric.max)}, average ${CabinetCharts.formatNumber(f.numeric.mean)}`);
             const canFilter = CabinetSearch.fieldName(f.name) !== null;
-            const values = f.top.map(v => `
+            const rows = f.top.map(v => `
                 <div class="sx-value">
                     <span class="sx-value-label" title="${esc(v.value)}">${esc(v.value)}</span>
                     <span class="sx-value-count">${fmt(v.count)} &middot; ${(v.share * 100).toFixed(v.share < 0.1 ? 1 : 0)}%</span>
-                    <span>${canFilter ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, false)}">+</button>
-                    <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, true)}">&minus;</button>` : ''}</span>
+                    <span class="sx-mini-group">${canFilter ? `<button type="button" class="sx-mini" aria-label="Only events where ${esc(f.name)} is ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, false)}">Only</button><button type="button" class="sx-mini" aria-label="Hide events where ${esc(f.name)} is ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, true)}">Hide</button>` : ''}</span>
                     <span class="sx-value-bar"><span style="width:${(v.share * 100).toFixed(1)}%"></span></span>
                 </div>`).join('');
             const name = CabinetSearch.fieldName(f.name);
             detail = `<div class="sx-field-detail">
                 <div class="sx-field-stats">${stats.map(esc).join('<br>')}</div>
-                ${values}
+                ${rows}
                 <div class="sx-field-actions">
-                    <button type="button" class="btn btn-secondary btn-sm" data-click="toggleColumn" data-args="${fieldArgs(f.name)}">${searchState.selectedFields.includes(f.name) ? 'Remove from events' : 'Show in events'}</button>
-                    ${name ? `<button type="button" class="btn btn-secondary btn-sm" data-click="runFieldReport" data-args="${fieldArgs(f.name, 'top')}">Top values, all events</button>
-                    <button type="button" class="btn btn-secondary btn-sm" data-click="runFieldReport" data-args="${fieldArgs(f.name, 'time')}">${f.numeric ? 'Average over time' : 'Count over time'}</button>` : ''}
+                    <button type="button" class="btn btn-sm" data-click="toggleColumn" data-args="${fieldArgs(f.name)}">${searchState.selectedFields.includes(f.name) ? 'Remove from the rows' : 'Show in the rows'}</button>
+                    ${name ? `<button type="button" class="btn btn-sm" data-click="runFieldReport" data-args="${fieldArgs(f.name, 'top')}">Top values</button>
+                    <button type="button" class="btn btn-sm" data-click="runFieldReport" data-args="${fieldArgs(f.name, 'time')}">${f.numeric ? 'Average over time' : 'Count over time'}</button>` : ''}
                 </div>
             </div>`;
         }
 
-        return `<div class="sx-field"><button type="button" aria-expanded="${open}" data-click="toggleFieldDetail" data-args="${fieldArgs(f.name)}">
-            <span class="sx-field-name" title="${esc(f.name)}">${esc(f.name)}</span><span class="sx-field-meta" title="Share of events with it, and distinct values">${meta}</span></button>${detail}</div>`;
+        return `<div class="sx-field${open ? ' open' : ''}"><button type="button" class="sx-field-row" aria-expanded="${open}" data-click="toggleFieldDetail" data-args="${fieldArgs(f.name)}">
+            <span class="sx-field-name" title="${esc(f.name)}">${esc(f.name)}</span><span class="sx-field-meta">${values}</span><span class="sx-field-cover" title="Share of loaded events that have it">${Math.round(f.coverage * 100)}%</span></button>${detail}</div>`;
     };
 
-    body.innerHTML =
-        (selected.length ? `<div class="sx-fields-section">Shown in events</div>${selected.map(fieldHtml).join('')}` : '') +
-        (others.length ? `<div class="sx-fields-section">${selected.length ? 'Other fields' : 'Fields'}</div>${others.map(fieldHtml).join('')}` : '') +
-        (shown.length === 0 ? '<div class="sx-empty">No field matches.</div>' : '');
+    document.getElementById('fieldCount').textContent = `Fields in these results`;
+    body.innerHTML = shown.length ? shown.map(fieldHtml).join('') : '<p class="sx-side-note">No field matches.</p>';
 }
 
 function toggleFieldDetail(name) {
@@ -672,8 +941,9 @@ function toggleColumn(name) {
     renderResultsView();
 }
 
+/** Only or Hide: adds the filter to the question and runs it again, so "Understood as" follows. */
 function applyFilter(field, value, exclude) {
-    const current = document.getElementById('queryInput').value.trim() || searchState.ranQuery || 'find *';
+    const current = searchState.query || document.getElementById('queryInput').value.trim() || 'find *';
     const next = CabinetSearch.addFilter(current, field, value, exclude);
     if (next === null) { toast(`"${field}" can't be named in a query`, 'error'); return; }
     setQuery(next);
@@ -692,7 +962,7 @@ function filterOnEvent(index, field, exclude) {
 function runFieldReport(field, kind) {
     const name = CabinetSearch.fieldName(field);
     if (!name) return;
-    const base = CabinetSearch.baseSearch(document.getElementById('queryInput').value.trim() || searchState.ranQuery || 'find *');
+    const base = CabinetSearch.baseSearch(searchState.query || document.getElementById('queryInput').value.trim() || 'find *');
     const summary = searchState.summary.find(f => f.name === field);
     const span = CabinetSearch.chooseSpan(...(() => { const r = CabinetSearch.resolveRange(searchState.range); const end = r.end ?? Date.now(); return [r.start ?? end - 7 * 86400000, end]; })()).span;
     const query = kind === 'top'
@@ -700,83 +970,6 @@ function runFieldReport(field, kind) {
         : summary && summary.numeric ? `${base} | timechart span=${span} avg(${name})` : `${base} | timechart span=${span} count by ${name}`;
     setQuery(query);
     executeQuery();
-}
-
-/* ===== Results ===== */
-
-function selectTab(view) {
-    searchState.view = view;
-    document.querySelectorAll('#resultTabs .tab').forEach(tab => {
-        const active = tab.dataset.args.includes(`"${view}"`);
-        tab.classList.toggle('active', active);
-        if (active && typeof markTabSelected === 'function') markTabSelected(tab);
-    });
-    ['events', 'table', 'chart', 'json'].forEach(v => document.getElementById('resultView-' + v).classList.toggle('hide', v !== view));
-}
-
-function switchResultTab(view) {
-    selectTab(view);
-    renderResultsView();
-}
-
-function sortedRows() {
-    const { column, direction } = searchState.sort;
-    if (!column) return searchState.rows;
-    const value = row => row[column];
-    return [...searchState.rows].sort((a, b) => {
-        const x = value(a);
-        const y = value(b);
-        if (x === y) return 0;
-        if (x === null || x === undefined) return 1;
-        if (y === null || y === undefined) return -1;
-        return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })) * direction;
-    });
-}
-
-function renderPager(count) {
-    const pages = Math.max(1, Math.ceil(count / searchState.pageSize));
-    searchState.page = Math.min(searchState.page, pages - 1);
-    const first = count === 0 ? 0 : searchState.page * searchState.pageSize + 1;
-    const last = Math.min(count, (searchState.page + 1) * searchState.pageSize);
-    document.getElementById('pageInfo').textContent = count === 0 ? '' : `${fmt(first)}-${fmt(last)} of ${fmt(count)}`;
-}
-
-function renderResultsView() {
-    const view = searchState.view;
-    if (view === 'events') renderEvents();
-    else if (view === 'table') renderTable();
-    else if (view === 'chart') CabinetCharts.render(document.getElementById('chartContainer'), searchState.rows, { height: 320, title: 'Search results' });
-    else document.getElementById('resultView-json').textContent = JSON.stringify(searchState.rows.slice(0, 5000), null, 2) + (searchState.rows.length > 5000 ? '\n// first 5,000 shown; export for all' : '');
-    if (view === 'events' || view === 'table') renderPager(searchState.rows.length);
-    else document.getElementById('pageInfo').textContent = '';
-}
-
-function renderEmptyState() {
-    const stored = typeof storedEventCount === 'number' ? `<p>${fmt(storedEventCount)} events stored.</p>` : '';
-    const examples = searchState.examples.length
-        ? searchState.examples
-        : SEARCH_EXAMPLES.map(q => ({ category: 'Examples', text: q, query: q }));
-    const groups = {};
-    examples.forEach(e => (groups[e.category] = groups[e.category] || []).push(e));
-    const gallery = Object.entries(groups).map(([category, items]) =>
-        `<div class="sx-gallery-group"><h4>${esc(category)}</h4>` +
-        items.map(e => `<button type="button" data-click="runExample" data-args="${esc(JSON.stringify([e.text]))}">${esc(e.text)}` +
-            `${e.query && e.query !== e.text ? `<code>${esc(e.query)}</code>` : ''}</button>`).join('') + '</div>').join('');
-    document.getElementById('searchEmpty').innerHTML =
-        `${stored}<p>Ask in plain words or write BQL. Start with one of these, or press <kbd>Build</kbd> to pick fields:</p><div class="sx-gallery">${gallery}</div>`;
-}
-
-/** Starter questions that fit the data the caller can read. */
-async function loadExamples() {
-    try {
-        const examples = await api('GET', '/api/v1/query/examples');
-        if (Array.isArray(examples)) {
-            searchState.examples = examples;
-            if (!searchState.results) renderEmptyState();
-        }
-    } catch (e) {
-        // The built-in examples stay
-    }
 }
 
 /* ===== Understanding ===== */
@@ -793,12 +986,12 @@ function schedulePreview() {
 async function previewUnderstanding() {
     const text = document.getElementById('queryInput').value.trim();
     const ask = ++previewRequest;
-    if (!text) { renderUnderstood(null); renderProblems([]); return; }
+    if (!text) { renderProblems([]); return; }
     try {
         const understood = await api('POST', '/api/v1/query/understand', { query: text });
         if (ask !== previewRequest || document.getElementById('queryInput').value.trim() !== text) return;
         // Half-typed queries are often unclear; underline them, and say more only when searching
-        renderUnderstood(understood.willRun ? understood : null, true);
+        if (understood.willRun) renderUnderstood(understood, true);
         renderProblems(understood.problems);
     } catch (e) {
         // Previews are a nicety; searching still says what's wrong
@@ -810,35 +1003,52 @@ function renderProblems(problems) {
     document.getElementById('queryProblems').innerHTML = CabinetSearch.markProblems(input.value, problems || []) + '\n';
 }
 
-/** Shows what a search was (or would be) understood as. Hidden for a query run exactly as typed. */
+/** The alternative that runs the typed words exactly, which has its own button. */
+function exactWordsChoice(u) {
+    return (u.alternatives || []).findIndex(a => /exact words/i.test(a.description || '') || (a.query === u.input && u.kind === 'natural'));
+}
+
+/**
+ * Shows what a search was (or would be) understood as: the sentence with its key terms in bold,
+ * a chip per pipeline step, and the actions. A query run exactly is shown too, in its own words.
+ */
 function renderUnderstood(u, preview) {
     const box = document.getElementById('searchUnderstood');
     searchState.understood = u;
-    if (!u || (u.kind === 'exact' && !(u.problems || []).length)) { box.hidden = true; box.innerHTML = ''; return; }
+    if (!u) { box.hidden = true; box.innerHTML = ''; return; }
 
-    const chips = [];
+    const actions = [];
+    const exactIndex = exactWordsChoice(u);
+    if (u.willRun && u.query) actions.push('<button type="button" class="btn sx-u-btn" data-click="editUnderstood">Edit query</button>');
+    if (exactIndex >= 0) actions.push('<button type="button" class="btn sx-u-btn sx-u-plain" data-click="runExactWords">Search these exact words instead</button>');
     (u.problems || []).forEach((p, i) => {
-        if (p.fix) chips.push(`<button type="button" class="sx-chip fix" data-click="applyProblemFix" data-args="[${i}]">Fix: <code>${esc(p.fix)}</code></button>`);
+        if (p.fix) actions.push(`<button type="button" class="sx-chip fix" data-click="applyProblemFix" data-args="[${i}]">Fix: <code>${esc(p.fix)}</code></button>`);
     });
     (u.alternatives || []).forEach((a, i) => {
-        chips.push(`<button type="button" class="sx-chip" data-click="runAlternative" data-args="[${i}]">${esc(a.description)}<span class="sx-chip-note">${esc(a.query)}</span></button>`);
+        if (i === exactIndex) return;
+        actions.push(`<button type="button" class="sx-chip" data-click="runAlternative" data-args="[${i}]">${esc(a.description)}<span class="sx-chip-note">${esc(a.query)}</span></button>`);
     });
-    if (u.suggestAssistant) chips.push('<button type="button" class="sx-chip" data-click="askAssistant">Ask the assistant</button>');
+    if (u.suggestAssistant) actions.push('<button type="button" class="sx-chip" data-click="askAssistant">Ask the AI investigator</button>');
+    const typos = (u.corrections || []).map(c => `“${esc(c.from)}” &rarr; ${esc(c.to)}`);
+    const typoNote = typos.length ? `<span class="sx-typo">Fixed ${typos.length === 1 ? 'typo' : 'typos'}: ${typos.join(', ')}</span>` : '';
 
-    const corrections = (u.corrections || []).map(c => `<span class="sx-correction"><s>${esc(c.from)}</s> &rarr; ${esc(c.to)}</span>`).join(' ');
-    let head;
+    let body;
     if (!u.willRun) {
         const message = (u.problems || [])[0]?.message || "Couldn't tell what this asks for.";
-        head = `<div class="sx-understood-head"><strong>Not sure what you mean.</strong><span>${esc(message)}</span></div>`;
+        body = `<h2 class="group-panel-title">Not sure what you mean</h2><p class="sx-say">${esc(message)}</p>`;
     } else {
-        const label = preview ? 'Will search' : (u.kind === 'corrected' ? 'Corrected to' : 'Understood as');
-        head = `<div class="sx-understood-head"><strong>${label}</strong><code>${CabinetSearch.highlightQuery(u.query || '')}</code>` +
-            `<button type="button" class="sx-chip" data-click="editUnderstood">Edit</button></div>` +
-            (u.explanation ? `<div class="sx-understood-say">${esc(u.explanation)}</div>` : '');
+        const steps = CabinetSearch.pipelineSteps(u.query || '');
+        const sentence = u.explanation ? u.explanation.replace(/\s*$/, '').replace(/([^.!?])$/, '$1.') : CabinetSearch.sentenceFor(u.query || '');
+        const chips = steps.map((s, i) =>
+            `${i > 0 ? '<span class="sx-pipe" aria-hidden="true">|</span>' : ''}<button type="button" class="sx-step" data-click="editStep" data-args="[${i}]" title="Edit this step">` +
+            `<code>${esc(s.code)}</code><span>${esc(s.words)}</span></button>`).join('');
+        body = `<h2 class="group-panel-title">${preview ? 'Will search' : 'Understood as'}</h2>` +
+            `<p class="sx-say">${CabinetSearch.emphasize(sentence, u.query || '')}</p>` +
+            `<div class="sx-steps" aria-label="Steps, each a part of the query">${chips}</div>`;
     }
 
-    box.className = 'sx-understood' + (u.willRun ? '' : ' unclear') + (preview ? ' preview' : '');
-    box.innerHTML = head + (corrections ? `<div>Read ${corrections}</div>` : '') + (chips.length ? `<div class="sx-understood-actions">${chips.join('')}</div>` : '');
+    box.className = 'group-panel sx-understood' + (u.willRun ? '' : ' unclear') + (preview ? ' preview' : '');
+    box.innerHTML = body + (actions.length || typoNote ? `<div class="sx-understood-actions">${actions.join('')}<span class="sx-flex"></span>${typoNote}</div>` : '');
     box.hidden = false;
 }
 
@@ -847,9 +1057,33 @@ function editUnderstood() {
     const u = searchState.understood;
     if (!u || !u.query) return;
     setQuery(u.query);
-    renderUnderstood(null);
     renderProblems([]);
-    document.getElementById('queryInput').focus();
+    const input = document.getElementById('queryInput');
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+}
+
+/** Clicking a step puts the query in the box with that step selected, ready to change. */
+function editStep(index) {
+    const u = searchState.understood;
+    if (!u || !u.query) return;
+    const step = CabinetSearch.pipelineSteps(u.query)[index];
+    if (!step) return;
+    setQuery(u.query);
+    renderProblems([]);
+    const input = document.getElementById('queryInput');
+    input.focus();
+    input.setSelectionRange(step.start, step.end);
+    document.querySelectorAll('#searchUnderstood .sx-step').forEach((el, i) => el.classList.toggle('editing', i === index));
+}
+
+/** Runs what was typed as plain words, not as the reading. */
+function runExactWords() {
+    const u = searchState.understood;
+    if (!u) return;
+    const index = exactWordsChoice(u);
+    if (index >= 0) runAlternative(index);
+    else executeQuery(document.getElementById('queryInput').value.trim());
 }
 
 /** Runs one of the other readings, exactly. */
@@ -884,6 +1118,7 @@ async function toggleBuilder() {
     const button = document.getElementById('builderButton');
     panel.hidden = !panel.hidden;
     button.setAttribute('aria-expanded', String(!panel.hidden));
+    button.textContent = panel.hidden ? 'Build a search by picking fields…' : 'Close the search builder';
     if (panel.hidden) return;
     if (!searchState.catalog) {
         try { searchState.catalog = await api('GET', '/api/v1/query/catalog'); }
@@ -919,7 +1154,7 @@ function renderBuilderConditions() {
             `<select data-cond="${i}" data-part="op" aria-label="Comparison">${ops.map(([v, l]) => `<option value="${esc(v)}"${v === c.op ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>` +
             `<input data-cond="${i}" data-part="value" aria-label="Value" list="builderValues${i}" value="${esc(c.value)}" placeholder="Value">` +
             `<datalist id="builderValues${i}">${values.map(v => `<option value="${esc(v)}">`).join('')}</datalist>` +
-            `<button type="button" class="btn btn-secondary btn-sm" data-click="removeBuilderCondition" data-args="[${i}]" aria-label="Remove condition">&times;</button></div>`;
+            `<button type="button" class="btn btn-sm" data-click="removeBuilderCondition" data-args="[${i}]" >Remove</button></div>`;
     }).join('');
     document.querySelectorAll('#builderConditions [data-cond]').forEach(el => {
         const update = () => {
@@ -970,65 +1205,121 @@ function runExample(query) {
     executeQuery();
 }
 
+/* ===== Events ===== */
+
+const SEVERITY_CHIPS = ['chip-muted', 'chip-muted', 'chip-muted', 'chip-warn', 'chip-danger', 'chip-danger', 'chip-danger'];
+
+/** A row's time, short enough for its column: "Nov 13, 9:14:02 AM" unless Settings ask for another form. */
+function rowTime(ts) {
+    const format = localStorage.getItem('cabinet_ts_format') || 'local';
+    if (format !== 'local') return fmtTime(ts);
+    const ms = CabinetSearch.parseTime(ts);
+    if (Number.isNaN(ms)) return '-';
+    return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function severityName(value) {
+    const level = CabinetSearch.severityLevel(value);
+    return Number.isNaN(level) ? String(value ?? '') : (CabinetSearch.SEVERITIES[level] || String(value));
+}
+
+function rowMessage(row) {
+    const message = row.Message ?? row.message;
+    return typeof message === 'string' && message.trim() !== '' ? message : (row.RawLine ?? row._raw ?? '');
+}
+
 function renderEvents() {
     const list = document.getElementById('eventList');
     const empty = document.getElementById('searchEmpty');
     if (!searchState.results) { list.innerHTML = ''; empty.hidden = false; return; }
     empty.hidden = true;
     if (!searchState.isEvents) {
-        list.innerHTML = '<li class="sx-empty">This search returns a table. See the Table and Chart tabs.</li>';
+        list.innerHTML = '<div class="sx-empty">This search returns a table, not events. Choose Ranked, Over time or Table.</div>';
         return;
     }
 
     const rows = searchState.rows;
     if (rows.length === 0) {
-        list.innerHTML = `<li class="sx-empty">No events match. Try a longer time range${searchState.index ? ', all indexes,' : ''} or fewer filters.</li>`;
+        list.innerHTML = `<div class="sx-empty">No events match. Try a longer time range${searchState.index ? ', all indexes,' : ''} or fewer filters.</div>`;
         return;
     }
 
     const start = searchState.page * searchState.pageSize;
     const page = rows.slice(start, start + searchState.pageSize);
+    const extra = searchState.selectedFields.filter(f => f !== 'Host' && f !== 'Severity');
     list.innerHTML = page.map((row, offset) => {
         const i = start + offset;
-        const open = searchState.expanded.has(i);
-        const raw = row.RawLine ?? row._raw ?? '';
-        const chips = searchState.selectedFields
+        const selected = i === searchState.selected;
+        const level = CabinetSearch.severityLevel(row.Severity);
+        const sev = Number.isNaN(level) ? '' : `<span class="chip ${SEVERITY_CHIPS[Math.min(6, Math.max(0, level))]}">${esc(severityName(row.Severity))}</span>`;
+        const chips = extra
             .filter(f => row[f] !== undefined && row[f] !== null && row[f] !== '')
-            .map(f => `<span class="sx-chip">${esc(f)}=<b>${esc(f === 'Severity' ? CabinetSearch.SEVERITIES[row[f]] ?? row[f] : CabinetSearch.displayValue(row[f]))}</b></span>`).join('');
-        return `<li class="sx-event${open ? ' open' : ''}">
-            <div class="sx-event-row" tabindex="0" role="button" aria-expanded="${open}" data-click="toggleEvent" data-args="[${i}]">
-                <span class="sx-caret" aria-hidden="true">&#9654;</span>
-                <span class="sx-time-cell">${esc(fmtTime(row.Timestamp ?? row._time))}</span>
-                <div><div class="sx-raw">${typeof row.Severity === 'number' && row.Severity >= 3 ? sevBadge(row.Severity) + ' ' : ''}${CabinetSearch.highlight(raw, searchState.terms)}</div>${chips ? `<div class="sx-chips">${chips}</div>` : ''}</div>
-            </div>
-            ${open ? eventDetailHtml(row, i) : ''}
-        </li>`;
+            .map(f => `<span class="sx-chip-field">${esc(f)}=<b>${esc(CabinetSearch.displayValue(row[f]))}</b></span>`).join('');
+        return `<div class="sx-row${selected ? ' selected' : ''}" id="sx-ev-${i}" role="option" tabindex="${selected ? 0 : -1}" aria-selected="${selected}" data-click="selectEvent" data-args="[${i}]">` +
+            `<span class="sx-row-time">${esc(rowTime(row.Timestamp ?? row._time))}</span>` +
+            `<span class="sx-row-sev">${sev}</span>` +
+            `<span class="sx-row-host" title="${esc(row.Host ?? '')}">${esc(row.Host ?? '')}</span>` +
+            `<span class="sx-row-msg">${CabinetSearch.highlight(rowMessage(row), searchState.terms)}${chips ? ` <span class="sx-row-chips">${chips}</span>` : ''}</span></div>`;
     }).join('');
 }
 
-function eventDetailHtml(row, i) {
-    const keys = Object.keys(row).filter(k => !k.startsWith('_') && k !== 'RawLine').sort((a, b) => {
-        const builtin = k => (k in CabinetSearch.BUILTIN_FIELDS || k === 'Id' || k === 'Tags' ? 0 : 1);
-        return builtin(a) - builtin(b) || a.localeCompare(b);
+/** Selects an event: moss in the list, its fields in the inspector. */
+function selectEvent(index, keepFocus) {
+    if (!searchState.rows[index]) return;
+    searchState.selected = index;
+    document.querySelectorAll('#eventList .sx-row').forEach(el => {
+        const on = el.id === `sx-ev-${index}`;
+        el.classList.toggle('selected', on);
+        el.setAttribute('aria-selected', String(on));
+        el.tabIndex = on ? 0 : -1;
+        if (on && !keepFocus) el.focus({ preventScroll: true });
     });
-    const rows = keys.map(k => {
-        const value = k === 'Severity' && typeof row[k] === 'number' ? `${CabinetSearch.SEVERITIES[row[k]] ?? row[k]} (${row[k]})` : k === 'Timestamp' ? fmtTime(row[k]) : CabinetSearch.displayValue(row[k]);
-        const canFilter = CabinetSearch.fieldName(k) !== null && k !== 'Id' && k !== 'Timestamp' && typeof row[k] !== 'object';
-        const actions = canFilter
-            ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, false)}">+</button>
-               <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, true)}">&minus;</button>`
-            : '';
-        const column = `<button type="button" class="sx-icon-btn" title="${searchState.selectedFields.includes(k) ? 'Stop showing in events' : 'Show in events'}" aria-label="Show ${esc(k)} in events" data-click="toggleColumn" data-args="${fieldArgs(k)}">${searchState.selectedFields.includes(k) ? '&#9733;' : '&#9734;'}</button>`;
-        return `<tr><td>${esc(k)}</td><td class="sx-detail-value">${esc(value ?? '')}</td><td>${actions} ${column}</td></tr>`;
-    }).join('');
-    return `<div class="sx-event-detail"><table><tbody>${rows}</tbody></table>
-        <div class="sx-field-actions"><button type="button" class="btn btn-secondary btn-sm" data-click="copyEvent" data-args="[${i}]">Copy event</button>
-        <button type="button" class="btn btn-secondary btn-sm" data-click="showEventContext" data-args="[${i}]">Events around this one</button></div></div>`;
+    renderInspector();
 }
 
-function toggleEvent(i) {
-    if (searchState.expanded.has(i)) searchState.expanded.delete(i); else searchState.expanded.add(i);
-    renderEvents();
+function onEventListKey(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const start = searchState.page * searchState.pageSize;
+    const end = Math.min(searchState.rows.length, start + searchState.pageSize) - 1;
+    const next = Math.min(end, Math.max(start, searchState.selected + (e.key === 'ArrowDown' ? 1 : -1)));
+    if (next === searchState.selected) return;
+    e.preventDefault();
+    selectEvent(next);
+    const el = document.getElementById(`sx-ev-${next}`);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+/** The fields worth listing for an event: its own fields first, then the built-in ones. */
+function inspectorFields(row) {
+    const skip = new Set(['Id', 'RawLine', 'Timestamp', 'Message', 'LogLevel', 'Tags', 'LineNumber', 'ParserName']);
+    const builtin = ['Host', 'SourceType', 'Severity', 'Index', 'SourceFile'];
+    const own = Object.keys(row).filter(k => !k.startsWith('_') && !skip.has(k) && !builtin.includes(k)).sort((a, b) => a.localeCompare(b));
+    return [...own, ...builtin.filter(k => row[k] !== undefined && row[k] !== null && row[k] !== '')];
+}
+
+function renderInspector() {
+    const body = document.getElementById('inspectorBody');
+    const i = searchState.selected;
+    const row = searchState.rows[i];
+    if (!row) { body.innerHTML = '<p class="sx-side-note">Choose an event to see its fields.</p>'; return; }
+    const fields = inspectorFields(row).map(k => {
+        const value = k === 'Severity' ? severityName(row[k]) : CabinetSearch.displayValue(row[k]);
+        const canFilter = CabinetSearch.fieldName(k) !== null && typeof row[k] !== 'object';
+        return `<div class="sx-kv"><span class="sx-kv-key" title="${esc(k)}">${esc(k)}</span><span class="sx-kv-value" title="${esc(value ?? '')}">${esc(value ?? '')}</span>` +
+            `<span class="sx-mini-group">${canFilter ? `<button type="button" class="sx-mini" aria-label="Only events where ${esc(k)} is ${esc(value ?? '')}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, false)}">Only</button><button type="button" class="sx-mini" aria-label="Hide events where ${esc(k)} is ${esc(value ?? '')}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, true)}">Hide</button>` : ''}</span></div>`;
+    }).join('');
+    body.innerHTML = `<div class="sx-inspector-when">${esc(rowTime(row.Timestamp ?? row._time))}</div>` +
+        `<pre class="sx-inspector-raw">${esc(row.RawLine ?? row._raw ?? '')}</pre>` +
+        `<div class="sx-kv-list">${fields}</div>` +
+        `<div class="sx-inspector-actions"><button type="button" class="btn btn-sm" data-click="showAddToCase" data-args="[${i}]">Add to case&hellip;</button>` +
+        `<button type="button" class="btn btn-sm" data-click="showEventContext" data-args="[${i}]">Events around</button></div>` +
+        `<div class="sx-inspector-more"><button type="button" class="btn-link" data-click="copyEvent" data-args="[${i}]">Copy event</button>` +
+        `<button type="button" class="btn-link" data-click="openEventDetail" data-args="[${i}]">Every field&hellip;</button></div>`;
+}
+
+function openEventDetail(i) {
+    const row = searchState.rows[i];
+    if (row && typeof showEventDetail === 'function') showEventDetail(row);
 }
 
 async function copyEvent(i) {
@@ -1052,6 +1343,30 @@ function showEventContext(i) {
     setQuery(query);
     renderTimeButton();
     executeQuery();
+}
+
+/* ===== Table ===== */
+
+function sortedRows() {
+    const { column, direction } = searchState.sort;
+    if (!column) return searchState.rows;
+    const value = row => row[column];
+    return [...searchState.rows].sort((a, b) => {
+        const x = value(a);
+        const y = value(b);
+        if (x === y) return 0;
+        if (x === null || x === undefined) return 1;
+        if (y === null || y === undefined) return -1;
+        return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })) * direction;
+    });
+}
+
+function renderPager(count) {
+    const pages = Math.max(1, Math.ceil(count / searchState.pageSize));
+    searchState.page = Math.min(searchState.page, pages - 1);
+    const first = count === 0 ? 0 : searchState.page * searchState.pageSize + 1;
+    const last = Math.min(count, (searchState.page + 1) * searchState.pageSize);
+    document.getElementById('pageInfo').textContent = count === 0 ? '' : `${fmt(first)}–${fmt(last)} of ${fmt(count)}`;
 }
 
 function tableColumns() {
@@ -1093,11 +1408,11 @@ function sortBy(column) {
 
 function nextPage() {
     const pages = Math.ceil(searchState.rows.length / searchState.pageSize);
-    if (searchState.page < pages - 1) { searchState.page++; renderResultsView(); document.querySelector('.sx-results').scrollIntoView({ block: 'start' }); }
+    if (searchState.page < pages - 1) { searchState.page++; renderResultsView(); document.getElementById('resultsCard').scrollIntoView({ block: 'start' }); }
 }
 
 function prevPage() {
-    if (searchState.page > 0) { searchState.page--; renderResultsView(); document.querySelector('.sx-results').scrollIntoView({ block: 'start' }); }
+    if (searchState.page > 0) { searchState.page--; renderResultsView(); document.getElementById('resultsCard').scrollIntoView({ block: 'start' }); }
 }
 
 /* ===== History, menu, export ===== */
@@ -1111,8 +1426,10 @@ function addToHistory(query) {
 
 function renderQueryHistory() {
     const history = storedJson('cabinet_query_history', []);
-    document.getElementById('queryHistory').innerHTML = history.slice(0, 6).map(q =>
-        `<button type="button" title="${esc(q)}" data-click="runExample" data-args="${esc(JSON.stringify([q]))}">${esc(q)}</button>`).join('');
+    document.getElementById('queryHistory').innerHTML = history.length
+        ? '<span class="sx-recent-label">Recent</span>' + history.slice(0, 5).map(q =>
+            `<button type="button" title="${esc(q)}" data-click="runExample" data-args="${esc(JSON.stringify([q]))}">${esc(q)}</button>`).join('')
+        : '';
 }
 
 function clearSearchHistory() {
@@ -1126,7 +1443,11 @@ function toggleSearchMenu() {
     const menu = document.getElementById('searchMenu');
     menu.hidden = !menu.hidden;
     document.getElementById('searchMenuButton').setAttribute('aria-expanded', String(!menu.hidden));
-    if (!menu.hidden) menu.querySelector('button').focus();
+    if (!menu.hidden) {
+        closeIndexPicker();
+        closeTimePicker();
+        menu.querySelector('button').focus();
+    }
 }
 
 function closeSearchMenu() {
@@ -1143,8 +1464,8 @@ async function copySearchLink() {
 
 function toggleWrap() {
     closeSearchMenu();
-    const nowrap = document.getElementById('eventList').classList.toggle('nowrap');
-    localStorage.setItem('cabinet_wrap', String(!nowrap));
+    const wrap = document.getElementById('eventList').classList.toggle('wrap');
+    localStorage.setItem('cabinet_wrap', String(wrap));
 }
 
 function exportResults(format) {
@@ -1158,4 +1479,180 @@ function exportResults(format) {
     a.download = `cabinet-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.${format === 'json' ? 'json' : 'csv'}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ===== Add to dashboard, Alert me when, Add to case ===== */
+
+/** The query to keep: the BQL that ran, so it means the same thing later. */
+function queryToKeep() {
+    return searchState.query || document.getElementById('queryInput').value.trim();
+}
+
+function questionTitle() {
+    const typed = (searchState.ranQuery || document.getElementById('queryInput').value).trim();
+    return typed.length > 80 ? typed.slice(0, 77) + '…' : typed;
+}
+
+const VIEW_PANELS = { ranked: 'BarChart', timeseries: 'LineChart', table: 'Table', events: 'Table', json: 'Table' };
+
+async function showAddToDashboard() {
+    const query = queryToKeep();
+    if (!query) { toast('Ask a question first', 'info'); return; }
+    document.getElementById('dashPanelQuery').value = query;
+    document.getElementById('dashPanelTitle').value = questionTitle();
+    const single = searchState.results && CabinetCharts.shape(searchState.rows).kind === 'stat';
+    document.getElementById('dashPanelType').value = single ? 'SingleValue' : (VIEW_PANELS[searchState.view] || 'Table');
+    document.getElementById('dashPanelResult').innerHTML = '';
+    const select = document.getElementById('dashPanelTarget');
+    select.innerHTML = '<option value="">Loading dashboards…</option>';
+    openModal('addPanelModal');
+    try {
+        const data = await api('GET', '/api/v1/dashboards');
+        const dashboards = Array.isArray(data) ? data : (data.data || []);
+        select.innerHTML = dashboards.map(d => `<option value="${esc(d.id)}">${esc(d.title || d.name || 'Untitled')}</option>`).join('') +
+            '<option value="__new">A new dashboard…</option>';
+        select.value = dashboards.length ? dashboards[0].id : '__new';
+    } catch (e) {
+        select.innerHTML = '<option value="__new">A new dashboard…</option>';
+        document.getElementById('dashPanelResult').innerHTML = errorHtml(`Dashboards couldn't be listed: ${e.message}`, 'Try again', 'showAddToDashboard');
+    }
+    dashPanelTargetChanged();
+}
+
+function dashPanelTargetChanged() {
+    document.getElementById('dashPanelNewGroup').hidden = document.getElementById('dashPanelTarget').value !== '__new';
+}
+
+async function confirmAddToDashboard() {
+    const target = document.getElementById('dashPanelTarget').value;
+    const panel = {
+        title: document.getElementById('dashPanelTitle').value.trim() || 'Untitled panel',
+        query: document.getElementById('dashPanelQuery').value.trim(),
+        type: document.getElementById('dashPanelType').value,
+        width: Number(document.getElementById('dashPanelWidth').value) || 6,
+        height: 4,
+        column: 0,
+    };
+    const result = document.getElementById('dashPanelResult');
+    if (!panel.query) { result.innerHTML = errorHtml('The panel needs a query.', '', ''); return; }
+    try {
+        if (target === '__new') {
+            const title = document.getElementById('dashPanelNewTitle').value.trim();
+            if (!title) { result.innerHTML = errorHtml('Give the new dashboard a title.', '', ''); return; }
+            await api('POST', '/api/v1/dashboards', { title, panels: [{ ...panel, row: 0 }] });
+        } else {
+            const d = await api('GET', '/api/v1/dashboards/' + encodeURIComponent(target));
+            const panels = (d.panels || []).map(p => ({ id: p.id, title: p.title, query: p.query, type: p.type, row: p.row, column: p.column, width: p.width, height: p.height }));
+            const row = panels.reduce((max, p) => Math.max(max, (p.row || 0) + 1), 0);
+            panels.push({ ...panel, row });
+            await api('PUT', '/api/v1/dashboards/' + encodeURIComponent(target), { panels });
+        }
+        closeModal('addPanelModal');
+        toast('Added to the dashboard', 'success');
+    } catch (e) {
+        result.innerHTML = errorHtml(`It wasn't added: ${e.message}`, 'Try again', 'confirmAddToDashboard');
+    }
+}
+
+/** Without its own time, so the schedule's period decides what each run looks at. */
+function withoutTime(query) {
+    const stages = CabinetSearch.splitPipeline(query);
+    stages[0] = stages[0].replace(/\bfrom\s+last\s+\d+\s*[smhdw]\b/gi, ' ').replace(/\b(earliest|latest)\s*=\s*("[^"]*"|\S+)/gi, ' ').replace(/\s+/g, ' ').trim();
+    if (/^(find|search)$/i.test(stages[0]) || stages[0] === '') stages[0] = 'find *';
+    return stages.filter((s, i) => i === 0 || s !== '').join(' | ');
+}
+
+function showAlertWhen() {
+    const query = queryToKeep();
+    if (!query) { toast('Ask a question first', 'info'); return; }
+    document.getElementById('alertWhenName').value = questionTitle();
+    document.getElementById('alertWhenQuery').value = withoutTime(query);
+    document.getElementById('alertWhenCondition').value = 'when_count_gt';
+    document.getElementById('alertWhenThreshold').value = '0';
+    document.getElementById('alertWhenEvery').value = '5';
+    document.getElementById('alertWhenResult').innerHTML = '';
+    alertWhenConditionChanged();
+    openModal('alertWhenModal');
+}
+
+function alertWhenConditionChanged() {
+    const condition = document.getElementById('alertWhenCondition').value;
+    document.getElementById('alertWhenThresholdGroup').hidden = condition === 'no_results';
+}
+
+const ALERT_PERIODS = { 5: ['*/5 * * * *', '-5m'], 15: ['*/15 * * * *', '-15m'], 60: ['0 * * * *', '-1h'], 1440: ['0 0 * * *', '-24h'] };
+
+async function confirmAlertWhen() {
+    const [cron, range] = ALERT_PERIODS[document.getElementById('alertWhenEvery').value] || ALERT_PERIODS[5];
+    const body = {
+        name: document.getElementById('alertWhenName').value.trim(),
+        query: document.getElementById('alertWhenQuery').value.trim(),
+        cronExpression: cron,
+        timeRange: range,
+        enabled: true,
+        alertAction: {
+            condition: document.getElementById('alertWhenCondition').value,
+            threshold: parseInt(document.getElementById('alertWhenThreshold').value, 10) || 0,
+            severity: 3,
+        },
+    };
+    const result = document.getElementById('alertWhenResult');
+    if (!body.name || !body.query) { result.innerHTML = errorHtml('Give the alert a name and a query.', '', ''); return; }
+    try {
+        await api('POST', '/api/v1/scheduled-searches', body);
+        closeModal('alertWhenModal');
+        toast('Alert set up. It runs as a scheduled search; change it under Scheduled reports.', 'success');
+    } catch (e) {
+        result.innerHTML = errorHtml(`The alert wasn't set up: ${e.message}`, 'Try again', 'confirmAlertWhen');
+    }
+}
+
+let caseEventIndex = -1;
+
+async function showAddToCase(i) {
+    const row = searchState.rows[i];
+    if (!row) return;
+    caseEventIndex = i;
+    document.getElementById('caseNoteText').value = '';
+    document.getElementById('caseNewTitle').value = `${severityName(row.Severity)} on ${row.Host || 'an unknown host'}`;
+    document.getElementById('caseAddResult').innerHTML = '';
+    const select = document.getElementById('caseTarget');
+    select.innerHTML = '<option value="">Loading cases…</option>';
+    openModal('addToCaseModal');
+    try {
+        const cases = await api('GET', '/api/v1/cases');
+        const open = (Array.isArray(cases) ? cases : []).filter(c => c.status !== 'Closed');
+        select.innerHTML = open.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('') + '<option value="__new">A new case…</option>';
+        select.value = open.length ? open[0].id : '__new';
+    } catch (e) {
+        select.innerHTML = '<option value="__new">A new case…</option>';
+        document.getElementById('caseAddResult').innerHTML = errorHtml(`Cases couldn't be listed: ${e.message}`, 'Try again', 'showAddToCase', [i]);
+    }
+    caseTargetChanged();
+}
+
+function caseTargetChanged() {
+    document.getElementById('caseNewGroup').hidden = document.getElementById('caseTarget').value !== '__new';
+}
+
+async function confirmAddToCase() {
+    const row = searchState.rows[caseEventIndex];
+    const result = document.getElementById('caseAddResult');
+    if (!row || !row.Id) { result.innerHTML = errorHtml('This event has no ID to add.', '', ''); return; }
+    const target = document.getElementById('caseTarget').value;
+    const note = document.getElementById('caseNoteText').value.trim();
+    try {
+        if (target === '__new') {
+            const title = document.getElementById('caseNewTitle').value.trim();
+            if (!title) { result.innerHTML = errorHtml('Give the case a title.', '', ''); return; }
+            const created = await api('POST', '/api/v1/cases', { title, eventIds: [row.Id] });
+            if (note || searchState.query) await api('POST', `/api/v1/cases/${encodeURIComponent(created.id)}/items`, { note: note || null, search: searchState.query || null, eventIds: [] });
+        } else {
+            await api('POST', `/api/v1/cases/${encodeURIComponent(target)}/items`, { note: note || null, search: searchState.query || null, eventIds: [row.Id] });
+        }
+        closeModal('addToCaseModal');
+        toast('Added to the case', 'success');
+    } catch (e) {
+        result.innerHTML = errorHtml(`It wasn't added: ${e.message}`, 'Try again', 'confirmAddToCase');
+    }
 }

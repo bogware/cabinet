@@ -29,61 +29,6 @@ function highlightHtml(text, terms) {
     return { html: html + escapeHtml(line.slice(last)), matched };
 }
 
-let tailPaused = false;
-let tailBuffer = [];
-const TAIL_BUFFER_LIMIT = 5000;
-const TAIL_SHOWN_LIMIT = 2000;
-
-function setTailPaused(paused) {
-    tailPaused = paused;
-    const button = document.getElementById('tailPauseBtn');
-    if (button) button.textContent = paused ? 'Resume' : 'Pause';
-    if (!paused) {
-        const waiting = tailBuffer;
-        tailBuffer = [];
-        waiting.forEach(evt => showTailEvent(evt, false));
-    }
-    updateTailCount();
-}
-
-function toggleTailPause() {
-    setTailPaused(!tailPaused);
-}
-
-function updateTailCount() {
-    const label = document.getElementById('tailCount');
-    if (label) label.textContent = `${tailCount} events` + (tailPaused ? `, ${tailBuffer.length} waiting` : '');
-}
-
-/** Each event as it arrives: shown, or kept while paused. A match can pause the tail. */
-function receiveTailEvent(evt) {
-    tailCount++;
-    if (tailPaused) {
-        // Past the limit, the oldest waiting events go, as the page would drop them anyway
-        tailBuffer.push(evt);
-        if (tailBuffer.length > TAIL_BUFFER_LIMIT) tailBuffer.shift();
-        updateTailCount();
-        return;
-    }
-    showTailEvent(evt, document.getElementById('tailPauseOnMatch')?.checked);
-}
-
-function showTailEvent(evt, pauseOnMatch) {
-    const output = document.getElementById('tailOutput');
-    const div = document.createElement('div');
-    div.style.cssText = 'padding:2px 0;border-bottom:1px solid rgba(48,54,61,0.3)';
-    const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
-    const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'CRIT', 'FATAL'][Math.min(parseInt(evt.severity) || 0, 6)]}</span>` : '';
-    const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
-    const { html, matched } = highlightHtml(raw, highlightTerms(document.getElementById('tailHighlight')?.value));
-    div.innerHTML = `<span style="color:var(--text-muted);margin-right:8px">${esc(ts)}</span>${sev}<span>${html}</span>`;
-    if (matched) div.style.background = 'var(--warning-bg, rgba(210,153,34,0.15))';
-    output.appendChild(div);
-    output.scrollTop = output.scrollHeight;
-    while (output.children.length > TAIL_SHOWN_LIMIT) output.removeChild(output.firstChild);
-    updateTailCount();
-    if (matched && pauseOnMatch) setTailPaused(true);
-}
 
 /* ===== Investigate ===== */
 window.EXTRA_PAGES.investigate = { title: 'Investigate', load: () => loadInvestigatorStatus() };
@@ -106,7 +51,7 @@ async function runInvestigation() {
     const button = document.getElementById('investigateButton');
     if (!question) return;
     button.disabled = true;
-    out.innerHTML = '<p class="page-note"><span class="spinner"></span> Investigating. This can take a minute.</p>';
+    out.innerHTML = '<p class="page-note">' + loadingHtml('Investigating. This can take a minute.') + '</p>';
     try {
         const r = await api('POST', '/api/v1/investigate', { question });
         const steps = (r.steps || []).map(s => `<li><code>${esc(s.query)}</code> <span style="color:var(--text-secondary)">${s.error ? 'failed: ' + esc(s.error) : esc(String(s.rows)) + ' rows'}</span>
@@ -156,7 +101,7 @@ function openPlayerFromInput() {
 async function openPlayer(player) {
     const panel = document.getElementById('playerProfile');
     panel.hidden = false;
-    panel.innerHTML = '<span class="spinner"></span>';
+    panel.innerHTML = loadingHtml('Loading this player…');
     try {
         const p = await api('GET', '/api/v1/moderation/players/' + encodeURIComponent(player));
         const history = Object.entries(p.adminActions || {}).map(([a, n]) => `${esc(a)} ${esc(String(n))}`).join(', ') || 'none';
@@ -262,116 +207,7 @@ async function deletePipelineRule(id) {
     catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-/* ===== Cases ===== */
-window.EXTRA_PAGES.cases = { title: 'Cases', load: () => loadCases() };
-
-async function loadCases() {
-    const tbody = document.getElementById('casesBody');
-    if (!tbody) return;
-    const status = document.getElementById('caseStatusFilter').value;
-    try {
-        const cases = await api('GET', '/api/v1/cases' + (status ? '?status=' + encodeURIComponent(status) : ''));
-        tbody.innerHTML = cases.length === 0
-            ? '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-secondary)">No cases.</td></tr>'
-            : cases.map(c => `<tr><td><button type="button" class="btn btn-secondary btn-sm" data-click="openCase" data-args='${esc(JSON.stringify([c.id]))}'>${esc(c.title)}</button></td>
-                <td>${esc(c.status)}</td><td>${esc(c.severity)}</td><td>${esc(c.assignee || '')}</td><td>${esc(fmtTime(c.updatedAt))}</td></tr>`).join('');
-    } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
-}
-
-async function newCase() {
-    const title = prompt('Case title');
-    if (!title) return;
-    try {
-        const c = await api('POST', '/api/v1/cases', { title });
-        await loadCases();
-        openCase(c.id);
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-async function openCase(id) {
-    const view = document.getElementById('caseView');
-    view.hidden = false;
-    view.innerHTML = '<span class="spinner"></span>';
-    try {
-        const [c, timeline] = await Promise.all([api('GET', '/api/v1/cases/' + encodeURIComponent(id)), api('GET', `/api/v1/cases/${encodeURIComponent(id)}/timeline`)]);
-        const items = timeline.map(t => `<li style="padding:6px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text-muted)">${esc(fmtTime(t.time))}</span>
-            <span class="badge badge-muted">${esc(t.kind)}</span>${t.host ? ` <span class="mono">${esc(t.host)}</span>` : ''}
-            <div style="white-space:pre-wrap;${t.kind === 'event' ? 'font-family:monospace;font-size:12px' : ''}">${esc(t.text)}</div>${t.by ? `<span style="color:var(--text-secondary);font-size:11px">${esc(t.by)}</span>` : ''}</li>`).join('');
-        const statuses = ['Open', 'Investigating', 'Resolved', 'Closed'].map(s => `<option${s === c.status ? ' selected' : ''}>${s}</option>`).join('');
-        view.innerHTML = `<h4>${esc(c.title)}</h4>
-            <div class="st-grid-2">
-                <div class="form-group"><label for="caseStatus">Status</label><select id="caseStatus">${statuses}</select></div>
-                <div class="form-group"><label for="caseAssignee">Assignee</label><input type="text" id="caseAssignee" value="${esc(c.assignee || '')}"></div>
-            </div>
-            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-secondary btn-sm" data-click="saveCase" data-args='${esc(JSON.stringify([c.id]))}'>Save</button></div>
-            <div class="form-group"><label for="caseNote">Add a note, event IDs or a search</label><textarea id="caseNote" rows="3" placeholder="What you found"></textarea></div>
-            <div class="st-grid-2">
-                <div class="form-group"><input type="text" id="caseEventIds" placeholder="Event IDs, comma-separated" aria-label="Event IDs"></div>
-                <div class="form-group"><input type="text" id="caseSearch" placeholder="A search to keep" aria-label="Search" class="mono"></div>
-            </div>
-            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary btn-sm" data-click="addToCase" data-args='${esc(JSON.stringify([c.id]))}'>Add</button></div>
-            <h4 style="margin-top:16px">Timeline</h4><ul style="list-style:none;padding:0">${items || '<li class="page-note">Nothing yet.</li>'}</ul>`;
-    } catch (e) { view.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
-}
-
-async function saveCase(id) {
-    try {
-        await api('PATCH', '/api/v1/cases/' + encodeURIComponent(id), { status: document.getElementById('caseStatus').value, assignee: document.getElementById('caseAssignee').value.trim() || null });
-        loadCases();
-        openCase(id);
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-async function addToCase(id) {
-    const note = document.getElementById('caseNote').value.trim();
-    const search = document.getElementById('caseSearch').value.trim();
-    const eventIds = document.getElementById('caseEventIds').value.split(',').map(s => s.trim()).filter(Boolean);
-    if (!note && !search && eventIds.length === 0) return;
-    try {
-        await api('POST', `/api/v1/cases/${encodeURIComponent(id)}/items`, { note: note || null, search: search || null, eventIds });
-        openCase(id);
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-/* ===== ATT&CK coverage and Sigma import ===== */
-window.EXTRA_PAGES.coverage = { title: 'ATT&CK Coverage', load: () => loadCoverage() };
-
-async function loadCoverage() {
-    const box = document.getElementById('coverageMatrix');
-    if (!box) return;
-    try {
-        const matrix = await api('GET', '/api/v1/rules/coverage');
-        box.innerHTML = matrix.map(tactic => {
-            const cells = tactic.techniques.map(t => {
-                const on = t.rules.filter(r => r.enabled).length;
-                const style = on > 0 ? 'background:var(--accent);color:var(--bg-primary)' : t.rules.length > 0 ? 'border:1px solid var(--accent)' : 'border:1px solid var(--border);color:var(--text-muted)';
-                const title = t.rules.length ? t.rules.map(r => `${r.name}${r.enabled ? '' : ' (off)'}`).join('\n') : 'No rule';
-                return `<div title="${esc(title)}" style="padding:4px 6px;border-radius:4px;font-size:11px;margin-bottom:4px;${style}">${esc(t.id)} ${esc(t.name)}${t.rules.length ? ` (${t.rules.length})` : ''}</div>`;
-            }).join('');
-            const covered = tactic.techniques.filter(t => t.rules.some(r => r.enabled)).length;
-            return `<div style="min-width:160px;max-width:180px"><div style="font-weight:600;font-size:12px;margin-bottom:6px">${esc(tactic.name)} <span style="color:var(--text-secondary)">${covered}/${tactic.techniques.length}</span></div>${cells}</div>`;
-        }).join('');
-    } catch (e) { box.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
-}
-
-async function importSigma(save) {
-    const out = document.getElementById('sigmaResult');
-    const yaml = document.getElementById('sigmaYaml').value;
-    if (!yaml.trim()) return;
-    out.innerHTML = '<span class="spinner"></span>';
-    try {
-        const res = await fetch('/api/v1/rules/sigma' + (save ? '?save=true' : ''), {
-            method: 'POST',
-            headers: { ...authHeaders(), 'Content-Type': 'text/plain', Accept: 'application/json' },
-            body: yaml,
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const results = await res.json();
-        out.innerHTML = `<ul>${results.map(r => `<li><strong>${esc(r.title)}</strong>: ${r.problem ? `<span style="color:var(--error)">${esc(r.problem)}</span>`
-            : `${r.saved ? 'added, turned off' : 'converts'} (${esc(r.severity || '')}${r.technique ? ', ' + esc(r.technique) : ''})<div class="mono" style="font-size:11px">${esc(r.condition || '')}</div>`}</li>`).join('')}</ul>`;
-        if (save) loadCoverage();
-    } catch (e) { out.innerHTML = `<p style="color:var(--error)">${esc(e.message)}</p>`; }
-}
+/* Cases, ATT&CK coverage and Sigma import live in respond.js. */
 
 /* ===== Anomalies ===== */
 window.EXTRA_PAGES.anomalies = { title: 'Anomalies', load: () => loadAnomalyRules() };
@@ -430,7 +266,7 @@ function anomalyRuleFromForm() {
 
 async function testAnomalyRule() {
     const out = document.getElementById('anomalyTestResult');
-    out.innerHTML = '<span class="spinner"></span>';
+    out.innerHTML = loadingHtml('Checking the last window…');
     try {
         const findings = await api('POST', '/api/v1/anomaly-rules/test', anomalyRuleFromForm());
         out.innerHTML = findings.length === 0 ? '<p class="page-note">Nothing unusual in the last window.</p>'
@@ -507,13 +343,13 @@ function reportFromForm() {
 async function previewReport() {
     const box = document.getElementById('reportPreview');
     box.hidden = false;
-    box.innerHTML = '<span class="spinner"></span>';
+    box.innerHTML = loadingHtml('Building the preview…');
     try {
         const res = await fetch('/api/v1/reports/preview', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json', Accept: 'text/html' }, body: JSON.stringify(reportFromForm()) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         // The server encodes everything from the logs; the report is tables and inline styles
         box.innerHTML = await res.text();
-    } catch (e) { box.innerHTML = `<p style="color:#cf222e">${esc(e.message)}</p>`; }
+    } catch (e) { box.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`; }
 }
 
 async function saveReport() {
@@ -560,7 +396,7 @@ let connectorsByName = {};
 async function loadConnectors() {
     const tbody = document.getElementById('connectorsBody');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading connectors…') + '</td></tr>';
     try {
         const list = await api('GET', '/api/v1/connectors');
         connectorsByName = Object.fromEntries(list.map(c => [c.name, c]));
@@ -696,7 +532,7 @@ async function loadUsers() {
     const groupsBody = document.getElementById('groupsBody');
     if (!usersBody) return;
     document.getElementById('scimEndpoint').textContent = window.location.origin + '/scim/v2';
-    usersBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    usersBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px">' + loadingHtml('Loading users…') + '</td></tr>';
     try {
         [directoryUsers, directoryGroups] = await Promise.all([api('GET', '/api/v1/users'), api('GET', '/api/v1/groups')]);
     } catch (e) {

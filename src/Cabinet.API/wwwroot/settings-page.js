@@ -1,7 +1,8 @@
 /*
- * The Settings page: every server setting, described and editable, plus storage, API keys,
- * updates, retention, roles and this browser's preferences. Values reach the page through esc();
- * handlers are named in data-click and data-change attributes.
+ * The Settings page: every server setting, saying what it does, its default and where it's set,
+ * with changes staged until Apply. Plus storage (disk, engine, moving), API keys, updates,
+ * retention, roles and this browser's preferences. Values reach the page through esc(); handlers
+ * are named in data-click and data-change attributes.
  */
 
 const settingsState = {
@@ -14,15 +15,35 @@ const settingsState = {
     section: 'overview',
     loaded: false,
     forbidden: false,
+    meta: {},
+    moving: false,
 };
 
-const FIXED_SECTIONS = [
-    { id: 'overview', label: 'Storage' },
-    { id: 'keys', label: 'API keys' },
-    { id: 'updates', label: 'Install updates' },
-    { id: 'retention', label: 'Retention by index' },
-    { id: 'roles', label: 'Roles & access' },
-    { id: 'browser', label: 'This browser' },
+/*
+ * The list of sections, as close to the design's grouping as the catalog allows. Each holds fixed
+ * parts of the page (data-in on a .st-section) and catalog groups. A catalog group not named here
+ * lands in General, so a new group always shows somewhere.
+ */
+const SETTINGS_SECTIONS = [
+    { id: 'general', label: 'General', intro: 'How searches run, how much they may use, and your preferences in this browser.', groups: ['Search', 'Search limits', 'Rate limits', 'Background work'] },
+    { id: 'overview', label: 'Storage', intro: 'Where events are kept and how they’re stored.', groups: ['Storage', 'Backups'] },
+    { id: 'ingest', label: 'Ingest', intro: 'What senders can send, and the other ways events arrive.', groups: ['Ingest', 'Syslog', 'OpenTelemetry', 'Gaming'] },
+    { id: 'signin', label: 'Sign-in & SSO', intro: 'Single sign-on, local accounts, the addresses browsers may come from, and roles.', groups: ['Network & security', 'Accounts'] },
+    { id: 'keys', label: 'API keys', intro: '', groups: [] },
+    { id: 'retention', label: 'Retention & archive', intro: 'How long events and audit records are kept, and where events go before they’re deleted.', groups: ['Retention', 'Archive'] },
+    { id: 'security', label: 'Detection & privacy', intro: 'Detection rules, encrypting and masking fields, and the audit record.', groups: ['Detection', 'Encryption', 'Masking', 'Audit'] },
+    { id: 'ai', label: 'AI investigator', intro: 'Answering questions about the logs with a language model that runs searches with the asker’s access.', groups: ['AI investigator'] },
+    { id: 'email', label: 'Email & reports', intro: 'Alert history, and sending alerts and scheduled reports by email, chat and webhooks.', groups: ['Alerts & email', 'Webhooks'] },
+    { id: 'updates', label: 'Updates', intro: '', groups: ['Updates'] },
+];
+
+const STORAGE_ENGINES = [
+    ['Cabinet', 'Cabinet engine', 'Fastest on one server. Recommended.'],
+    ['SQLite', 'SQLite', 'Simple single file. Slower on large data.'],
+    ['PostgreSQL', 'PostgreSQL', 'Needed for several Cabinet servers.'],
+    ['OpenSearch', 'OpenSearch', 'Use an existing cluster.'],
+    ['ClickHouse', 'ClickHouse', 'More than one machine’s disk.'],
+    ['Memory', 'Memory', 'Keeps nothing across restarts. For testing.'],
 ];
 
 function bytes(n) {
@@ -34,8 +55,21 @@ function bytes(n) {
     return `${value.toFixed(unit === 0 || value >= 100 ? 0 : 1)} ${units[unit]}`;
 }
 
+function compactCount(n) {
+    if (!n) return '0';
+    if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 2)} M`;
+    if (n >= 1e4) return `${Math.round(n / 1e3)} K`;
+    return fmt(n);
+}
+
 function settingsSlug(name) {
     return 'group:' + name;
+}
+
+/** The section a catalog group is shown in. */
+function sectionOfGroup(name) {
+    const section = SETTINGS_SECTIONS.find(s => s.groups.includes(name));
+    return section ? section.id : 'general';
 }
 
 /* ===== Loading ===== */
@@ -46,19 +80,21 @@ async function loadServerSettings() {
         settingsState.loaded = true;
     }
 
-    const [settings, storage, keys] = await Promise.allSettled([
+    const [settings, storage, keys, updates, investigator] = await Promise.allSettled([
         api('GET', '/api/v1/settings'),
         api('GET', '/api/v1/storage'),
         api('GET', '/api/v1/keys'),
+        api('GET', '/api/v1/updates'),
+        api('GET', '/api/v1/investigate/status'),
     ]);
 
     const notice = document.getElementById('settingsAccessNotice');
     if (settings.status === 'rejected') {
         settingsState.forbidden = /403|forbidden|not allowed|capabilit/i.test(settings.reason.message);
         notice.hidden = false;
-        notice.textContent = settingsState.forbidden
-            ? 'Server settings, storage and API keys need an Admin key. Your preferences for this browser are below.'
-            : `Settings could not be loaded: ${settings.reason.message}`;
+        notice.innerHTML = settingsState.forbidden
+            ? 'Server settings, storage and API keys need an Admin key. Your preferences for this browser are under General.'
+            : errorHtml(`Settings couldn't be loaded: ${settings.reason.message}.`, 'Try again', 'loadServerSettings');
         settingsState.data = null;
     } else {
         notice.hidden = true;
@@ -69,49 +105,68 @@ async function loadServerSettings() {
     settingsState.storage = storage.status === 'fulfilled' ? storage.value.current : null;
     settingsState.storageOverview = storage.status === 'fulfilled' ? storage.value : null;
     settingsState.keys = keys.status === 'fulfilled' ? keys.value : [];
+    settingsState.meta = {
+        ai: investigator.status === 'fulfilled' ? (investigator.value.enabled ? 'On' : 'Off') : '',
+        updates: updates.status === 'fulfilled' && updates.value.available && updates.value.latest ? `${updates.value.latest} available` : '',
+    };
     renderSettingsNav();
+    renderSettingsHeads();
     renderStorageOverview();
     renderKeys();
     renderSettingsGroups();
     renderRestartBanner();
     renderSaveBar();
-    showSettingsSection(settingsState.forbidden && settingsState.section === 'overview' ? 'browser' : settingsState.section);
+    const allowed = settingsState.forbidden ? ['general', 'signin'] : SETTINGS_SECTIONS.map(s => s.id);
+    showSettingsSection(allowed.includes(settingsState.section) ? settingsState.section : 'general');
 }
 
 /* ===== Navigation ===== */
 
 function renderSettingsNav() {
-    const groups = settingsState.data ? settingsState.data.groups : [];
-    const fixed = FIXED_SECTIONS.filter(s => !settingsState.forbidden || s.id === 'browser' || s.id === 'roles');
-    const item = (id, label, count) => {
-        const changed = count ? `<span class="st-nav-dot" title="${count} unsaved">${count}</span>` : '';
-        return `<button type="button" class="st-nav-item" data-section="${esc(id)}" aria-current="${settingsState.section === id ? 'page' : 'false'}" data-click="showSettingsSection" data-args="${esc(JSON.stringify([id]))}">${esc(label)}${changed}</button>`;
-    };
-    const unsaved = name => Object.keys(settingsState.edits).filter(key => groupOf(key) === name).length;
-    document.getElementById('settingsNav').innerHTML =
-        fixed.map(s => item(s.id, s.label)).join('') +
-        (groups.length ? '<div class="st-nav-heading">Server settings</div>' + groups.map(g => item(settingsSlug(g.name), g.name, unsaved(g.name))).join('') : '');
+    const sections = SETTINGS_SECTIONS.filter(s => !settingsState.forbidden || s.id === 'general' || s.id === 'signin');
+    const unsaved = id => Object.keys(settingsState.edits).filter(key => sectionOfGroup(groupOf(key)) === id).length;
+    document.getElementById('settingsNav').innerHTML = sections.map(s => {
+        const count = unsaved(s.id);
+        const meta = count ? `<span class="st-nav-dot" title="${count} not applied yet">${count}</span>`
+            : settingsState.meta[s.id] ? `<span class="st-nav-meta">${esc(settingsState.meta[s.id])}</span>` : '';
+        return `<button type="button" class="st-nav-item" data-section="${esc(s.id)}" aria-current="${settingsState.section === s.id ? 'page' : 'false'}" data-click="showSettingsSection" data-args="${esc(JSON.stringify([s.id]))}"><span>${esc(s.label)}</span>${meta}</button>`;
+    }).join('');
 }
 
+/** Each section's title and one-line purpose. */
+function renderSettingsHeads() {
+    const box = document.getElementById('settingsHeads');
+    box.innerHTML = SETTINGS_SECTIONS.filter(s => s.intro || !['keys', 'updates'].includes(s.id)).map(s =>
+        `<section class="st-section st-head" data-in="${esc(s.id)}" hidden><h2>${esc(s.label)}</h2>${s.intro ? `<p class="st-intro">${esc(s.intro)}</p>` : ''}</section>`).join('');
+}
+
+/** Shows one section; "group:Retention" opens the section that holds that group. */
 function showSettingsSection(id) {
+    if (typeof id === 'string' && id.startsWith('group:')) id = sectionOfGroup(id.slice(6));
+    if (id === 'browser') id = 'general';
+    if (id === 'roles') id = 'signin';
     settingsState.section = id;
     document.getElementById('settingsSearch').value = '';
+    document.getElementById('page-settings').classList.remove('st-searching');
     document.querySelectorAll('#page-settings .st-section').forEach(section => {
-        section.hidden = section.dataset.section !== id;
+        section.hidden = section.dataset.in !== id;
         section.querySelectorAll('.st-row').forEach(row => { row.hidden = false; });
     });
     document.querySelectorAll('#settingsNav .st-nav-item').forEach(button => button.setAttribute('aria-current', button.dataset.section === id ? 'page' : 'false'));
     document.getElementById('settingsNoMatch').hidden = true;
+    renderSaveBar();
     const main = document.querySelector('#page-settings .st-main');
     if (main) main.scrollTop = 0;
 }
 
-/** Searching shows matching settings from every group at once. */
+/** Searching shows matching settings from every section at once. */
 function renderSettingsVisibility() {
     const term = document.getElementById('settingsSearch').value.trim().toLowerCase();
     if (!term) { showSettingsSection(settingsState.section); return; }
+    document.getElementById('page-settings').classList.add('st-searching');
     let matches = 0;
     document.querySelectorAll('#page-settings .st-section').forEach(section => {
+        if (section.classList.contains('st-head')) { section.hidden = true; return; }
         const rows = [...section.querySelectorAll('.st-row')];
         if (rows.length === 0) {
             section.hidden = !section.textContent.toLowerCase().includes(term);
@@ -129,15 +184,22 @@ function renderSettingsVisibility() {
         if (any) matches += rows.filter(r => !r.hidden).length;
     });
     document.getElementById('settingsNoMatch').hidden = matches > 0;
+    renderSaveBar();
 }
 
-/* ===== Storage ===== */
+/* ===== Storage: disk, engine, how long events are kept ===== */
 
 const STORAGE_POLL_MS = 1000;
 let storagePoll = null;
 
 function storageTypeLabel(type) {
     return type === 'SQLite' ? 'SQLite file' : type === 'PostgreSQL' ? 'PostgreSQL database' : type === 'Cabinet' ? 'Cabinet engine folder' : type;
+}
+
+function editedValue(key) {
+    const setting = findSetting(key);
+    if (!setting) return undefined;
+    return Object.prototype.hasOwnProperty.call(settingsState.edits, key) ? settingsState.edits[key] : setting.value;
 }
 
 function renderStorageOverview() {
@@ -149,38 +211,104 @@ function renderStorageOverview() {
     if (!s) {
         where.innerHTML = '<div class="st-card st-muted">Storage details need an Admin key.</div>';
         box.innerHTML = '';
+        document.getElementById('storageEngine').innerHTML = '';
+        document.getElementById('storageKeep').innerHTML = '';
         document.getElementById('storageActions').hidden = true;
         return;
     }
 
     const type = overview ? overview.type : s.type;
-    const span = s.oldestEvent ? `${esc(fmtTime(s.oldestEvent))} to ${esc(fmtTime(s.newestEvent))}` : 'no events yet';
-    where.innerHTML = `<div class="st-where">
-        <div class="st-where-label">Your data is stored in a ${esc(storageTypeLabel(type))}</div>
-        <div class="st-where-path"><code id="storageLocation">${esc(s.location || type)}</code>
-            <button type="button" class="btn btn-secondary btn-sm" data-click="copyStorageLocation">Copy</button></div>
-        <div class="st-where-meta">${esc(fmt(s.eventsStored))} events &middot; ${esc(bytes(s.sizeBytes))} &middot; ${span} &middot; ${s.retentionDays > 0 ? `kept ${esc(fmt(s.retentionDays))} days` : 'kept forever'}</div>
-    </div>`;
+    const movable = Boolean(overview && overview.movableTo.includes(type));
+    const used = s.diskTotalBytes ? 1 - (s.diskFreeBytes / s.diskTotalBytes) : null;
+    const since = s.oldestEvent ? new Date(/Z|[+-]\d\d:?\d\d$/.test(s.oldestEvent) ? s.oldestEvent : s.oldestEvent + 'Z').toLocaleDateString([], { month: 'short', day: 'numeric' }) : null;
+    const size = s.sizeBytes !== null && s.sizeBytes !== undefined ? `<b>${esc(bytes(s.sizeBytes))}</b> used` : null;
+    const free = s.diskFreeBytes ? `${esc(bytes(s.diskFreeBytes))} free` : null;
+    const facts = [
+        size && free ? `${size} of ${free}` : size || free,
+        `${esc(compactCount(s.eventsStored))} events`,
+        since ? `${esc(since)} – today` : 'no events yet',
+    ].filter(Boolean);
+    where.innerHTML = `<section class="group-panel st-disk">
+        <h3 class="group-panel-title">Disk</h3>
+        <div class="st-disk-line"><code class="st-disk-path" id="storageLocation">${esc(s.location || storageTypeLabel(type))}</code><span class="st-disk-facts">${facts.join(' · ')}</span></div>
+        ${used !== null ? `<span class="st-meter" role="meter" aria-valuenow="${Math.round(used * 100)}" aria-valuemin="0" aria-valuemax="100" aria-label="Drive ${Math.round(used * 100)}% full"><span style="width:${(used * 100).toFixed(1)}%"></span></span>
+            <span class="st-disk-note">The drive is ${esc(Math.round(used * 100))}% full (${esc(bytes(s.diskTotalBytes))} in all)${s.eventsStored && s.sizeBytes && s.diskFreeBytes ? `; room for about ${esc(compactCount(Math.floor(s.diskFreeBytes / (s.sizeBytes / s.eventsStored))))} more events at this size` : ''}.</span>` : ''}
+        <div class="st-buttons">
+            ${movable ? `<button type="button" class="btn" data-click="toggleStorageMove" aria-expanded="${settingsState.moving}" aria-controls="storageActions">${type === 'SQLite' ? 'Move to another drive…' : 'Move…'}</button>` : ''}
+            <button type="button" class="btn" data-click="backupNow">Back up now</button>
+            <button type="button" class="btn" data-click="copyStorageLocation">Copy location</button>
+        </div>
+        ${movable ? '' : `<p class="st-hint">Moving from ${esc(storageTypeLabel(type))} isn't done from here; ${type === 'Memory' ? 'nothing is kept to move' : 'use its own tools'}.</p>`}
+    </section>`;
 
     const card = (label, value, detail) => `<div class="st-stat"><div class="st-stat-label">${esc(label)}</div><div class="st-stat-value">${value}</div>${detail ? `<div class="st-stat-detail">${detail}</div>` : ''}</div>`;
-    const used = s.diskTotalBytes ? 1 - (s.diskFreeBytes / s.diskTotalBytes) : null;
-    const parts = [
-        card('Free disk', esc(bytes(s.diskFreeBytes)), used !== null ? `<div class="st-meter" role="meter" aria-valuenow="${Math.round(used * 100)}" aria-valuemin="0" aria-valuemax="100" aria-label="Disk used"><span style="width:${(used * 100).toFixed(1)}%"></span></div>${esc(Math.round(used * 100))}% of ${esc(bytes(s.diskTotalBytes))} used` : ''),
-        card('Size per event', s.eventsStored && s.sizeBytes ? esc(bytes(s.sizeBytes / s.eventsStored)) : '-', s.eventsStored && s.sizeBytes && s.diskFreeBytes ? `Room for about ${esc(fmt(Math.floor(s.diskFreeBytes / (s.sizeBytes / s.eventsStored))))} more` : ''),
-        card('Kept for', s.retentionDays > 0 ? `${esc(fmt(s.retentionDays))} days` : 'Forever', `<a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Change retention</a>`),
-    ];
-    if (s.metadataLocation) parts.push(card('Settings, rules and history', 'Separate', `<code class="st-path">${esc(s.metadataLocation)}</code>`));
+    const parts = [];
+    if (s.metadataLocation) parts.push(card('Settings, rules and history', 'Kept in', `<code class="st-path">${esc(s.metadataLocation)}</code>`));
     if (d) {
         parts.push(card('Listening on', (d.listeningAddresses || []).map(a => `<code>${esc(a)}</code>`).join('<br>') || '-', 'Change with the installer (-Port, -Https)'));
         parts.push(card('Changes made on these pages', 'Settings file', `<code class="st-path">${esc(d.overridesFile)}</code>Outside the program folder, so upgrades keep it.`));
     }
-
     box.innerHTML = parts.join('');
-    const movable = overview && overview.movableTo.includes(type);
-    document.getElementById('storageActions').hidden = !movable;
+
+    renderStorageEngine();
+    renderStorageKeep();
+    document.getElementById('storageActions').hidden = !(movable && settingsState.moving);
     document.getElementById('moveSqliteCard').hidden = type !== 'SQLite';
     document.getElementById('engineCard').hidden = type === 'Cabinet';
     renderStorageProgress(overview ? overview.migration : null);
+}
+
+function renderStorageEngine() {
+    const box = document.getElementById('storageEngine');
+    const setting = findSetting('Storage:Type');
+    if (!setting) { box.innerHTML = ''; return; }
+    const value = editedValue('Storage:Type');
+    const current = String(setting.value || '').toLowerCase();
+    const choices = STORAGE_ENGINES.filter(([key]) => key !== 'Memory' || current === 'memory' || String(value).toLowerCase() === 'memory');
+    const staged = Object.prototype.hasOwnProperty.call(settingsState.edits, 'Storage:Type');
+    box.innerHTML = `<section class="group-panel st-engine">
+        <h3 class="group-panel-title">Storage engine</h3>
+        <div class="st-engine-grid" role="radiogroup" aria-label="Storage engine">${choices.map(([key, label, words]) => `
+            <label class="st-radio"><input type="radio" name="storageEngine" value="${esc(key)}"${String(value).toLowerCase() === key.toLowerCase() ? ' checked' : ''}${setting.editable ? '' : ' disabled'} data-change="onSettingChange" data-args="${esc(JSON.stringify(['Storage:Type', '$this']))}">
+                <span><span class="st-radio-name">${esc(label)}</span><span class="st-radio-desc">${esc(words)}</span></span></label>`).join('')}
+        </div>
+        ${staged ? `<p class="st-engine-warn">Applying this only changes where new events go after a restart; it doesn't bring your events along. ${settingsState.storageOverview && settingsState.storageOverview.movableTo.includes(settingsState.storageOverview.type) ? '<button type="button" class="btn-link" data-click="openStorageMove">Move them instead…</button>' : ''}</p>` : ''}
+        <p class="st-provenance">${provenanceHtml(setting)} · Switching with Move… pauses new events only for the switch</p>
+    </section>`;
+}
+
+function renderStorageKeep() {
+    const box = document.getElementById('storageKeep');
+    const setting = findSetting('Storage:RetentionDays');
+    if (!setting) { box.innerHTML = ''; return; }
+    const value = editedValue('Storage:RetentionDays');
+    box.innerHTML = `<div class="st-keep">
+        <label class="st-keep-label" for="storageKeepDays">Keep events for</label>
+        <span class="st-keep-control"><input type="number" id="storageKeepDays" min="${esc(setting.min ?? 0)}" max="${esc(setting.max ?? 36500)}" value="${esc(value ?? 0)}"${setting.editable ? '' : ' disabled'} data-change="onSettingChange" data-args="${esc(JSON.stringify(['Storage:RetentionDays', '$this']))}"><span>days</span></span>
+        <span class="st-keep-desc">Older events are deleted${findSetting('Archive:Enabled') ? ', after being archived if archiving is on' : ''}. 0 keeps everything. Indexes with their own policy keep theirs (under Retention &amp; archive).</span>
+        <span class="st-provenance">${provenanceHtml(setting)}</span>
+    </div>`;
+}
+
+function toggleStorageMove() {
+    settingsState.moving = !settingsState.moving;
+    renderStorageOverview();
+    if (settingsState.moving) document.getElementById('storageActions').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+function openStorageMove() {
+    settingsState.moving = true;
+    renderStorageOverview();
+    document.getElementById('storageActions').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+async function backupNow() {
+    try {
+        const backup = await api('POST', '/api/v1/backups');
+        toast(`Backed up: ${backup.fileName || backup.filePath || 'done'} (${bytes(backup.sizeBytes)})`, 'success');
+    } catch (e) {
+        toast(e.message, 'error');
+    }
 }
 
 async function copyStorageLocation() {
@@ -342,9 +470,9 @@ function renderStorageProgress(status) {
         <details class="st-advanced"${status.state === 'Failed' ? ' open' : ''}><summary>Details</summary><pre class="st-log">${esc((status.log || []).join('\n'))}</pre></details>
         <div class="st-buttons">
             ${running ? '<button type="button" class="btn btn-secondary btn-sm" data-click="cancelStorageMove">Cancel</button>' : ''}
-            ${status.state === 'WaitingForRestart' && settingsState.data && settingsState.data.canRestart ? '<button type="button" class="btn btn-primary btn-sm" data-click="restartServer">Restart now</button>' : ''}
+            ${status.state === 'WaitingForRestart' && settingsState.data && settingsState.data.canRestart ? '<button type="button" class="btn btn-sm" data-click="restartServer">Restart now</button>' : ''}
         </div>`;
-    document.getElementById('storageActions').hidden = running || status.state === 'WaitingForRestart' || !(settingsState.storageOverview && settingsState.storageOverview.movableTo.includes(settingsState.storageOverview.type));
+    document.getElementById('storageActions').hidden = !settingsState.moving || running || status.state === 'WaitingForRestart' || !(settingsState.storageOverview && settingsState.storageOverview.movableTo.includes(settingsState.storageOverview.type));
     if (running) pollStorageProgress();
 }
 
@@ -380,7 +508,7 @@ function displayJson(value) {
 
 function describeDefault(setting) {
     const value = setting.default;
-    if (setting.type === 'Secret') return '';
+    if (setting.type === 'Secret') return 'Default: not set';
     if (value === null || value === undefined || value === '') return 'Default: none';
     if (setting.type === 'Bool') return `Default: ${value ? 'on' : 'off'}`;
     if (Array.isArray(value)) return value.length ? `Default: ${value.join(', ')}` : 'Default: none';
@@ -389,37 +517,49 @@ function describeDefault(setting) {
     return `Default: ${number}${setting.unit ? ' ' + setting.unit : ''}`;
 }
 
-const SOURCE_LABELS = {
-    'settings-file': ['Changed here', 'st-badge-changed'],
-    appsettings: ['From the installer\'s settings', 'st-badge-file'],
-    environment: ['Set by an environment variable', 'st-badge-env'],
-};
+/**
+ * What a setting defaults to, where its value comes from, and when a change takes effect:
+ * "Default: SQLite · Set in appsettings.Production.json as Storage:Type · Needs a restart".
+ */
+function provenanceHtml(setting) {
+    const key = `<code>${esc(setting.key)}</code>`;
+    const name = setting.sourceName ? `<code>${esc(setting.sourceName)}</code>` : null;
+    const where = {
+        default: `Not set anywhere, so the default applies (${key})`,
+        appsettings: `Set in ${name || '<code>appsettings.json</code>'} as ${key}`,
+        'settings-file': `Set on this page, saved in ${name || 'the settings file'} as ${key}`,
+        environment: `Set by the environment variable ${name || key}, which wins over this page`,
+    }[setting.source] || `Set as ${key}`;
+    const when = setting.requiresRestart ? 'Needs a restart' : 'Takes effect without a restart';
+    return `${esc(describeDefault(setting))} · ${where} · ${when}`;
+}
 
 function controlFor(setting) {
     const key = setting.key;
     const id = 'st-' + key.replace(/[^A-Za-z0-9]/g, '-');
     const edited = Object.prototype.hasOwnProperty.call(settingsState.edits, key);
-    const value = edited ? settingsState.edits[key] : setting.value;
+    const reverting = edited && settingsState.edits[key] === null && setting.type !== 'Secret';
+    const value = reverting ? setting.default : edited ? settingsState.edits[key] : setting.value;
     const disabled = setting.editable ? '' : ' disabled';
     const args = esc(JSON.stringify([key, '$this']));
     const range = `${setting.min !== null && setting.min !== undefined ? ` min="${esc(setting.min)}"` : ''}${setting.max !== null && setting.max !== undefined ? ` max="${esc(setting.max)}"` : ''}`;
 
     switch (setting.type) {
         case 'Bool':
-            return `<label class="st-switch"><input type="checkbox" id="${id}"${value ? ' checked' : ''}${disabled} data-change="onSettingChange" data-args="${args}"><span aria-hidden="true"></span><span class="st-switch-text">${value ? 'On' : 'Off'}</span></label>`;
+            return `<label class="check-label st-switch"><input type="checkbox" id="${id}"${value ? ' checked' : ''}${disabled} data-change="onSettingChange" data-args="${args}"><span class="st-switch-text">${value ? 'On' : 'Off'}</span></label>`;
         case 'Int':
         case 'Long':
         case 'Double':
             return `<span class="st-number"><input type="number" id="${id}" value="${esc(value ?? '')}"${range}${setting.type === 'Double' ? ' step="any"' : ''}${disabled} data-change="onSettingChange" data-args="${args}">${setting.unit ? `<span class="st-unit">${esc(setting.unit)}</span>` : ''}</span>`;
         case 'Enum':
-            return `<select id="${id}"${disabled} data-change="onSettingChange" data-args="${args}">${(setting.options || []).map(o => `<option value="${esc(o)}"${String(o) === String(value) ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+            return `<select id="${id}"${disabled} data-change="onSettingChange" data-args="${args}">${(setting.options || []).map(o => `<option value="${esc(o)}"${String(o).toLowerCase() === String(value).toLowerCase() ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
         case 'List':
             return `<textarea id="${id}" rows="${Math.min(8, Math.max(2, (value || []).length + 1))}" placeholder="One per line"${disabled} data-change="onSettingChange" data-args="${args}">${esc(displayList(value))}</textarea>`;
         case 'Json':
             return `<textarea id="${id}" class="st-json" rows="${Math.min(14, Math.max(3, displayJson(value).split('\n').length + 1))}" spellcheck="false"${disabled} data-change="onSettingChange" data-args="${args}">${esc(displayJson(value))}</textarea>`;
         case 'Secret': {
             const pendingClear = edited && settingsState.edits[key] === null;
-            const state = pendingClear ? 'will be removed' : edited ? 'will be replaced' : setting.isSet ? 'is set' : 'not set';
+            const state = pendingClear ? 'will be removed when you apply' : edited ? 'will be replaced when you apply' : setting.isSet ? 'is set' : 'not set';
             return `<span class="st-secret"><input type="password" id="${id}" autocomplete="new-password" placeholder="${setting.isSet ? 'Enter a new value to replace it' : 'Enter a value'}"${disabled} data-change="onSettingChange" data-args="${args}">
                 <span class="st-secret-state">${esc(state)}</span>
                 ${setting.isSet && setting.editable ? `<button type="button" class="btn btn-secondary btn-sm" data-click="clearSecret" data-args="${esc(JSON.stringify([key]))}">Remove</button>` : ''}</span>`;
@@ -433,25 +573,27 @@ function settingRowHtml(setting) {
     const key = setting.key;
     const id = 'st-' + key.replace(/[^A-Za-z0-9]/g, '-');
     const edited = Object.prototype.hasOwnProperty.call(settingsState.edits, key);
+    const reverting = edited && settingsState.edits[key] === null && setting.type !== 'Secret';
     const error = settingsState.errors[key];
     const badges = [];
-    const source = SOURCE_LABELS[setting.source];
-    if (source) badges.push(`<span class="st-badge ${source[1]}">${esc(source[0])}</span>`);
-    if (edited) badges.push('<span class="st-badge st-badge-unsaved">Unsaved</span>');
-    if (setting.pendingRestart) badges.push('<span class="st-badge st-badge-restart">Restart to apply</span>');
-    const canReset = setting.editable && setting.source === 'settings-file';
+    if (reverting) badges.push('<span class="chip chip-warn">Goes back to the file or default when you apply</span>');
+    else if (edited) badges.push('<span class="chip chip-warn">Not applied yet</span>');
+    if (setting.pendingRestart) badges.push('<span class="chip chip-warn">Restart to apply</span>');
+    if (setting.source === 'settings-file' && !edited) badges.push('<span class="chip chip-moss">Changed here</span>');
+    const canReset = setting.editable && setting.source === 'settings-file' && !edited;
     const search = `${setting.label} ${setting.key} ${setting.description} ${groupOf(key) || ''}`.toLowerCase();
-    return `<div class="st-row${edited ? ' st-row-edited' : ''}${error ? ' st-row-error' : ''}" data-search="${esc(search)}">
+    return `<div class="st-row${edited ? ' st-row-edited' : ''}${error ? ' st-row-error' : ''}" data-key="${esc(key)}" data-search="${esc(search)}">
         <div class="st-row-text">
             <label class="st-label" for="${id}">${esc(setting.label)}</label>
             <div class="st-desc">${esc(setting.description)}</div>
-            <div class="st-meta"><code>${esc(key)}</code><span>${esc(describeDefault(setting))}</span>${setting.min !== null && setting.min !== undefined && setting.max !== null && setting.max !== undefined ? `<span>${esc(fmt(setting.min))} to ${esc(fmt(setting.max))}</span>` : ''}${badges.join('')}</div>
+            <div class="st-provenance">${provenanceHtml(setting)}${setting.min !== null && setting.min !== undefined && setting.max !== null && setting.max !== undefined ? ` · ${esc(fmt(setting.min))} to ${esc(fmt(setting.max))}` : ''}</div>
+            ${badges.length ? `<div class="st-meta">${badges.join('')}</div>` : ''}
             ${error ? `<div class="st-error" role="alert">${esc(error)}</div>` : ''}
-            ${!setting.editable && setting.source === 'environment' ? '<div class="st-desc">Change the environment variable on the server to change this.</div>' : ''}
         </div>
         <div class="st-row-control">
             ${controlFor(setting)}
-            ${canReset ? `<button type="button" class="st-reset" title="Go back to the default" data-click="resetSetting" data-args="${esc(JSON.stringify([key]))}">Reset</button>` : ''}
+            ${canReset ? `<button type="button" class="btn-link st-reset" data-click="resetSetting" data-args="${esc(JSON.stringify([key]))}">Use the file or default value</button>` : ''}
+            ${edited ? `<button type="button" class="btn-link st-reset" data-click="revertSetting" data-args="${esc(JSON.stringify([key]))}">Undo this change</button>` : ''}
         </div>
     </div>`;
 }
@@ -459,28 +601,35 @@ function settingRowHtml(setting) {
 function renderSettingsGroups() {
     const container = document.getElementById('settingsGroups');
     const groups = settingsState.data ? settingsState.data.groups : [];
-    container.innerHTML = groups.map(group => `
-        <section class="st-section" data-section="${esc(settingsSlug(group.name))}" aria-label="${esc(group.name)}" hidden>
-            <h2>${esc(group.name)}</h2>
-            ${group.description ? `<p class="st-intro">${esc(group.description)}</p>` : ''}
-            <div class="st-rows">${group.settings.map(settingRowHtml).join('')}</div>
+    // In section order, so a section's groups follow one another
+    const order = name => {
+        const at = SETTINGS_SECTIONS.findIndex(s => s.groups.includes(name));
+        return at < 0 ? 0 : at * 100 + SETTINGS_SECTIONS[at].groups.indexOf(name);
+    };
+    // Storage:Type is the Storage engine radios at the top of Storage, so it isn't repeated as a row
+    container.innerHTML = groups.slice().sort((a, b) => order(a.name) - order(b.name)).map(group => `
+        <section class="st-section st-group" data-in="${esc(sectionOfGroup(group.name))}" data-group="${esc(group.name)}" aria-label="${esc(group.name)}" hidden>
+            <h3 class="st-group-title">${esc(group.name === 'Storage' ? 'More storage settings' : group.name)}</h3>
+            ${group.description ? `<p class="st-group-intro">${esc(group.description)}</p>` : ''}
+            <div class="st-rows">${group.settings.filter(setting => setting.key !== 'Storage:Type').map(settingRowHtml).join('')}</div>
         </section>`).join('');
 }
 
 function rerenderSetting(key) {
     const setting = findSetting(key);
     if (!setting) return;
-    const old = document.querySelector(`#settingsGroups .st-row[data-search*="${CSS.escape(key.toLowerCase())}"]`);
-    const rows = [...document.querySelectorAll('#settingsGroups .st-row')];
-    const row = rows.find(r => r.querySelector('code') && r.querySelector('code').textContent === key) || old;
-    if (!row) { renderSettingsGroups(); return; }
-    const hidden = row.hidden;
-    row.outerHTML = settingRowHtml(setting);
-    const fresh = [...document.querySelectorAll('#settingsGroups .st-row')].find(r => r.querySelector('code').textContent === key);
-    if (fresh) fresh.hidden = hidden;
+    const row = document.querySelector(`#settingsGroups .st-row[data-key="${CSS.escape(key)}"]`);
+    if (row) {
+        const hidden = row.hidden;
+        row.outerHTML = settingRowHtml(setting);
+        const fresh = document.querySelector(`#settingsGroups .st-row[data-key="${CSS.escape(key)}"]`);
+        if (fresh) fresh.hidden = hidden;
+    }
+    if (key === 'Storage:Type') renderStorageEngine();
+    if (key === 'Storage:RetentionDays') renderStorageKeep();
 }
 
-/* ===== Editing ===== */
+/* ===== Editing: staged until Apply ===== */
 
 function parseSettingInput(setting, element) {
     switch (setting.type) {
@@ -520,49 +669,88 @@ function onSettingChange(key, element) {
         settingsState.errors[key] = e.message;
     }
 
-    if (setting.type === 'Bool') {
-        const text = element.closest('.st-switch').querySelector('.st-switch-text');
-        if (text) text.textContent = element.checked ? 'On' : 'Off';
-    }
-
-    const row = element.closest('.st-row');
-    if (row) {
-        row.classList.toggle('st-row-edited', Object.prototype.hasOwnProperty.call(settingsState.edits, key));
-        row.classList.toggle('st-row-error', Boolean(settingsState.errors[key]));
-        let error = row.querySelector('.st-error');
-        if (settingsState.errors[key]) {
-            if (!error) { error = document.createElement('div'); error.className = 'st-error'; error.setAttribute('role', 'alert'); row.querySelector('.st-row-text').appendChild(error); }
-            error.textContent = settingsState.errors[key];
-        } else if (error) {
-            error.remove();
+    // Storage:Type and Storage:RetentionDays show in two places; keep both in step
+    if (key === 'Storage:Type' || key === 'Storage:RetentionDays' || !element.closest('.st-row')) rerenderSetting(key);
+    else {
+        if (setting.type === 'Bool') {
+            const text = element.closest('.st-switch').querySelector('.st-switch-text');
+            if (text) text.textContent = element.checked ? 'On' : 'Off';
         }
+        rerenderSettingKeepingFocus(key, element);
     }
-
     renderSaveBar();
     renderSettingsNav();
+}
+
+/** Redraws a row's badges without losing the control someone is typing in. */
+function rerenderSettingKeepingFocus(key, element) {
+    const row = element.closest('.st-row');
+    if (!row) return;
+    row.classList.toggle('st-row-edited', Object.prototype.hasOwnProperty.call(settingsState.edits, key));
+    row.classList.toggle('st-row-error', Boolean(settingsState.errors[key]));
+    const fresh = document.createElement('div');
+    fresh.innerHTML = settingRowHtml(findSetting(key));
+    const text = fresh.querySelector('.st-row-text');
+    row.querySelector('.st-row-text').replaceWith(text);
+    row.querySelectorAll('.st-reset').forEach(b => b.remove());
+    fresh.querySelectorAll('.st-reset').forEach(b => row.querySelector('.st-row-control').appendChild(b));
 }
 
 function clearSecret(key) {
     settingsState.edits[key] = null;
     rerenderSetting(key);
     renderSaveBar();
+    renderSettingsNav();
+}
+
+/** Stages going back to the appsettings value or the default, applied with the rest. */
+function resetSetting(key) {
+    settingsState.edits[key] = null;
+    delete settingsState.errors[key];
+    rerenderSetting(key);
+    renderSaveBar();
+    renderSettingsNav();
+}
+
+/** Drops one staged change. */
+function revertSetting(key) {
+    delete settingsState.edits[key];
+    delete settingsState.errors[key];
+    rerenderSetting(key);
+    renderSaveBar();
+    renderSettingsNav();
 }
 
 function renderSaveBar() {
-    const count = Object.keys(settingsState.edits).length;
-    const errors = Object.keys(settingsState.errors).length;
     const bar = document.getElementById('settingsSaveBar');
-    bar.hidden = count === 0 && errors === 0;
-    document.getElementById('settingsSaveText').textContent = errors
-        ? `${errors} ${errors === 1 ? 'setting needs' : 'settings need'} fixing`
-        : `${count} unsaved ${count === 1 ? 'change' : 'changes'}`;
+    if (!bar) return;
+    const keys = Object.keys(settingsState.edits);
+    const count = keys.length;
+    const errors = Object.keys(settingsState.errors).length;
+    const searching = document.getElementById('page-settings').classList.contains('st-searching');
+    const section = SETTINGS_SECTIONS.find(s => s.id === settingsState.section);
+    const hasSettings = Boolean(settingsState.data) && (searching || (section && section.groups.length > 0));
+    bar.hidden = !(hasSettings || count || errors);
+    const restart = keys.filter(k => { const s = findSetting(k); return s && s.requiresRestart; }).length;
+    let text = 'No changes';
+    if (errors) text = `${errors} ${errors === 1 ? 'setting needs' : 'settings need'} fixing before anything can be applied`;
+    else if (count) {
+        const when = restart === 0 ? 'takes effect without a restart'
+            : restart === count ? (count === 1 ? 'needs a restart' : 'need a restart')
+            : `${restart} ${restart === 1 ? 'needs' : 'need'} a restart`;
+        text = `${count} ${count === 1 ? 'change' : 'changes'} · ${when}`;
+    }
+    document.getElementById('settingsSaveText').textContent = text;
     document.getElementById('settingsSaveButton').disabled = errors > 0 || count === 0;
+    document.getElementById('settingsRevertButton').disabled = count === 0 && errors === 0;
 }
 
 function discardSettings() {
     settingsState.edits = {};
     settingsState.errors = {};
     renderSettingsGroups();
+    renderStorageEngine();
+    renderStorageKeep();
     showSettingsSection(settingsState.section);
     renderSaveBar();
     renderSettingsNav();
@@ -585,7 +773,7 @@ async function saveSettings() {
             const group = groupOf(first);
             if (group) showSettingsSection(settingsSlug(group));
             renderSaveBar();
-            toast('Nothing was saved: fix the highlighted settings', 'error');
+            toast('Nothing was applied: fix the highlighted settings', 'error');
             return;
         }
 
@@ -599,31 +787,12 @@ async function saveSettings() {
         renderSettingsNav();
         renderStorageOverview();
         renderRestartBanner();
-        renderSaveBar();
         showSettingsSection(section);
-        toast(`Saved ${count} ${count === 1 ? 'change' : 'changes'}${body.restartPending ? '; restart to apply' : ''}`, 'success');
+        toast(`Applied ${count} ${count === 1 ? 'change' : 'changes'}${body.restartPending ? '; restart Cabinet to finish' : ''}`, 'success');
     } catch (e) {
-        toast('Saving failed: ' + e.message, 'error');
+        toast('Applying failed: ' + e.message, 'error');
     } finally {
-        button.disabled = Object.keys(settingsState.edits).length === 0;
-    }
-}
-
-async function resetSetting(key) {
-    const setting = findSetting(key);
-    if (!setting || !confirm(`Set "${setting.label}" back to its default?`)) return;
-    try {
-        settingsState.data = await api('DELETE', '/api/v1/settings/' + encodeURIComponent(key));
-        delete settingsState.edits[key];
-        delete settingsState.errors[key];
-        const section = settingsState.section;
-        renderSettingsGroups();
-        renderRestartBanner();
         renderSaveBar();
-        showSettingsSection(section);
-        toast(`${setting.label} is back to its default`, 'success');
-    } catch (e) {
-        toast('Reset failed: ' + e.message, 'error');
     }
 }
 
@@ -637,7 +806,7 @@ function renderRestartBanner() {
     banner.hidden = false;
     banner.innerHTML = `<div><strong>Restart Cabinet to apply ${pending.length} ${pending.length === 1 ? 'change' : 'changes'}.</strong> <span class="st-muted">${esc(pending.slice(0, 5).join(', '))}${pending.length > 5 ? ', ...' : ''}</span></div>` +
         (d.canRestart
-            ? '<button type="button" class="btn btn-primary btn-sm" data-click="restartServer">Restart now</button>'
+            ? '<button type="button" class="btn btn-sm" data-click="restartServer">Restart now</button>'
             : `<span class="st-muted">${esc(d.cannotRestartReason || 'Restart the service to apply them.')}</span>`);
 }
 

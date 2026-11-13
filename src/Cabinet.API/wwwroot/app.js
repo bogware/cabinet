@@ -32,6 +32,9 @@ async function loadSignInOptions() {
         if (account) account.hidden = !(p.signedIn && p.localAccount && !API_KEY);
         const signOut = document.getElementById('signOutButton');
         if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
+        const menuSignOut = document.getElementById('menuSignOut');
+        if (menuSignOut) menuSignOut.hidden = !(p.signedIn || API_KEY);
+        if (p.signedIn && p.name) showUserName(p.name);
         return p;
     } catch { return null; }
 }
@@ -125,6 +128,15 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && document.getElementById('sidebar').classList.contains('open')) toggleSidebar();
 });
 
+/* Return triggers the default (moss) button of the step it's typed in. Forms submit themselves. */
+document.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing || !event.target.matches('input:not([type=checkbox]):not([type=radio])')) return;
+    if (event.target.form) return;
+    const scope = event.target.closest('.enter-scope');
+    const button = scope && [...scope.querySelectorAll('.btn-primary')].find(b => b.offsetParent !== null && !b.disabled);
+    if (button) { event.preventDefault(); button.click(); }
+});
+
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const open = sidebar.classList.toggle('open');
@@ -170,31 +182,91 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
     item.addEventListener('click', () => navigate(item.dataset.page));
 });
 
-const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings'];
+const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings','apikeys','all'];
 // Pages added by other scripts register here: { name: { title, load } }
 window.EXTRA_PAGES = window.EXTRA_PAGES || {};
 function isPage(page) { return VALID_PAGES.includes(page) || Object.prototype.hasOwnProperty.call(window.EXTRA_PAGES, page); }
+
+/* Pages that show another page's element: API keys is a section of Settings. */
+const PAGE_ALIASES = { apikeys: 'settings' };
+
+/* Pages that live inside a sidebar item, shown as a segmented control under the toolbar. The
+   sidebar item names its family in data-family; the first page is the item itself. */
+const PAGE_FAMILIES = {
+    saved: [['saved', 'Saved questions'], ['jobs', 'Background searches']],
+    reports: [['reports', 'Scheduled reports'], ['schedules', 'Scheduled searches']],
+    alerts: [['alerts', 'Alerts'], ['connectors', 'Connectors']],
+    rules: [['rules', 'Detection rules'], ['anomalies', 'Anomaly rules']],
+    indexes: [['indexes', 'Indexes'], ['extractions', 'Field extractions'], ['knowledge', 'Lookups & macros']],
+};
+
+const PAGE_TITLES = {
+    search: 'Search', livetail: 'Live Tail', saved: 'Saved questions', jobs: 'Background searches', investigate: 'AI investigator',
+    dashboards: 'Dashboards', reports: 'Scheduled reports', schedules: 'Scheduled searches', health: 'System health',
+    alerts: 'Alerts', connectors: 'Connectors', cases: 'Cases', rules: 'Detection rules', anomalies: 'Anomaly rules',
+    coverage: 'ATT&CK coverage', players: 'Players', ingest: 'Sources', pipelines: 'Ingest pipeline', indexes: 'Indexes & fields',
+    extractions: 'Field extractions', knowledge: 'Lookups & macros', users: 'Users & groups', apikeys: 'API keys',
+    settings: 'Settings', all: 'All pages',
+};
+
+/** The sidebar item a page belongs to: itself, or the item whose family holds it. */
+function navItemFor(page) {
+    return document.querySelector(`.nav-item[data-page="${page}"]`)
+        || [...document.querySelectorAll('.nav-item[data-family]')].find(item => item.dataset.family.split(' ').includes(page));
+}
+
+/** Puts the segmented control of sibling pages under each family member's toolbar. */
+function buildSubnav() {
+    Object.entries(PAGE_FAMILIES).forEach(([family, members]) => {
+        members.forEach(([page]) => {
+            const pageEl = document.getElementById('page-' + page);
+            if (!pageEl || pageEl.querySelector('.subnav')) return;
+            const nav = document.createElement('nav');
+            nav.className = 'subnav';
+            nav.setAttribute('aria-label', `${PAGE_TITLES[family]} pages`);
+            nav.innerHTML = `<div class="segmented">${members.map(([p, label]) =>
+                `<button type="button" data-click="navigate" data-args="${esc(JSON.stringify([p]))}"${p === page ? ' aria-current="page"' : ''}>${esc(label)}</button>`).join('')}</div>`;
+            const toolbar = pageEl.querySelector('.toolbar');
+            if (toolbar) toolbar.after(nav); else pageEl.prepend(nav);
+        });
+    });
+}
+
 function navigate(page) {
     if (!isPage(page)) return;
-    currentPage = page;
+    const elementPage = PAGE_ALIASES[page] || page;
+    currentPage = elementPage;
     document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
-    const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-    if (navItem) { navItem.classList.add('active'); navItem.setAttribute('aria-current', 'page'); }
+    const navItem = navItemFor(page);
+    if (navItem) {
+        navItem.classList.add('active');
+        navItem.setAttribute('aria-current', 'page');
+        const group = navItem.closest('.nav-group');
+        if (group && group.classList.contains('collapsed')) toggleNavGroup(group.dataset.group);
+    }
     document.getElementById('sidebar').classList.remove('open');
+    closeUserMenu();
     stopDashboardRefresh();
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const pageEl = document.getElementById('page-' + page);
+    const pageEl = document.getElementById('page-' + elementPage);
     if (pageEl) pageEl.classList.add('active');
+    document.getElementById('mainContent').scrollTop = 0;
     const extra = window.EXTRA_PAGES[page];
-    const titles = { [page]: extra ? extra.title : page, rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
-    document.getElementById('pageTitle').textContent = titles[page] || page;
+    const titles = { ...PAGE_TITLES };
+    if (extra && !titles[page]) titles[page] = extra.title;
+    document.title = `${titles[page] || page} - Cabinet`;
+    // API keys is the keys section of Settings; Settings itself opens where it was, unless that was the keys
+    if (typeof settingsState !== 'undefined') {
+        if (page === 'apikeys') settingsState.section = 'keys';
+        else if (page === 'settings' && settingsState.section === 'keys') settingsState.section = 'overview';
+    }
     // Update URL without reload
     // Search keeps its own state in the hash, so a search can be bookmarked
     const onSearch = window.location.hash.startsWith('#search');
     const url = page === 'search' ? (onSearch ? window.location.pathname + window.location.hash : '/') : '/#' + page;
     if (!(page === 'search' ? (onSearch || window.location.hash === '') : window.location.hash === '#' + page)) history.pushState({ page }, titles[page], url);
-    // Stop live tail if leaving that page
-    if (page !== 'livetail' && tailEventSource) { tailEventSource.close(); tailEventSource = null; document.getElementById('tailDot').style.display = 'none'; document.getElementById('tailStartBtn').textContent = 'Start'; }
+    // Pages that hold something open (Live Tail's stream) let go of it when left
+    Object.entries(window.EXTRA_PAGES).forEach(([name, other]) => { if (name !== page && typeof other.leave === 'function') other.leave(); });
     // Load data for page
     if (page === 'saved') loadSavedQueries();
     if (page === 'dashboards') loadDashboards();
@@ -205,10 +277,110 @@ function navigate(page) {
     if (page === 'schedules') loadSchedules();
     if (page === 'extractions') loadExtractions();
     if (page === 'knowledge') loadKnowledgeCurrent();
-    if (page === 'settings') loadSettings();
-    if (page === 'livetail') loadTailIndexes();
+    if (elementPage === 'settings') loadSettings();
     if (page === 'jobs') loadJobs();
     if (extra && typeof extra.load === 'function') extra.load();
+}
+
+/* ===== Sidebar groups: collapse and expand, remembered in this browser ===== */
+const NAV_COLLAPSED_KEY = 'cabinet_nav_collapsed';
+
+function collapsedNavGroups() {
+    try { return JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]'); } catch { return []; }
+}
+
+function setNavGroupState(group, collapsed) {
+    const el = document.querySelector(`.nav-group[data-group="${group}"]`);
+    if (!el) return;
+    el.classList.toggle('collapsed', collapsed);
+    el.querySelector('.nav-group-header').setAttribute('aria-expanded', String(!collapsed));
+}
+
+function toggleNavGroup(group) {
+    const el = document.querySelector(`.nav-group[data-group="${group}"]`);
+    if (!el) return;
+    const collapsed = !el.classList.contains('collapsed');
+    setNavGroupState(group, collapsed);
+    const stored = collapsedNavGroups().filter(g => g !== group);
+    if (collapsed) stored.push(group);
+    try { localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify(stored)); } catch { /* storage refused: still toggles for this visit */ }
+}
+
+/** Right-aligned text beside a sidebar item, such as "3 new". kind 'alert' shows it in red. */
+function setNavMeta(page, text, kind) {
+    const meta = document.querySelector(`.nav-meta[data-meta="${page}"]`);
+    if (!meta) return;
+    meta.textContent = text || '';
+    meta.classList.toggle('nav-meta-alert', kind === 'alert');
+}
+
+/* ===== Account menu in the sidebar footer ===== */
+function showUserName(name) {
+    const button = document.getElementById('userButton');
+    button.textContent = name;
+    button.title = `Signed in as ${name}`;
+    document.getElementById('userMenuName').textContent = `Signed in as ${name}`;
+}
+
+function toggleUserMenu() {
+    const menu = document.getElementById('userMenu');
+    const open = menu.hidden;
+    menu.hidden = !open;
+    document.getElementById('userButton').setAttribute('aria-expanded', String(open));
+    if (open) {
+        syncThemeControls();
+        const first = menu.querySelector('button:not([hidden])');
+        if (first) first.focus();
+    }
+}
+
+function closeUserMenu() {
+    const menu = document.getElementById('userMenu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    document.getElementById('userButton').setAttribute('aria-expanded', 'false');
+}
+
+document.addEventListener('click', event => {
+    if (!event.target.closest('#userMenu, #userButton')) closeUserMenu();
+});
+
+/* ===== Theme: System (default), Light or Graphite; theme.js applies it before the page paints ===== */
+function setTheme(choice) {
+    if (window.CabinetTheme) window.CabinetTheme.set(choice);
+    syncThemeControls();
+}
+
+function saveThemeSetting() {
+    setTheme(document.getElementById('settingsTheme').value);
+}
+
+function syncThemeControls() {
+    const choice = window.CabinetTheme ? window.CabinetTheme.choice() : 'system';
+    document.querySelectorAll('[data-theme-option]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeOption === choice)));
+    const select = document.getElementById('settingsTheme');
+    if (select) select.value = choice;
+}
+
+/* Kept for anything that still calls it: moves to the next of System, Light, Graphite. */
+function toggleTheme() {
+    const order = ['system', 'light', 'graphite'];
+    const choice = window.CabinetTheme ? window.CabinetTheme.choice() : 'system';
+    setTheme(order[(order.indexOf(choice) + 1) % order.length]);
+}
+
+/* ===== Loading and error lines, for every page ===== */
+/** Striped progress plus a sentence saying what's happening. */
+function loadingHtml(sentence = 'Loading…') {
+    return `<span class="loading-line" role="status"><span class="progress" aria-hidden="true"></span><span>${esc(sentence)}</span></span>`;
+}
+
+/** A sentence saying what went wrong, and one button for the suggested action (a handler name). */
+function errorHtml(sentence, actionLabel, handler, args) {
+    const action = actionLabel && handler
+        ? ` <button type="button" class="btn btn-sm" data-click="${esc(handler)}"${args ? ` data-args="${esc(JSON.stringify(args))}"` : ''}>${esc(actionLabel)}</button>`
+        : '';
+    return `<div class="error-line" role="alert"><span>${esc(sentence)}</span>${action}</div>`;
 }
 
 /* ===== API Helper ===== */
@@ -235,7 +407,7 @@ async function api(method, path, body) {
 /* ===== Saved Queries ===== */
 async function loadSavedQueries() {
     const tbody = document.getElementById('savedQueriesBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading saved questions…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/query/saved');
         const queries = Array.isArray(data) ? data : (data.data || []);
@@ -298,191 +470,7 @@ async function confirmSaveQuery() {
     } catch (e) { toast('Failed to save: ' + e.message, 'error'); }
 }
 
-/* ===== Dashboards ===== */
-async function loadDashboards() {
-    const el = document.getElementById('dashboardsList');
-    el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
-    try {
-        const data = await api('GET', '/api/v1/dashboards');
-        const dashboards = Array.isArray(data) ? data : (data.data || []);
-        if (dashboards.length === 0) {
-            el.innerHTML = '<div class="empty-state"><h3>No Dashboards</h3><p>Click "+ New Dashboard" to create one</p></div>';
-            return;
-        }
-        el.innerHTML = '';
-        dashboards.forEach(d => {
-            const div = document.createElement('div');
-            div.className = 'health-item';
-            const panelCount = d.panelCount ?? (d.panels ? d.panels.length : 0);
-            div.innerHTML = `<div class="hi-header"><span class="hi-name">${esc(d.title || d.name || 'Untitled')}</span>
-                <span class="hi-status healthy">${panelCount} panels</span></div>
-                <div class="hi-detail">${esc(d.description || 'No description')}</div>
-                <div class="hi-detail" style="margin-top:4px">Created: ${d.createdAt ? new Date(d.createdAt).toLocaleDateString() : '-'}</div>
-                <div id="dash-panels-${esc(d.id)}" style="margin-top:8px"></div>
-                <div style="margin-top:8px;display:flex;gap:6px">
-                    <button class="btn btn-secondary btn-sm view-btn">View Panels</button>
-                    <button class="btn btn-secondary btn-sm edit-btn">Edit</button>
-                    <button class="btn btn-danger btn-sm del-btn">Del</button>
-                </div>`;
-            div.querySelector('.view-btn').onclick = () => viewDashboardPanels(d);
-            div.querySelector('.edit-btn').onclick = () => editDashboard(d);
-            div.querySelector('.del-btn').onclick = () => deleteDashboard(d.id);
-            el.appendChild(div);
-        });
-    } catch (e) {
-        el.innerHTML = `<div class="empty-state" style="color:var(--error)">${esc(e.message)}</div>`;
-    }
-}
-
-function showDashboardModal() {
-    document.getElementById('dashboardEditId').value = '';
-    document.getElementById('dashboardModalTitle').textContent = 'New Dashboard';
-    document.getElementById('dashTitle').value = '';
-    document.getElementById('dashDescription').value = '';
-    document.getElementById('dashRefresh').value = '0';
-    document.getElementById('panelEditorList').innerHTML = '';
-    addPanelRow();
-    openModal('dashboardModal');
-    document.getElementById('dashTitle').focus();
-}
-
-async function editDashboard(summary) {
-    // The list only has summaries
-    const d = await api('GET', '/api/v1/dashboards/' + encodeURIComponent(summary.id));
-    document.getElementById('dashboardEditId').value = d.id || '';
-    document.getElementById('dashboardModalTitle').textContent = 'Edit Dashboard';
-    document.getElementById('dashTitle').value = d.title || d.name || '';
-    document.getElementById('dashDescription').value = d.description || '';
-    document.getElementById('dashRefresh').value = String(d.refreshIntervalSeconds || 0);
-    document.getElementById('panelEditorList').innerHTML = '';
-    (d.panels || []).slice().sort((a, b) => (a.row - b.row) || (a.column - b.column)).forEach(addPanelRow);
-    openModal('dashboardModal');
-}
-
-async function saveDashboard() {
-    const id = document.getElementById('dashboardEditId').value;
-    const body = {
-        title: document.getElementById('dashTitle').value.trim(),
-        description: document.getElementById('dashDescription').value.trim(),
-        refreshIntervalSeconds: Number(document.getElementById('dashRefresh').value),
-        panels: readPanelRows().filter(panel => panel.query)
-    };
-    if (!body.title) { toast('Title is required', 'error'); return; }
-    try {
-        if (id) await api('PUT', '/api/v1/dashboards/' + id, body);
-        else await api('POST', '/api/v1/dashboards', body);
-        closeModal('dashboardModal');
-        toast(id ? 'Dashboard updated' : 'Dashboard created', 'success');
-        loadDashboards();
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-async function deleteDashboard(id) {
-    if (!confirm('Delete this dashboard?')) return;
-    try {
-        await api('DELETE', '/api/v1/dashboards/' + id);
-        toast('Dashboard deleted', 'success');
-        loadDashboards();
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-let dashboardTimer = null;
-
-function stopDashboardRefresh() {
-    if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
-}
-
-const PANEL_VIZ = { Table: 'table', LineChart: 'line', AreaChart: 'area', BarChart: 'bar', SingleValue: 'stat', PieChart: 'pie', Gauge: 'gauge', Heatmap: 'heatmap', Map: 'map' };
-
-async function renderPanel(panel, body) {
-    if (!panel.query) { body.innerHTML = '<p class="chart-note">No query defined.</p>'; return; }
-    try {
-        const result = await api('POST', '/api/v1/query/execute', { query: panel.query, useCache: true });
-        CabinetCharts.render(body, result.results || [], { viz: PANEL_VIZ[panel.type], title: panel.title, height: 200, tableWhenRaw: true });
-    } catch (e) {
-        body.innerHTML = `<p class="chart-note" style="color:var(--error)">${esc(e.message)}</p>`;
-    }
-}
-
-async function viewDashboardPanels(d) {
-    const container = document.getElementById('dash-panels-' + d.id);
-    if (!container) return;
-    stopDashboardRefresh();
-    if (container.innerHTML) { container.innerHTML = ''; return; } // toggle off
-    d = await api('GET', '/api/v1/dashboards/' + encodeURIComponent(d.id));
-    const panels = (d.panels || []).slice().sort((a, b) => (a.row - b.row) || (a.column - b.column));
-    if (panels.length === 0) { container.innerHTML = '<p class="chart-note">No panels yet. Edit the dashboard to add some.</p>'; return; }
-
-    const refresh = d.refreshIntervalSeconds || 0;
-    container.innerHTML = `<div class="dash-toolbar" role="status"></div><div class="dash-grid"></div>`;
-    const status = container.querySelector('.dash-toolbar');
-    const grid = container.querySelector('.dash-grid');
-    const bodies = panels.map(panel => {
-        const section = document.createElement('section');
-        section.className = 'dash-panel';
-        section.style.gridColumn = `span ${Math.min(12, Math.max(1, panel.width || 6))}`;
-        section.innerHTML = `<h4>${esc(panel.title || 'Untitled panel')}</h4><div class="dash-panel-body"><span class="spinner"></span></div>`;
-        grid.appendChild(section);
-        return section.querySelector('.dash-panel-body');
-    });
-
-    const update = async () => {
-        await Promise.all(panels.map((panel, i) => renderPanel(panel, bodies[i])));
-        status.textContent = `Updated ${new Date().toLocaleTimeString()}${refresh ? `, refreshing every ${refresh} seconds` : ''}`;
-    };
-
-    await update();
-    if (refresh > 0) dashboardTimer = setInterval(update, refresh * 1000);
-}
-
-function addPanelRow(panel) {
-    const data = panel && panel.title !== undefined ? panel : { title: '', query: '', type: 'LineChart', width: 6 };
-    const row = document.createElement('div');
-    row.className = 'panel-row';
-    const options = [['LineChart', 'Line'], ['AreaChart', 'Stacked area'], ['BarChart', 'Bars'], ['PieChart', 'Pie'], ['SingleValue', 'Single value'], ['Gauge', 'Gauge'], ['Heatmap', 'Heatmap'], ['Map', 'Map'], ['Table', 'Table']]
-        .map(([value, label]) => `<option value="${value}"${data.type === value ? ' selected' : ''}>${label}</option>`).join('');
-    const widths = [[12, 'Full'], [6, 'Half'], [4, 'Third'], [3, 'Quarter']]
-        .map(([value, label]) => `<option value="${value}"${Number(data.width) === value ? ' selected' : ''}>${label}</option>`).join('');
-    row.innerHTML = `<div class="panel-row-grid">
-            <label>Title <input type="text" class="panel-title" value="${esc(data.title || '')}"></label>
-            <label>Chart <select class="panel-type">${options}</select></label>
-            <label>Width <select class="panel-width">${widths}</select></label>
-        </div>
-        <label>Query <textarea class="panel-query" rows="2" placeholder="find * | timechart span=1h count">${esc(data.query || '')}</textarea></label>
-        <div class="panel-row-actions">
-            <button type="button" class="btn btn-secondary btn-sm panel-preview-btn">Preview</button>
-            <button type="button" class="btn btn-secondary btn-sm panel-up" aria-label="Move panel up">Up</button>
-            <button type="button" class="btn btn-secondary btn-sm panel-down" aria-label="Move panel down">Down</button>
-            <button type="button" class="btn btn-danger btn-sm panel-remove" aria-label="Remove panel">Remove</button>
-        </div>
-        <div class="panel-preview"></div>`;
-    row.dataset.panelId = data.id || '';
-    row.querySelector('.panel-remove').onclick = () => row.remove();
-    row.querySelector('.panel-up').onclick = () => { if (row.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling); };
-    row.querySelector('.panel-down').onclick = () => { if (row.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row); };
-    row.querySelector('.panel-preview-btn').onclick = () => {
-        const preview = row.querySelector('.panel-preview');
-        preview.innerHTML = '<span class="spinner"></span>';
-        renderPanel({ query: row.querySelector('.panel-query').value.trim(), type: row.querySelector('.panel-type').value, title: row.querySelector('.panel-title').value }, preview);
-    };
-    document.getElementById('panelEditorList').appendChild(row);
-}
-
-function readPanelRows() {
-    return [...document.querySelectorAll('#panelEditorList .panel-row')].map((row, i) => {
-        const panel = {
-            title: row.querySelector('.panel-title').value.trim() || `Panel ${i + 1}`,
-            query: row.querySelector('.panel-query').value.trim(),
-            type: row.querySelector('.panel-type').value,
-            width: Number(row.querySelector('.panel-width').value),
-            row: i,
-            column: 0,
-            height: 4,
-        };
-        if (row.dataset.panelId) panel.id = row.dataset.panelId;
-        return panel;
-    });
-}
+/* Dashboards live in dashboard.js. */
 
 /* ===== Health ===== */
 async function loadHealthDetails() {
@@ -568,7 +556,7 @@ async function ingestLogs() {
 /* ===== Indexes ===== */
 async function loadIndexes() {
     const el = document.getElementById('indexesList');
-    el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+    el.innerHTML = '<div class="empty-state">' + loadingHtml('Loading indexes…') + '</div>';
     try {
         const data = await api('GET', '/api/v1/indexes');
         const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
@@ -594,7 +582,7 @@ async function loadIndexes() {
 /* ===== Alerts ===== */
 async function loadAlerts() {
     const tbody = document.getElementById('alertsBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading alerts…') + '</td></tr>';
     try {
         const sev = document.getElementById('alertSevFilter').value;
         const ack = document.getElementById('alertAckFilter').value;
@@ -625,179 +613,7 @@ async function loadAlerts() {
     }
 }
 
-let rulesById = {};
-
-async function loadRules() {
-    const tbody = document.getElementById('rulesBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
-    try {
-        const rules = await api('GET', '/api/v1/rules');
-        rulesById = Object.fromEntries(rules.map(r => [r.id, r]));
-        tbody.innerHTML = '';
-        rules.forEach(rule => {
-            const tr = document.createElement('tr');
-            const firesOn = rule.threshold > 1
-                ? `${fmt(rule.threshold)} matches in ${fmt(rule.windowSeconds)}s${rule.groupBy ? ' by ' + esc(rule.groupBy) : ''}`
-                : 'Each match';
-            const actionSummary = (rule.actions && rule.actions.length)
-                ? rule.actions.map(a => a.type === 'event' ? `event→${esc(a.target || 'detections')}` : a.type === 'connector' ? `→${esc(a.target || '?')}` : a.type === 'webhook' ? 'webhook' : 'notify').join(', ')
-                : 'notify';
-            tr.innerHTML = `<td><div style="font-weight:500">${esc(rule.name)}</div><div class="chart-note">${esc(rule.description || '')}</div><div class="chart-note">On fire: ${actionSummary}</div></td>
-                <td>${sevBadge(rule.severity)}</td>
-                <td>${firesOn}</td>
-                <td>${esc(rule.technique || '-')}</td>
-                <td><button type="button" class="btn btn-secondary btn-sm toggle-btn" aria-pressed="${rule.enabled}" aria-label="${rule.enabled ? 'Turn off' : 'Turn on'} ${esc(rule.name)}">${rule.enabled ? 'On' : 'Off'}</button></td>
-                <td>${rule.builtin ? '<span class="chart-note">Built in</span>' : '<button type="button" class="btn btn-secondary btn-sm edit-btn">Edit</button> <button type="button" class="btn btn-danger btn-sm del-btn">Del</button>'}</td>`;
-            tr.querySelector('.toggle-btn').onclick = () => toggleRule(rule.id, !rule.enabled);
-            if (!rule.builtin) {
-                tr.querySelector('.edit-btn').onclick = () => showRuleModal(rule.id);
-                tr.querySelector('.del-btn').onclick = () => deleteRule(rule.id);
-            }
-            tbody.appendChild(tr);
-        });
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
-    }
-}
-
-async function toggleRule(id, enabled) {
-    try {
-        await api('POST', `/api/v1/rules/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`);
-        loadRules();
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-async function deleteRule(id) {
-    if (!confirm('Delete this rule?')) return;
-    try {
-        await api('DELETE', `/api/v1/rules/${encodeURIComponent(id)}`);
-        loadRules();
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
-
-function showRuleModal(id) {
-    const rule = (typeof id === 'string' && rulesById[id]) || {};
-    document.getElementById('ruleEditId').value = rule.id || '';
-    document.getElementById('ruleModalTitle').textContent = rule.id ? 'Edit Rule' : 'New Rule';
-    document.getElementById('ruleName').value = rule.name || '';
-    document.getElementById('ruleSeverity').value = rule.severity || 'Warning';
-    document.getElementById('rulePattern').value = rule.pattern || '';
-    document.getElementById('ruleCondition').value = rule.condition || '';
-    document.getElementById('ruleExtract').value = rule.extract || '';
-    document.getElementById('ruleGroupBy').value = rule.groupBy || '';
-    document.getElementById('ruleThreshold').value = rule.threshold || 1;
-    document.getElementById('ruleWindow').value = rule.windowSeconds || 300;
-    document.getElementById('ruleCooldown').value = rule.cooldownSeconds ?? 300;
-    document.getElementById('ruleDescription').value = rule.description || '';
-    renderRuleActions(rule.actions);
-    document.getElementById('ruleTestResult').textContent = '';
-    openModal('ruleModal');
-}
-
-function readRuleForm() {
-    const text = id => document.getElementById(id).value.trim() || null;
-    return {
-        name: document.getElementById('ruleName').value.trim(),
-        severity: document.getElementById('ruleSeverity').value,
-        pattern: text('rulePattern'),
-        condition: text('ruleCondition'),
-        extract: text('ruleExtract'),
-        groupBy: text('ruleGroupBy'),
-        threshold: Number(document.getElementById('ruleThreshold').value),
-        windowSeconds: Number(document.getElementById('ruleWindow').value),
-        cooldownSeconds: Number(document.getElementById('ruleCooldown').value),
-        description: text('ruleDescription'),
-        actions: readRuleActions(),
-    };
-}
-
-const SEVERITIES = ['Info', 'Warning', 'Error', 'Critical'];
-
-function renderRuleActions(actions) {
-    document.getElementById('ruleActions').innerHTML = '';
-    (actions || []).forEach(addRuleAction);
-}
-
-function addRuleAction(action) {
-    action = (action && typeof action === 'object' && 'type' in action) ? action : { type: 'notify' };
-    const row = document.createElement('div');
-    row.className = 'rule-action';
-    row.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;margin:6px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center';
-    const sevOptions = ['<option value="">(rule severity)</option>'].concat(SEVERITIES.map(s => `<option${action.severity === s ? ' selected' : ''}>${s}</option>`)).join('');
-    row.innerHTML = `
-        <select class="ra-type" style="width:auto">
-            <option value="notify"${action.type === 'notify' ? ' selected' : ''}>Notify channels</option>
-            <option value="event"${action.type === 'event' ? ' selected' : ''}>Write an event</option>
-            <option value="webhook"${action.type === 'webhook' ? ' selected' : ''}>Call a webhook</option>
-            <option value="connector"${action.type === 'connector' ? ' selected' : ''}>Send to connector</option>
-        </select>
-        <input class="ra-target" style="flex:1;min-width:160px" value="${esc(action.target || '')}">
-        <select class="ra-sev" style="width:auto">${sevOptions}</select>
-        <input class="ra-msg" style="flex:1;min-width:160px" placeholder="Message (optional)" value="${esc(action.message || '')}">
-        <textarea class="ra-fields" style="width:100%;min-height:40px" placeholder="Event fields: field={group} per line">${esc(fieldsToText(action.fields))}</textarea>
-        <button type="button" class="btn btn-danger btn-sm ra-del">Remove</button>`;
-    document.getElementById('ruleActions').appendChild(row);
-    const type = row.querySelector('.ra-type');
-    const apply = () => {
-        const t = type.value;
-        row.querySelector('.ra-target').style.display = t === 'notify' ? 'none' : '';
-        row.querySelector('.ra-target').placeholder = t === 'webhook' ? 'https://your-webhook-url' : t === 'connector' ? 'Connector name (see Connectors)' : 'Index for the event (default detections)';
-        row.querySelector('.ra-fields').style.display = t === 'event' ? '' : 'none';
-    };
-    type.addEventListener('change', apply);
-    row.querySelector('.ra-del').addEventListener('click', () => row.remove());
-    apply();
-}
-
-function fieldsToText(fields) {
-    return fields ? Object.entries(fields).map(([k, v]) => `${k}=${v}`).join('\n') : '';
-}
-
-function readRuleActions() {
-    const rows = [...document.querySelectorAll('#ruleActions .rule-action')];
-    return rows.map(row => {
-        const type = row.querySelector('.ra-type').value;
-        const action = { type };
-        const target = row.querySelector('.ra-target').value.trim();
-        const sev = row.querySelector('.ra-sev').value;
-        const msg = row.querySelector('.ra-msg').value.trim();
-        if (type !== 'notify' && target) action.target = target;
-        if (sev) action.severity = sev;
-        if (msg) action.message = msg;
-        if (type === 'event') {
-            const fields = {};
-            row.querySelector('.ra-fields').value.split('\n').forEach(line => {
-                const i = line.indexOf('=');
-                if (i > 0) fields[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-            });
-            if (Object.keys(fields).length) action.fields = fields;
-        }
-        return action;
-    });
-}
-
-async function testRule() {
-    const out = document.getElementById('ruleTestResult');
-    const rule = readRuleForm();
-    try {
-        const result = await api('POST', '/api/v1/rules/test', { line: document.getElementById('ruleTestLine').value, pattern: rule.pattern, condition: rule.condition, extract: rule.extract });
-        out.textContent = result.matched
-            ? `Matches.${rule.groupBy ? ` It would count by ${rule.groupBy} = ${result.fields[rule.groupBy] ?? '(no value, so it would not count)'}.` : ''}`
-            : 'Does not match.';
-    } catch (e) { out.textContent = e.message; }
-}
-
-async function saveRule() {
-    const id = document.getElementById('ruleEditId').value;
-    const rule = readRuleForm();
-    try {
-        if (id) await api('PUT', `/api/v1/rules/${encodeURIComponent(id)}`, rule);
-        else await api('POST', '/api/v1/rules', rule);
-        closeModal('ruleModal');
-        toast('Rule saved', 'success');
-        loadRules();
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
+/* Detection rules live in respond.js. */
 
 async function ackAlert(id) {
     try {
@@ -810,7 +626,7 @@ async function ackAlert(id) {
 /* ===== Scheduled Searches ===== */
 async function loadSchedules() {
     const tbody = document.getElementById('schedulesBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading scheduled searches…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/scheduled-searches');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -917,7 +733,7 @@ async function deleteSchedule(id) {
 /* ===== Field Extractions ===== */
 async function loadExtractions() {
     const tbody = document.getElementById('extractionsBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading field extractions…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/field-extractions');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1014,7 +830,7 @@ function loadKnowledgeCurrent() {
 
 async function loadLookups() {
     const tbody = document.getElementById('lookupsBody');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px">' + loadingHtml('Loading lookups…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/lookups');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1034,7 +850,7 @@ async function loadLookups() {
 
 async function loadMacros() {
     const tbody = document.getElementById('macrosBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading macros…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/macros');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1054,7 +870,7 @@ async function loadMacros() {
 
 async function loadAliases() {
     const tbody = document.getElementById('aliasesBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading field aliases…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/aliases');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1208,7 +1024,7 @@ async function loadRetentionPolicies() {
             const div = document.createElement('div');
             div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px';
             div.innerHTML = `<span><strong>${esc(p.index)}</strong> — ${p.maxAgeDays}d${p.archiveBeforeDelete ? ' (archive)' : ''}</span>
-                <button class="btn btn-danger btn-sm del-btn">Del</button>`;
+                <button class="btn btn-danger btn-sm del-btn">Delete</button>`;
             div.querySelector('.del-btn').onclick = () => deleteRetention(p.index);
             el.appendChild(div);
         });
@@ -1280,111 +1096,14 @@ function closeDrawer() {
     document.getElementById('eventDrawer').classList.remove('show');
 }
 
-/* ===== Live Tail ===== */
-let tailEventSource = null;
-let tailCount = 0;
-
-async function loadTailIndexes() {
-    try {
-        const data = await api('GET', '/api/v1/indexes');
-        const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
-        const sel = document.getElementById('tailIndex');
-        sel.innerHTML = '';
-        if (indexes.length === 0) {
-            sel.innerHTML = '<option value="main">main</option>';
-        } else {
-            indexes.forEach(idx => {
-                const name = typeof idx === 'string' ? idx : (idx.name || idx.index || 'main');
-                const opt = document.createElement('option');
-                opt.value = name; opt.textContent = name;
-                sel.appendChild(opt);
-            });
-        }
-    } catch { /* keep default */ }
-}
-
-function toggleTail() {
-    if (tailEventSource) {
-        tailEventSource.close();
-        tailEventSource = null;
-        document.getElementById('tailDot').style.display = 'none';
-        document.getElementById('tailStartBtn').textContent = 'Start';
-        document.getElementById('tailStartBtn').classList.remove('btn-danger');
-        document.getElementById('tailStartBtn').classList.add('btn-primary');
-        return;
-    }
-    const index = document.getElementById('tailIndex').value || 'main';
-    const filter = document.getElementById('tailFilter').value.trim();
-    let url = `/api/v1/logs/stream/live?index=${encodeURIComponent(index)}&pollIntervalMs=1000`;
-    if (filter) url += `&filter=${encodeURIComponent(filter)}`;
-
-    const output = document.getElementById('tailOutput');
-    document.getElementById('tailDot').style.display = 'inline-block';
-    document.getElementById('tailStartBtn').textContent = 'Stop';
-    document.getElementById('tailStartBtn').classList.remove('btn-primary');
-    document.getElementById('tailStartBtn').classList.add('btn-danger');
-    document.getElementById('tailPauseBtn').disabled = false;
-    setTailPaused(false);
-
-    // SSE connection with API key via query param not supported; use fetch streaming instead
-    const controller = new AbortController();
-    tailEventSource = { close: () => controller.abort() };
-
-    (async () => {
-        try {
-            const res = await fetch(url, {
-                headers: { ...authHeaders(), 'Accept': 'text/event-stream' },
-                signal: controller.signal
-            });
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // keep incomplete line
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            receiveTailEvent(JSON.parse(line.slice(6)));
-                        } catch (parseError) { console.warn('Skipped a live tail line', parseError); }
-                    }
-                }
-            }
-        } catch (e) {
-            if (e.name !== 'AbortError') {
-                const div = document.createElement('div');
-                div.style.color = 'var(--error)';
-                div.textContent = 'Stream ended: ' + e.message;
-                output.appendChild(div);
-            }
-        }
-        // Clean up
-        document.getElementById('tailPauseBtn').disabled = true;
-        setTailPaused(false);
-        document.getElementById('tailDot').style.display = 'none';
-        document.getElementById('tailStartBtn').textContent = 'Start';
-        document.getElementById('tailStartBtn').classList.remove('btn-danger');
-        document.getElementById('tailStartBtn').classList.add('btn-primary');
-        tailEventSource = null;
-    })();
-}
-
-function clearTail() {
-    document.getElementById('tailOutput').innerHTML = '';
-    tailBuffer = [];
-    tailCount = 0;
-    document.getElementById('tailCount').textContent = '0 events';
-}
+/* Live Tail lives in livetail.js. */
 
 /* ===== Search Jobs ===== */
 let jobPollTimer = null;
 
 async function loadJobs() {
     const tbody = document.getElementById('jobsBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading background searches…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/query/jobs');
         const jobs = Array.isArray(data) ? data : (data.data || data.jobs || []);
@@ -1483,53 +1202,80 @@ async function viewJobResults(id) {
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-/* ===== Theme Toggle ===== */
-function toggleTheme() {
-    const body = document.body;
-    body.classList.toggle('light');
-    const isLight = body.classList.contains('light');
-    localStorage.setItem('cabinet_theme', isLight ? 'light' : 'dark');
-    document.getElementById('themeBtn').textContent = isLight ? 'Dark' : 'Light';
-}
-
-// Restore theme on load
-(function() {
-    const saved = localStorage.getItem('cabinet_theme');
-    if (saved === 'light') {
-        document.body.classList.add('light');
-        document.getElementById('themeBtn').textContent = 'Dark';
-    }
-})();
-
 /* ===== API Key ===== */
 function changeApiKey() {
+    if (typeof settingsState !== 'undefined') settingsState.section = 'general';
     navigate('settings');
 }
 
-/* ===== Health Polling ===== */
+/* ===== Health Polling: the sidebar footer's status line ===== */
+let healthState = 'connecting';
+let eventsPerSecond = null;
+
+function renderHealthLine() {
+    const dot = document.getElementById('healthDot');
+    const text = document.getElementById('healthText');
+    const labels = { ok: 'Healthy', warn: 'Degraded', err: "Can't reach the server", connecting: 'Connecting…' };
+    dot.className = 'dot ' + (healthState === 'connecting' ? '' : healthState);
+    const rate = healthState === 'ok' && eventsPerSecond !== null
+        ? ` · ${eventsPerSecond < 10 && eventsPerSecond > 0 ? eventsPerSecond.toFixed(1) : fmt(Math.round(eventsPerSecond))} events/s`
+        : '';
+    text.textContent = labels[healthState] + rate;
+}
+
 async function checkHealth() {
     try {
         const res = await fetch('/health/live');
-        const dot = document.getElementById('healthDot');
-        const text = document.getElementById('healthText');
-        if (res.ok) { dot.className = 'dot ok'; text.textContent = 'Connected'; }
-        else { dot.className = 'dot warn'; text.textContent = 'Degraded'; }
+        healthState = res.ok ? 'ok' : 'warn';
     } catch {
-        document.getElementById('healthDot').className = 'dot err';
-        document.getElementById('healthText').textContent = 'Disconnected';
+        healthState = 'err';
     }
+    renderHealthLine();
 }
 
 let storedEventCount = null;
+let lastStatsSample = null;
 
 async function loadStats() {
     try {
         const stats = await api('GET', '/api/v1/logs/stats');
         storedEventCount = stats.totalEvents || 0;
+        // Events per second: how much the stored count grew since the last look
+        const now = Date.now();
+        if (lastStatsSample && now > lastStatsSample.at) {
+            eventsPerSecond = Math.max(0, (storedEventCount - lastStatsSample.count) / ((now - lastStatsSample.at) / 1000));
+        }
+        lastStatsSample = { count: storedEventCount, at: now };
+        renderHealthLine();
         renderEmptyState();
     } catch (e) {
         // The count is a nicety on the empty search page; searching works without it
         storedEventCount = null;
+    }
+}
+
+/* Unacknowledged alerts, as "3 new" beside Alerts. One cheap request: the count comes in a header. */
+async function loadNavCounts() {
+    try {
+        const res = await fetch('/api/v1/alerts?acknowledged=false&count=1', { headers: { ...authHeaders(), Accept: 'application/json' } });
+        if (!res.ok) return;
+        const total = parseInt(res.headers.get('X-Total-Count') || '0', 10) || 0;
+        setNavMeta('alerts', total > 0 ? `${fmt(total)} new` : '', 'alert');
+    } catch {
+        // Only the sidebar's count is missing; the Alerts page loads on its own
+    }
+}
+
+/* Who's signed in, for the sidebar footer, when it isn't a sign-in session (an API key). */
+async function loadUserName() {
+    if (!API_KEY) return;
+    try {
+        const res = await fetch('/api/v1/roles/me', { headers: { ...authHeaders(), Accept: 'application/json' } });
+        if (!res.ok) return;
+        const me = await res.json();
+        if (me && me.clientId) showUserName(me.clientId);
+    } catch {
+        // The footer keeps saying "Account"
     }
 }
 
@@ -1592,17 +1338,22 @@ function sevBadge(sev) {
 }
 
 /* ===== Init ===== */
-checkHealth(); loadStats(); initSearchPage();
-// P3: Reduced polling frequency for production (60s health, 120s stats)
+document.getElementById('serverName').textContent = window.location.host;
+collapsedNavGroups().forEach(group => setNavGroupState(group, true));
+buildSubnav();
+syncThemeControls();
+checkHealth(); loadStats(); initSearchPage(); loadNavCounts(); loadUserName();
+// P3: Reduced polling frequency for production (60s health and stats, which give events per second)
 setInterval(checkHealth, 60000);
-setInterval(loadStats, 120000);
+setInterval(loadStats, 60000);
+setInterval(loadNavCounts, 60000);
 
 // P10: URL-based navigation — restore page from hash on load and back/forward
 (function() {
-    const hash = window.location.hash.replace('#', '');
+    const hash = window.location.hash.replace('#', '').split('?')[0];
     if (hash.startsWith('search')) {
         // A link to a search: the search page runs it
-    } else if (hash && document.getElementById('page-' + hash)) {
+    } else if (hash && isPage(hash)) {
         navigate(hash);
     } else {
         document.getElementById('queryInput').focus();
@@ -1617,7 +1368,7 @@ window.addEventListener('popstate', e => {
 document.addEventListener('keydown', e => {
     // Escape: close modals and drawers
     if (e.key === 'Escape') {
-        closeSaveModal(); closeDrawer();
+        closeSaveModal(); closeDrawer(); closeUserMenu();
         document.querySelectorAll('.modal-bg.show').forEach(m => m.classList.remove('show'));
         hideSuggestions(); closeTimePicker(); closeSearchMenu();
         return;

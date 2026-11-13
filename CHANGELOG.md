@@ -12,6 +12,10 @@ Enterprise sign-in and signed releases. Upgrading: dashboard sessions end once, 
 
 ### Added
 
+- **A new look: "Platinum".** Light and calm, with a Graphite dark theme that follows the system. A five-group sidebar (Ask, Watch, Respond, Data, Admin) replaces the 27-item list; every page says what it is for, every control is labelled in words, and each view has one default action. Self-hosted Atkinson Hyperlegible fonts, so nothing is fetched from elsewhere.
+- **Search shows how it read you**: "Understood as" splits the query into steps, each in code and in words, and clicking one edits it. The result view is chosen from the question (ranked bars, a chart over time, a table or events) and says why; events open in an inspector with Only and Hide per field, a timeline you can drag to zoom, and a summary of the fields in the results. Ask next, About this result, and Save question, Add to dashboard and Alert me when beside every result.
+- **First-run Setup Assistant**: on a server with no events, administrators are walked through choosing a source (agent, Splunk HEC, OpenTelemetry or syslog) with the exact install command, and it moves on by itself when the first event arrives.
+- **Dashboards** say what each panel measures, compare big numbers with the period before, and add stacked bars; **detection rules** sit beside the ATT&CK coverage matrix, with the biggest gap and a one-click backtest; **cases** read as a timeline with an ADD field for notes and in-case searches; **settings** are staged until Apply, and each says what it does, its default and where it is set. **Live Tail** filters in plain words, shows events per second, and pauses with Space.
 - **Entra ID and Cognito presets** for single sign-on (`Sso:Oidc:Provider`): from the tenant, or the region and user pool, Cabinet works out the authority, accepts Entra's v1 and v2 tokens for that tenant only (never `common` or `organizations`), knows users by their Entra object ID (the one SCIM uses, where `sub` differs per app), maps app roles (`roles`) and groups, warns when Entra leaves groups out of a token, accepts Cognito access tokens by their `client_id`, and reads groups from `cognito:groups`. Tested against a real Entra tenant and Cognito user pool.
 - **Signed releases**: every archive, package and install script in a release has a `.sig`, an ECDSA P-256 / SHA-256 signature made by the release workflow, plus a signed `SHA256SUMS`. The public key is `build/release-signing.pub.pem`; DEPLOYMENT.md and SECURITY.md show how to check a download with `openssl`.
 - **One-step releases**: the manual Release workflow tests a commit, builds every artifact from it with the version stamped in, signs them, tags the commit and publishes the release, as a pre-release for versions like `3.1.0-rc.1`.
@@ -49,7 +53,8 @@ Enterprise sign-in and signed releases. Upgrading: dashboard sessions end once, 
 - The Linux installer copies everything published with the server, including SQLite's native library, which it left out.
 - The alert log went to a `cabinet` folder in the program's folder when the service account has no home, as Linux services don't; it goes beside the server's logs.
 - `scripts/build-release.sh` had a syntax error and couldn't run.
-- A leader whose lease loop stalled (a starved thread pool or a hung connection) kept counting itself the leader, beside whichever instance took the lock next. Leadership now lapses unless confirmed within 20 seconds.
+- A leader whose lease loop stalled (a starved thread pool or a hung connection) kept counting itself the leader, beside whichever instance took the lock next. Leadership now lapses unless confirmed within 20 seconds, and confirming asks PostgreSQL whether this session still holds the lock rather than whether any query answers.
+- The Cabinet engine stored list-valued fields (the IP addresses and quoted strings the generic parser finds) as the text "System.Collections.Generic.List`1[System.String]"; it stores them as JSON, as the other backends do.
 - A search could be cached without a write made in the same clock tick as it started, so it showed one event too few until the cache expired.
 
 

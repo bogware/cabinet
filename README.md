@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/ask-in-plain-words.gif" alt="Typing 'errors on web servers since yesterday by host' into Cabinet and getting a chart of errors per web server" width="900">
+  <img src="docs/images/screenshots/search-natural.jpg" alt="Asking 'errors on web servers this week by host': Cabinet shows how it understood the question, step by step in code and in words, and answers with ranked bars per host" width="900">
 </p>
 
 ## Why Cabinet
@@ -76,7 +76,7 @@ The search box, the CLI and the API all take questions in ordinary words, in any
 When a question is ambiguous, Cabinet doesn't guess. It offers the likely readings, marks the part it didn't follow, and can hand the question to the optional AI assistant, which runs on a local model by default. Saved searches, alerts and detection rules always store the exact query, so their meaning can't drift. The [query guide](docs/BQL-GUIDE.md#ask-in-plain-words-natural-language) covers what it understands.
 
 <p align="center">
-  <img src="docs/images/screenshots/search-natural.png" alt="A plain-English search with the query it was understood as, an explanation in words, and a bar chart of the 95th percentile response time per endpoint" width="900">
+  <img src="docs/images/screenshots/search-events.jpg" alt="5xx errors on web-02 yesterday: each step of the query explained, a timeline of the errors, the matching events, and an inspector with Only and Hide for every field" width="900">
 </p>
 
 ## Quick start
@@ -116,15 +116,14 @@ Cabinet also takes OpenTelemetry (OTLP/HTTP), syslog, a REST API, and its own fo
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/screenshots/search-examples.png" alt="The search page with starter questions grouped into overview, errors, performance and security"><br><sub>Starter questions fitted to your own hosts and fields.</sub></td>
-<td width="50%"><img src="docs/images/screenshots/search-events.png" alt="Events matching 5xx errors on one web server, with a timeline and a fields sidebar"><br><sub>Events with a timeline, field summaries and one-click filters.</sub></td>
+<td width="50%"><img src="docs/images/screenshots/search-examples.jpg" alt="The search page with starter questions grouped into overview, errors, performance and security"><br><sub>Starter questions fitted to your own hosts and fields.</sub></td>
+<td width="50%"><img src="docs/images/screenshots/search-builder.jpg" alt="The Build a search panel: words, time, conditions, what to show and how to group it"><br><sub>Build a search by picking fields, or type one.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/screenshots/search-builder.jpg" alt="The Build panel choosing a source type, an average of duration and a chart over time per host"><br><sub>Build a search by picking fields, or type one.</sub></td>
-<td><img src="docs/images/screenshots/dashboard.jpg" alt="A dashboard with requests per hour, error count, p95 latency by endpoint, events by source type, status codes and blocked connections"><br><sub>Dashboards with nine chart types and auto-refresh.</sub></td>
+<td colspan="2"><img src="docs/images/screenshots/dashboard.jpg" alt="A dashboard: requests per hour, server errors and failed logins compared with the day before, the slowest endpoints, status codes and events by source type, each saying what it measures"><br><sub>Dashboards where every panel says what it measures, and big numbers compare with the period before.</sub></td>
 </tr>
 <tr>
-<td colspan="2"><img src="docs/images/screenshots/attack-coverage.jpg" alt="The MITRE ATT&CK coverage matrix showing which techniques detection rules cover"><br><sub>Detections mapped to MITRE ATT&CK, with Sigma rules imported in one paste.</sub></td>
+<td colspan="2"><img src="docs/images/screenshots/attack-coverage.jpg" alt="Detection rules with severity and how often each fired, beside the ATT&CK matrix of covered, turned-off and uncovered techniques"><br><sub>Detection rules beside the MITRE ATT&CK coverage they give, with the biggest gap and a one-click backtest.</sub></td>
 </tr>
 </table>
 

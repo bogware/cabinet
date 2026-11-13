@@ -1,0 +1,63 @@
+/* Live Tail (Platinum 3g). The mock is drawn in Graphite; the page follows the theme through tokens. */
+
+:root { --tail-info: #5A7848; --tail-warn: #B7791F; --tail-error: #B8322A; --tail-error-row: rgba(184, 50, 42, .06); --tail-spark: #2F7D4F; }
+:root[data-theme="graphite"] { --tail-info: #A4BF8D; --tail-warn: #D9A441; --tail-error: #F07167; --tail-error-row: rgba(240, 113, 103, .08); --tail-spark: #5DBB7E; }
+
+.page.active#page-livetail { height: 100%; }
+.lt-page { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; min-height: 0; height: calc(100vh - var(--toolbar-h)); }
+.lt-controls { display: flex; align-items: center; gap: 14px; flex: none; }
+
+/* Pause: the default button, with two bars; Resume shows a triangle */
+.btn.lt-pause { height: 38px; padding: 0 20px; font-size: var(--fs-14-5); gap: 8px; min-width: 116px; }
+.lt-pause-icon { display: inline-flex; gap: 3px; width: 11px; height: 13px; }
+.lt-pause-icon::before, .lt-pause-icon::after { content: ''; width: 4px; height: 13px; background: #fff; border-radius: 1px; }
+.lt-pause.paused .lt-pause-icon::before { width: 0; height: 0; background: none; border-radius: 0; border-style: solid; border-width: 6.5px 0 6.5px 11px; border-color: transparent transparent transparent #fff; }
+.lt-pause.paused .lt-pause-icon::after { display: none; }
+
+.lt-filter { flex: 1; min-width: 0; min-height: 42px; gap: 12px; padding: 0 8px 0 14px; }
+.lt-filter input { font-size: var(--fs-15); height: 40px; }
+.lt-rate { width: 150px; flex: none; display: flex; flex-direction: column; gap: 3px; }
+.lt-spark { height: 22px; display: flex; align-items: flex-end; gap: 2px; }
+.lt-spark span { flex: 1; background: var(--tail-spark); border-radius: 1px; min-height: 1px; }
+.lt-rate > span { font-size: var(--fs-12); color: var(--ink-2); white-space: nowrap; }
+.lt-rate b { color: var(--ink); }
+
+.lt-understood { flex: none; font-size: var(--fs-12-5); color: var(--ink-2); min-height: 18px; }
+.lt-understood code { font-family: var(--font-mono); color: var(--moss-text); }
+.lt-said { margin-left: 6px; }
+.lt-understood .btn-link { margin-left: 8px; font-size: var(--fs-12-5); }
+
+/* The stream: newest at the bottom, a colour bar per severity, errors tinted */
+.lt-stream {
+    flex: 1; min-height: 200px; overflow-y: auto; display: flex; flex-direction: column; padding: 8px 0;
+    background: var(--well); border: 1px solid var(--hairline); border-radius: var(--r-panel);
+    font-family: var(--font-mono); font-size: var(--fs-12-5);
+}
+.lt-stream:focus-visible { outline: 2px solid var(--moss); outline-offset: 1px; }
+.lt-stream > :first-child { margin-top: auto; }
+.lt-row { display: grid; grid-template-columns: 4px 110px 54px 64px 1fr; gap: 12px; align-items: stretch; padding: 0 14px 0 0; cursor: pointer; flex: none; }
+.lt-row > span:not(.lt-bar) { padding: 6px 0; }
+.lt-row:hover { background: var(--moss-wash); }
+.lt-bar { background: var(--tail-info); }
+.lt-time { color: var(--placeholder); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lt-sev { font-weight: 700; color: var(--tail-info); }
+.lt-host { color: var(--ink-card); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-msg { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lt-msg mark { background: var(--mark-bg); color: inherit; border-radius: 2px; }
+.lt-warn .lt-bar { background: var(--tail-warn); }
+.lt-warn .lt-sev { color: var(--tail-warn); }
+.lt-error { background: var(--tail-error-row); }
+.lt-error .lt-bar { background: var(--tail-error); }
+.lt-error .lt-sev { color: var(--tail-error); }
+.lt-ended { padding: 10px 14px; font-family: var(--font-ui); }
+
+.lt-foot { flex: none; display: flex; align-items: center; gap: 18px; font-size: var(--fs-12-5); color: var(--ink-2); flex-wrap: wrap; row-gap: 6px; }
+.lt-foot input[type="text"] { height: 24px; width: 140px; font-size: var(--fs-12-5); margin-left: -12px; }
+.lt-foot .check-label { font-size: var(--fs-12-5); color: var(--ink-2); }
+.lt-hl { font-weight: 700; }
+
+@media (max-width: 900px) {
+    .lt-controls { flex-wrap: wrap; }
+    .lt-row { grid-template-columns: 4px 92px 46px 1fr; }
+    .lt-host { display: none; }
+}

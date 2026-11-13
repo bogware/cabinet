@@ -10854,6 +10854,10 @@
             "type": "string",
             "nullable": true
           },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
           "description": {
             "type": "string",
             "nullable": true
@@ -11300,6 +11304,10 @@
             "type": "string",
             "nullable": true
           },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
           "type": {
             "$ref": "#/components/schemas/VisualizationType"
           },
@@ -11597,6 +11605,10 @@
             "nullable": true
           },
           "query": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
             "type": "string",
             "nullable": true
           },
@@ -13577,6 +13589,10 @@
             "type": "string",
             "nullable": true
           },
+          "sourceName": {
+            "type": "string",
+            "nullable": true
+          },
           "editable": {
             "type": "boolean"
           },
@@ -14240,6 +14256,10 @@
             "type": "string",
             "nullable": true
           },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
           "type": {
             "$ref": "#/components/schemas/VisualizationType"
           },
@@ -14547,7 +14567,8 @@
           "Gauge",
           "Map",
           "Heatmap",
-          "Markdown"
+          "Markdown",
+          "StackedBar"
         ],
         "type": "string"
       }
