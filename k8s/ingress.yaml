@@ -1,5 +1,7 @@
-# Replace the host, and add TLS through your own issuer. Prometheus scrapes the pods directly, and
-# /metrics has no authentication, so here it goes to a Service that doesn't exist, which answers 503.
+# Replace the host and the certificate secret: with cert-manager, uncomment its annotation and it
+# issues the certificate into cabinet-tls. Keys and events cross this ingress, so it's HTTPS only.
+# Prometheus scrapes the pods directly, so /metrics goes to a Service that doesn't exist, which
+# answers 503.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -12,8 +14,15 @@ metadata:
     # Long enough for streams and exports
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3700"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - cabinet.example.com
+      secretName: cabinet-tls
   rules:
     - host: cabinet.example.com
       http:

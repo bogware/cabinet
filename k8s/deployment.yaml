@@ -36,7 +36,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cabinet-api
-          image: ghcr.io/bogware/cabinet:latest
+          # A released version, so a restart never changes what runs; kustomize images can override it
+          image: ghcr.io/bogware/cabinet:3.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
