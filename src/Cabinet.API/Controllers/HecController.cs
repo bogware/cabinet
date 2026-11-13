@@ -81,16 +81,30 @@ public class HecController : ControllerBase
         var lines = body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var parseErrors = 0;
 
+        // Splunk takes events one after another with or without newlines between them, and many
+        // clients send them back to back: {...}{...}. Lines stay apart, so a bad one costs only itself.
+        var parsed = new List<HecEvent>();
         foreach (var line in lines)
+        {
+            if (!ReadEvents(line, parsed, out var error))
+            {
+                parseErrors++;
+                if (parseErrors <= 10)
+                    _logger.LogWarning(error, "Failed to parse HEC event line ({ErrorCount} so far)", parseErrors);
+
+                // Stop processing after too many parse errors to prevent CPU abuse
+                if (parseErrors > 50)
+                {
+                    _logger.LogError("HEC request aborted: exceeded 50 parse errors");
+                    break;
+                }
+            }
+        }
+
+        foreach (var hecEvent in parsed)
         {
             try
             {
-                var hecEvent = JsonSerializer.Deserialize<HecEvent>(line, HecJsonOptions);
-                if (hecEvent == null)
-                {
-                    continue;
-                }
-
                 var converted = await ConvertHecEventAsync(hecEvent, cancellationToken);
                 if (_indexScope != null && !_indexScope.Can(Capability.Ingest, converted.Index))
                 {
@@ -103,14 +117,7 @@ public class HecController : ControllerBase
             {
                 parseErrors++;
                 if (parseErrors <= 10)
-                    _logger.LogWarning(ex, "Failed to parse HEC event line ({ErrorCount} so far)", parseErrors);
-
-                // Stop processing after too many parse errors to prevent CPU abuse
-                if (parseErrors > 50)
-                {
-                    _logger.LogError("HEC request aborted: exceeded 50 parse errors");
-                    break;
-                }
+                    _logger.LogWarning(ex, "Failed to read a HEC event ({ErrorCount} so far)", parseErrors);
             }
         }
 
@@ -273,6 +280,34 @@ public class HecController : ControllerBase
     /// </summary>
     private static bool IsValidEventId(string? id) =>
         id is { Length: >= 16 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
+
+    /// <summary>
+    /// Reads every JSON value on a line, back to back or spaced, adding the events it finds.
+    /// False, with the error, if the line stops being JSON; the events before that are kept.
+    /// </summary>
+    internal static bool ReadEvents(string line, List<HecEvent> events, out JsonException? error)
+    {
+        error = null;
+        var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(line), new JsonReaderOptions { AllowMultipleValues = true, MaxDepth = 64 });
+        try
+        {
+            while (reader.Read())
+            {
+                if (JsonSerializer.Deserialize<HecEvent>(ref reader, HecJsonOptions) is { } hecEvent)
+                {
+                    events.Add(hecEvent);
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex;
+            return false;
+        }
+    }
 
     private async Task<LogEvent> ConvertHecEventAsync(HecEvent hecEvent, CancellationToken cancellationToken)
     {

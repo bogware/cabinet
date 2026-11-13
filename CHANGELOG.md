@@ -83,6 +83,8 @@ It has breaking changes to search semantics and single sign-on, listed under Cha
 - A release candidate and its release were downloaded into the same folder, so updating to the release could reinstall the candidate, and agents could be offered it in a loop.
 - Outbound calls (webhook actions, connectors, the settings webhook) went through a configured proxy, which reached private addresses the guard would refuse, and NAT64 and 6to4 addresses weren't counted as private.
 - A sign-in return path with a tab or line break in it could send people to another site after signing in.
+- The HTTP Event Collector read one event per line, so events sent back to back (`{...}{...}`), as Splunk accepts and its logging libraries send, were refused.
+- The pre-authentication rate limit (300 requests a minute per address) counted requests with a valid key, so a busy forwarder on one address was throttled. Only requests that end unauthenticated count now; an address over the limit is still refused before its key is looked at.
 - Every downloaded update was kept, a few hundred megabytes each: 3.5 GB after nine updates on one server. Only the running version and the newest download stay.
 - Agent packages were downloaded again by every agent that asked at once, and after a failure on every request.
 - Whole numbers in fields read back from PostgreSQL and OpenSearch came back as decimals (4 as 4.0), since a conditional boxed them as `double`.

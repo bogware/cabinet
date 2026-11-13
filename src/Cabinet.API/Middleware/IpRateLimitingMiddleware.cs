@@ -8,6 +8,9 @@ namespace Cabinet.API.Middleware;
 /// Runs BEFORE authentication to protect against brute-force attacks
 /// on the auth layer (e.g., API key guessing, credential stuffing).
 /// Uses a sliding window algorithm with per-IP counters.
+/// Only requests that end unauthenticated count: a valid key or session gives its count back, so
+/// a busy sender such as a log forwarder isn't throttled, while an address that has used up its
+/// allowance on failures is refused before authentication is even tried.
 /// </summary>
 public sealed class IpRateLimitingMiddleware
 {
@@ -87,6 +90,12 @@ public sealed class IpRateLimitingMiddleware
         }
 
         await _next(context);
+
+        // What authenticated was never a guess; the ASP.NET limiter after authentication covers it
+        if (context.User?.Identity?.IsAuthenticated == true)
+        {
+            entry.Decrement();
+        }
     }
 
     private static string GetClientIp(HttpContext context)
@@ -166,6 +175,8 @@ public sealed class IpRateLimitingMiddleware
         }
 
         public int Increment() => Interlocked.Increment(ref _count);
+
+        public void Decrement() => Interlocked.Decrement(ref _count);
 
         /// <summary>
         /// Resets the window. Note: WindowStart and _count are not atomically updated together,

@@ -149,6 +149,45 @@ public class IpRateLimitingMiddlewareTests : IDisposable
         limited.Response.StatusCode.Should().Be(429);
     }
 
+    [Fact]
+    public async Task AuthenticatedRequests_DontCount_SoABusySenderIsntThrottled()
+    {
+        // A log forwarder on one address sends far more than 300 batches a minute
+        var middleware = new IpRateLimitingMiddleware(
+            ctx => { ctx.User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity("ApiKey")); return Task.CompletedTask; },
+            _logger.Object,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["RateLimiting:PreAuth:MaxRequestsPerMinute"] = "5" }).Build());
+
+        for (var i = 0; i < 50; i++)
+        {
+            var ctx = CreateHttpContext("/services/collector/event");
+            await middleware.InvokeAsync(ctx);
+            ctx.Response.StatusCode.Should().NotBe(429, $"request {i + 1} authenticated");
+        }
+    }
+
+    [Fact]
+    public async Task AnAddressOverItsLimitOnFailures_IsRefused_EvenWithAKey()
+    {
+        // Guesses use up the allowance; a key sent after that isn't even looked at
+        var failing = CreateMiddleware(maxRequests: 3);
+        for (var i = 0; i < 3; i++)
+        {
+            await failing.InvokeAsync(CreateHttpContext("/api/v1/logs"));
+        }
+
+        var reached = false;
+        var withKey = new IpRateLimitingMiddleware(
+            ctx => { reached = true; ctx.User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity("ApiKey")); return Task.CompletedTask; },
+            _logger.Object,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["RateLimiting:PreAuth:MaxRequestsPerMinute"] = "3" }).Build());
+        var ctx = CreateHttpContext("/api/v1/logs");
+        await withKey.InvokeAsync(ctx);
+
+        ctx.Response.StatusCode.Should().Be(429);
+        reached.Should().BeFalse();
+    }
+
     private IpRateLimitingMiddleware CreateMiddleware(int maxRequests = 300)
     {
         var config = new ConfigurationBuilder()

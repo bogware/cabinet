@@ -101,6 +101,23 @@ public class HecControllerTests
     }
 
     [Fact]
+    public async Task Events_BackToBack_WithoutNewlines_AreAllRead_AsSplunkDoes()
+    {
+        // Splunk's own logging libraries batch events this way
+        var stored = await PostEventAsync("""{"event":"one"}{"event":"two"} {"event":"three"}""" + "\n" + """{"event":"four"}""");
+
+        stored.Select(e => e.RawLine).Should().Equal("one", "two", "three", "four");
+    }
+
+    [Fact]
+    public async Task ABrokenEvent_CostsOnlyItsLine()
+    {
+        var stored = await PostEventAsync("""{"event":"kept"}{"event":""" + "\n" + """{"event":"also kept"}""");
+
+        stored.Select(e => e.RawLine).Should().Equal("kept", "also kept");
+    }
+
+    [Fact]
     public async Task Raw_LinesAreParsed()
     {
         var stored = new List<LogEvent>();
