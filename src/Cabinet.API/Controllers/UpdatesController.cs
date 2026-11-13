@@ -79,7 +79,11 @@ public class UpdatesController : ControllerBase
             return Problem(detail: "Unknown platform or version", statusCode: 400);
         }
 
-        _updates.RecordAgent(string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)], platform, version);
+        _updates.RecordAgent(
+            string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)],
+            platform,
+            version,
+            User.FindFirst("ClientId")?.Value);
         var server = ReleaseVersions.Parse(ReleaseVersions.CurrentFull)!.Value;
         if (ReleaseVersions.Compare((ReleaseVersions.Normalize(agentVersion.Core), agentVersion.Pre), server) >= 0
             || !_options.OffersAgentTo(host ?? string.Empty))

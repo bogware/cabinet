@@ -269,13 +269,22 @@ public sealed class UpdateService
     }
 
     /// <summary>Remembers an agent's version for the dashboard. Bounded, since agents report it.</summary>
-    public void RecordAgent(string host, string platform, string version)
+    public void RecordAgent(string host, string platform, string version, string? sender = null)
     {
-        if (_agents.Count < 10_000 || _agents.ContainsKey(host))
+        // Kept apart by the key that reported it, so one key can't rewrite another's agents, and
+        // each key holds at most a share of the list, so one can't crowd out the rest
+        var entry = $"{sender ?? string.Empty}|{host}";
+        var known = _agents.ContainsKey(entry);
+        if (!known && (_agents.Count >= 10_000 || _agents.Keys.Count(key => key.StartsWith($"{sender ?? string.Empty}|", StringComparison.Ordinal)) >= MaxAgentsPerSender))
         {
-            _agents[host] = new AgentVersion(host, platform, version, DateTimeOffset.UtcNow);
+            return;
         }
+
+        _agents[entry] = new AgentVersion(host, platform, version, DateTimeOffset.UtcNow);
     }
+
+    /// <summary>The most agents one key's reports are kept for.</summary>
+    public const int MaxAgentsPerSender = 1_000;
 
     /// <summary>A release's folder under the work directory: by tag, not version, since 3.0.0-rc.1 and 3.0.0 share a version number but not a build.</summary>
     private static string FolderFor(string? tag, Version version) =>

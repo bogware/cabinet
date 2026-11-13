@@ -302,6 +302,25 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public void OneKey_CantRewriteAnotherKeysAgents_OrFillTheList()
+    {
+        var service = Service(new FakeReleases());
+
+        service.RecordAgent("web-1", "linux-x64", "3.0.0", sender: "key-a");
+        service.RecordAgent("web-1", "linux-x64", "0.0.1", sender: "key-b");
+        for (var i = 0; i < UpdateService.MaxAgentsPerSender + 50; i++)
+        {
+            service.RecordAgent($"fake-{i}", "linux-x64", "1.0.0", sender: "key-b");
+        }
+
+        service.RecordAgent("web-2", "linux-x64", "3.0.0", sender: "key-a");
+        var agents = service.GetStatus().Agents;
+        agents.Should().Contain(a => a.Host == "web-1" && a.Version == "3.0.0", "key-a's report stands");
+        agents.Should().Contain(a => a.Host == "web-2", "another key's flood doesn't crowd out key-a");
+        agents.Count(a => a.Host.StartsWith("fake-", StringComparison.Ordinal)).Should().BeLessThan(UpdateService.MaxAgentsPerSender);
+    }
+
+    [Fact]
     public void AServerOnACandidate_IsOfferedTheNewestRelease_CandidatesIncluded()
     {
         // GitHub's "latest" skips pre-releases, so rc.1 would never hear of rc.2
