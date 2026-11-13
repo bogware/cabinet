@@ -113,7 +113,12 @@ public static class OidcProviders
 
         if (oidc.Provider == OidcProvider.Entra)
         {
-            parameters.IssuerValidator = EntraIssuer;
+            // The handler gives the discovered metadata to the second; tests and older paths use the first
+            var configured = Guid.IsMatch(oidc.TenantId ?? string.Empty) ? oidc.TenantId : TenantOf(oidc.Authority);
+            parameters.IssuerValidator = (issuer, token, p) =>
+                EntraIssuer(issuer, token, (p.ValidIssuers ?? []).Append(p.ValidIssuer), configured);
+            parameters.IssuerValidatorUsingConfiguration = (issuer, token, p, configuration) =>
+                EntraIssuer(issuer, token, (p.ValidIssuers ?? []).Append(p.ValidIssuer).Append(configuration?.Issuer), configured);
         }
 
         if (oidc.Provider == OidcProvider.Cognito)
@@ -129,10 +134,9 @@ public static class OidcProviders
     /// Entra's v1 and v2 issuers for the configured tenant, and no other: the tenant comes from
     /// the discovered metadata, and the token's tid must name it too.
     /// </summary>
-    internal static string EntraIssuer(string issuer, SecurityToken token, TokenValidationParameters parameters)
+    internal static string EntraIssuer(string issuer, SecurityToken token, IEnumerable<string?> metadataIssuers, string? configuredTenant)
     {
-        var expected = (parameters.ValidIssuers ?? []).Append(parameters.ValidIssuer).OfType<string>().ToList();
-        var tenant = expected.Select(TenantOf).FirstOrDefault(t => t != null);
+        var tenant = configuredTenant?.ToLowerInvariant() ?? metadataIssuers.Select(TenantOf).FirstOrDefault(t => t != null);
         var tid = (token as JsonWebToken)?.TryGetPayloadValue<string>("tid", out var value) == true ? value : null;
         var accepted = tenant != null
             && string.Equals(tid, tenant, StringComparison.OrdinalIgnoreCase)

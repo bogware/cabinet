@@ -84,6 +84,18 @@ public sealed class OidcProvidersTests
     }
 
     [Fact]
+    public async Task Entra_ConfiguredByDomain_LearnsTheTenantFromItsMetadata()
+    {
+        var settings = Entra();
+        settings.TenantId = "contoso.onmicrosoft.com";
+        var mine = Token(new() { ["iss"] = EntraV2Issuer, ["aud"] = EntraApp, ["tid"] = Tenant });
+        var theirs = Token(new() { ["iss"] = $"https://login.microsoftonline.com/{OtherTenant}/v2.0", ["aud"] = EntraApp, ["tid"] = OtherTenant });
+
+        (await ValidateAsync(settings, mine, EntraV2Issuer)).IsValid.Should().BeTrue();
+        (await ValidateAsync(settings, theirs, EntraV2Issuer)).IsValid.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Entra_RefusesATokenForAnotherApplication()
     {
         var token = Token(new() { ["iss"] = EntraV2Issuer, ["aud"] = "00000003-0000-0000-c000-000000000000", ["tid"] = Tenant });
