@@ -32,6 +32,9 @@ public sealed class EncryptionService : IDisposable
         _logger = logger;
     }
 
+    /// <summary>Whether encryption is configured on.</summary>
+    public bool Enabled => _config.Enabled;
+
     /// <summary>Initialize the encryption key from the configured provider</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {

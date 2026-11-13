@@ -43,14 +43,19 @@ public sealed class EndpointCapabilityTests
                 .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .Where(method => method.GetCustomAttributes().Any(attribute => attribute is Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute))
                 .Where(method => method.GetCustomAttribute<AllowAnonymousAttribute>() == null)
-                .Where(method => method.GetCustomAttribute<RequireCapabilityAttribute>() == null
-                    && type.GetCustomAttribute<RequireCapabilityAttribute>() == null)
+                .Where(method => !IsChecked(method) && !IsChecked(type))
                 .Select(method => $"{type.Name}.{method.Name}"))
             .Where(name => !Exempt.Contains(name))
             .ToList();
 
         unprotected.Should().BeEmpty("a new endpoint has no RBAC check unless it asks for one");
     }
+
+    // A capability; or, for endpoints that only act on the caller's own local account, that the
+    // caller is signed in as one; or, for SCIM, a SCIM token, which can call nothing else
+    private static bool IsChecked(MemberInfo member) =>
+        member.GetCustomAttribute<RequireCapabilityAttribute>() != null
+        || member.GetCustomAttribute<RequireLocalAccountAttribute>() != null;
 
     [Theory]
     [InlineData(SystemRole.SuperAdmin, Capability.UserManagement, true)]
