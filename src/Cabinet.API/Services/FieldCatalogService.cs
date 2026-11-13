@@ -19,6 +19,12 @@ public sealed class FieldCatalogService
     /// <summary>Most distinct values a field may have for its values to be suggested.</summary>
     public const int MaxValuesPerField = 25;
 
+    /// <summary>
+    /// Longest field name listed. Names come from logs, so anyone who can send a line can make one
+    /// any length, and nobody types a name this long into a search.
+    /// </summary>
+    public const int MaxFieldNameLength = 128;
+
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(2);
     private static readonly HashSet<string> AlwaysListed = new(StringComparer.OrdinalIgnoreCase) { "host", "sourcetype", "index" };
 
@@ -95,6 +101,11 @@ public sealed class FieldCatalogService
             Note("index", logEvent.Index);
             foreach (var (name, value) in logEvent.Fields)
             {
+                if (name.Length > MaxFieldNameLength)
+                {
+                    continue;
+                }
+
                 fields.Add(name);
                 Note(name, value);
             }

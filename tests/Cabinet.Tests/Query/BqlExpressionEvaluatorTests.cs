@@ -182,6 +182,36 @@ public class BqlExpressionEvaluatorTests
         BqlExpressionEvaluator.EvaluateBool(expr, MakeContext(("message", "success"))).Should().BeFalse();
     }
 
+    [Fact]
+    public void LikeWithManyWildcards_OnALongValue_AnswersQuickly()
+    {
+        // Backtracking took the whole second-long timeout on each value, then said "no match"
+        var expr = new LikeExpression(new FieldExpression("message"), "%a%a%a%a%a%a%a%a%b");
+        var padded = MakeContext(("message", new string('a', 5_000)));
+        var matching = MakeContext(("message", new string('a', 5_000) + "b"));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        for (var i = 0; i < 5; i++)
+        {
+            BqlExpressionEvaluator.EvaluateBool(expr, padded).Should().BeFalse();
+            BqlExpressionEvaluator.EvaluateBool(expr, matching).Should().BeTrue();
+        }
+
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2.5));
+    }
+
+    [Theory]
+    [InlineData("a_c", "ABC", true)]
+    [InlineData("a%", "a\nb", false)]
+    [InlineData("100%%", "100%", true)]
+    [InlineData("a.c", "abc", false)]
+    public void Like_KeepsItsMeaning(string pattern, string value, bool expected)
+    {
+        var expr = new LikeExpression(new FieldExpression("message"), pattern);
+
+        BqlExpressionEvaluator.EvaluateBool(expr, MakeContext(("message", value))).Should().Be(expected);
+    }
+
     // ─── Function expressions ────────────────────────────────
 
     [Fact]

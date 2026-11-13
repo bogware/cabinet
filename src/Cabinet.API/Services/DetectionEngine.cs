@@ -270,8 +270,17 @@ public sealed class DetectionEngine : BackgroundService
 
     private async Task CheckRuleAsync(CompiledRule compiled, LogEvent logEvent, CancellationToken cancellationToken)
     {
+        var timeouts = compiled.Matcher.Timeouts;
         if (!compiled.Matcher.TryMatch(logEvent, out var fields))
         {
+            // A pattern that ran out of time didn't check the event, which mustn't go unnoticed
+            if (compiled.Matcher.Timeouts > timeouts)
+            {
+                _logger.LogWarning(
+                    "Detection rule {Rule} ran out of time on event {EventId}, so the event wasn't checked against it ({Timeouts} of {MaxTimeouts} before the rule is turned off)",
+                    compiled.Rule.Name, logEvent.Id, compiled.Matcher.Timeouts, MaxRegexTimeouts);
+            }
+
             return;
         }
 

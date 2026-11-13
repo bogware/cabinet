@@ -217,6 +217,18 @@ public sealed class QueryScaleTests
         (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromSeconds(30));
     }
 
+    [Theory]
+    [InlineData("find * | where match(_raw, \"^(a+)+$\")")]
+    [InlineData("find * | eval x = replace(_raw, \"^(a+)+$\", \"b\")")]
+    public async Task SlowRegexInAnExpression_FailsTheQuery_InsteadOfQuietlyNotMatching(string query)
+    {
+        var storage = new GeneratedStorage(10, line: _ => new string('a', 40) + "!");
+
+        var run = () => RunAsync(storage, query);
+
+        await run.Should().ThrowAsync<QueryLimitExceededException>().WithMessage("*too slow*");
+    }
+
     [Fact]
     public async Task Timeout_StopsAQueryThatIsStillReading()
     {
@@ -237,6 +249,66 @@ public sealed class QueryScaleTests
         var parse = () => new BqlParser().ParseBql(query);
 
         parse.Should().NotThrow();
+    }
+
+    // Chains as long as the token limit allows. The old code ended the process with a stack
+    // overflow evaluating the arithmetic ones.
+    [Theory]
+    [InlineData("find * | eval x = 1", " + 1", 4_990)]
+    [InlineData("find * | eval x = 1", " * 1", 4_990)]
+    [InlineData("find * | eval x = \"a\"", " . \"a\"", 4_990)]
+    [InlineData("find * | where n = 1", " OR n = 1", 2_490)]
+    [InlineData("find * | where n = 1", " AND n = 1", 2_490)]
+    public async Task LongOperatorChain_FailsAsAParseError_InsteadOfOverflowingTheStack(string start, string repeated, int times)
+    {
+        var storage = new GeneratedStorage(10);
+        var query = start + string.Concat(Enumerable.Repeat(repeated, times));
+
+        var run = () => RunAsync(storage, query);
+
+        await run.Should().ThrowAsync<QueryParseException>().WithMessage("*too deeply nested*");
+    }
+
+    [Fact]
+    public async Task OperatorChain_JustUnderTheDepthLimit_StillGivesTheRightAnswer()
+    {
+        var storage = new GeneratedStorage(3);
+
+        var result = await RunAsync(storage, "find * | eval x = 1" + string.Concat(Enumerable.Repeat(" + 1", 900)) + " | where x = 901 OR n = -1" + string.Concat(Enumerable.Repeat(" OR n = -1", 900)));
+
+        Rows(result).Select(row => Convert.ToDouble(row["x"])).Should().Equal(901, 901, 901);
+    }
+
+    [Fact]
+    public async Task DeeplyNestedSearchParentheses_FailAsAParseError_InsteadOfOverflowingTheStack()
+    {
+        var storage = new GeneratedStorage(10);
+        var query = "find " + new string('(', 4_000) + "hello" + new string(')', 4_000);
+
+        var run = () => RunAsync(storage, query);
+
+        await run.Should().ThrowAsync<QueryParseException>().WithMessage("*too deeply*");
+    }
+
+    [Fact]
+    public void LongChainOfNot_InSearchText_DoesNotOverflowTheStack()
+    {
+        var even = BqlTextSearch.Parse(string.Concat(Enumerable.Repeat("NOT ", 20_000)) + "hello");
+        var odd = BqlTextSearch.Parse(string.Concat(Enumerable.Repeat("NOT ", 20_001)) + "hello");
+
+        var row = new Dictionary<string, object?> { ["RawLine"] = "hello world" };
+        even.Matches(row).Should().BeTrue();
+        odd.Matches(row).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeeplyNestedSubsearches_FailAsAParseError()
+    {
+        var query = "find *" + string.Concat(Enumerable.Repeat(" | append [search *", 1_000)) + new string(']', 1_000);
+
+        var parse = () => new BqlParser().ParseBql(query);
+
+        parse.Should().Throw<QueryParseException>().WithMessage("*nested too deeply*");
     }
 
     [Fact]

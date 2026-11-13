@@ -12,8 +12,48 @@ namespace Cabinet.Query.Bql;
 /// </summary>
 public static class BqlExpressionEvaluator
 {
-    /// <summary>Timeout for user-supplied regex patterns to prevent ReDoS.</summary>
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(1);
+    /// <summary>
+    /// Set while a detection rule's condition is checked, to the rule's time per event
+    /// (<c>Limits:DetectionRegexTimeoutMs</c>). It also says a pattern that runs out of time is the
+    /// caller's to count, rather than this to fail as a query.
+    /// </summary>
+    [ThreadStatic]
+    private static TimeSpan? t_detectionRegexTimeout;
+
+    /// <summary>
+    /// How long a pattern someone wrote may spend on one value: a detection rule's time while one
+    /// is being checked, otherwise a search's (<c>Limits:QueryRegexTimeoutMs</c>).
+    /// </summary>
+    private static TimeSpan RegexTimeout => t_detectionRegexTimeout ?? QueryRegex.PerEventTimeout;
+
+    /// <summary>
+    /// Evaluates a detection rule's condition. A pattern in it that runs out of time throws
+    /// <see cref="RegexMatchTimeoutException"/> for the caller to count, instead of failing a query.
+    /// </summary>
+    internal static bool EvaluateDetectionCondition(BqlExpression expr, IDictionary<string, object?> context, TimeSpan regexTimeout)
+    {
+        var previous = t_detectionRegexTimeout;
+        t_detectionRegexTimeout = regexTimeout;
+        try
+        {
+            return EvaluateBool(expr, context);
+        }
+        finally
+        {
+            t_detectionRegexTimeout = previous;
+        }
+    }
+
+    /// <summary>Whether a pattern that ran out of time fails the query (true outside detection).</summary>
+    private static bool InQuery => t_detectionRegexTimeout == null;
+
+    /// <summary>
+    /// A pattern ran out of time on a value. Answering "no match" would quietly change the
+    /// query's answer, and anyone who can write a log line could choose when that happens, so the
+    /// query fails and says why.
+    /// </summary>
+    private static QueryLimitExceededException TooSlow(string pattern) =>
+        new($"The regular expression '{pattern}' is too slow: it ran out of time on an event.");
 
     /// <summary>
     /// Evaluate an expression and return a boolean result (for where/filter)
@@ -176,7 +216,8 @@ public static class BqlExpressionEvaluator
             pattern = "^" + Regex.Escape(pattern)
                 .Replace("\x02", ".*")
                 .Replace("\x03", ".") + "$";
-            return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+            // A wildcard never needs backtracking, and without it the time is linear in the value
+            return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
         });
 
         // One query uses few patterns; this keeps many different queries from growing it forever
@@ -185,14 +226,7 @@ public static class BqlExpressionEvaluator
             LikePatterns.Clear();
         }
 
-        try
-        {
-            return regex.IsMatch(value);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            return false;
-        }
+        return regex.IsMatch(value);
     }
 
     private static object? EvaluateFunction(FunctionExpression func, IDictionary<string, object?> context)
@@ -449,9 +483,9 @@ public static class BqlExpressionEvaluator
         {
             throw new QueryParseException($"Invalid regular expression '{pattern}': {ex.Message}");
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException) when (InQuery)
         {
-            return str;
+            throw TooSlow(pattern);
         }
     }
 
@@ -541,9 +575,9 @@ public static class BqlExpressionEvaluator
         {
             throw new QueryParseException($"Invalid regular expression '{pattern}': {ex.Message}");
         }
-        catch (RegexMatchTimeoutException)
+        catch (RegexMatchTimeoutException) when (InQuery)
         {
-            return false;
+            throw TooSlow(pattern);
         }
     }
 
@@ -791,7 +825,15 @@ public static class BqlExpressionEvaluator
                     return i;
             }
         }
-        catch { /* invalid regex */ }
+        catch (ArgumentException ex)
+        {
+            throw new QueryParseException($"Invalid regular expression '{pattern}': {ex.Message}");
+        }
+        catch (RegexMatchTimeoutException) when (InQuery)
+        {
+            throw TooSlow(pattern);
+        }
+
         return null;
     }
 
