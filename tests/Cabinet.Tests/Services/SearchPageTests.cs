@@ -198,6 +198,67 @@ public sealed class SearchPageTests
     }
 
     [Fact]
+    public void Steps_SayEachStageInWords_AndWhereItIs()
+    {
+        const string query = "find * from last 7d | stats perc95(duration_ms) as p95 by path | sort by p95 desc";
+        var steps = Eval<JsonElement>($"CabinetSearch.pipelineSteps({JsonSerializer.Serialize(query)})").EnumerateArray().ToList();
+
+        steps.Select(s => s.GetProperty("words").GetString()).Should().Equal("all events, past 7 days", "95th percentile of duration_ms, per path", "highest p95 first");
+        var second = steps[1];
+        query[second.GetProperty("start").GetInt32()..second.GetProperty("end").GetInt32()].Should().Be("stats perc95(duration_ms) as p95 by path");
+        Eval<string>("CabinetSearch.describeStage('where severity >= error and host like \"web%\"')").Should().Be("keep error or worse and host starts with web");
+    }
+
+    [Theory]
+    [InlineData("find * | stats count by host", "ranked")]
+    [InlineData("find * | top 10 path", "ranked")]
+    [InlineData("find * | timechart span=1h count", "timeseries")]
+    [InlineData("find error | where x = 1 | head 5", "events")]
+    [InlineData("find * | table host, severity", "table")]
+    [InlineData("find * | stats count by host, path", "table")]
+    public void TheView_FollowsTheQuestionsShape(string query, string view)
+    {
+        Eval<JsonElement>($"CabinetSearch.chooseView({JsonSerializer.Serialize(query)})").GetProperty("view").GetString().Should().Be(view);
+    }
+
+    [Fact]
+    public void TheSentence_BoldsKeyTerms_AndEscapesTheRest()
+    {
+        var html = Eval<string>("CabinetSearch.emphasize('The count of <img src=x> for each host, in the last 7 days', 'find * | stats count by host')");
+
+        html.Should().Contain("<b>count</b>").And.Contain("<b>each host</b>").And.Contain("<b>last 7 days</b>").And.Contain("&lt;img");
+        html.Replace("<b>", string.Empty).Replace("</b>", string.Empty).Should().NotContain("<");
+    }
+
+    [Fact]
+    public void LiveFilters_SendWords_AndCheckSimpleConditions()
+    {
+        var filter = Eval<JsonElement>("CabinetSearch.liveFilter('find checkout | where severity >= warning and host like \"web%\"')");
+        filter.GetProperty("words").GetString().Should().Be("checkout");
+        filter.GetProperty("conditions").GetArrayLength().Should().Be(2);
+
+        Eval<bool>("CabinetSearch.matchesLive({ host: 'web-2', severity: 'Error' }, CabinetSearch.liveFilter('find * | where severity >= warning and host like \"web%\"'))").Should().BeTrue();
+        Eval<bool>("CabinetSearch.matchesLive({ host: 'api-1', severity: 'Error' }, CabinetSearch.liveFilter('find * | where host like \"web%\"'))").Should().BeFalse();
+        Eval<bool>("CabinetSearch.matchesLive({ host: 'web-1', fields: { status: 500 } }, CabinetSearch.liveFilter('find * | where status >= 500'))").Should().BeTrue();
+        Eval<bool>("CabinetSearch.matchesLive({ host: 'web-1' }, CabinetSearch.liveFilter('find * | where status >= 500'))").Should().BeFalse("a missing value never matches");
+        Eval("CabinetSearch.liveFilter('find * | where a = 1 or b = 2').unsupported").Should().NotBe("null");
+    }
+
+    [Fact]
+    public void TheTimeline_CountsWarningsApart()
+    {
+        var buckets = Eval<JsonElement>("""
+            CabinetSearch.timelineBuckets([
+                { _time: '1970-01-01T00:05:00Z', severity: '2', count: 3 },
+                { _time: '1970-01-01T00:05:00Z', severity: '4', count: 2 }], 0, 10 * 60000, 5 * 60000)
+            """).EnumerateArray().ToList();
+
+        buckets[1].GetProperty("count").GetInt32().Should().Be(5);
+        buckets[1].GetProperty("warn").GetInt32().Should().Be(2);
+        Eval<string>("CabinetSearch.severityTimelineQuery('find error | stats count by host', '5m')").Should().Be("find error | timechart span=5m count by severity");
+    }
+
+    [Fact]
     public void ZonelessTimes_AreUtc()
     {
         Eval<long>("CabinetSearch.parseTime('2026-11-09T03:53:07.426')").Should().Be(new DateTimeOffset(2026, 11, 9, 3, 53, 7, 426, TimeSpan.Zero).ToUnixTimeMilliseconds());

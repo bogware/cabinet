@@ -522,11 +522,14 @@ const CabinetSearch = (() => {
      */
     function timelineBuckets(rows, startMs, endMs, spanMs) {
         const counts = new Map();
+        const warnings = new Map();
         (rows || []).forEach(row => {
             const time = parseTime(row._time ?? row.Timestamp ?? row.time);
             if (Number.isNaN(time)) return;
             const value = Number(row.count ?? row.Count ?? 0) || 0;
             counts.set(time, (counts.get(time) || 0) + value);
+            // Counted by severity: warnings and worse are drawn apart
+            if (severityLevel(row.severity ?? row.Severity) >= 3) warnings.set(time, (warnings.get(time) || 0) + value);
         });
 
         const known = [...counts.keys()].sort((a, b) => a - b);
@@ -544,16 +547,37 @@ const CabinetSearch = (() => {
         for (let t = first; t < last; t += spanMs) {
             // A bucket's count is whatever the query put at its start, or anything inside it
             let count = 0;
+            let warn = 0;
             counts.forEach((value, time) => { if (time >= t && time < t + spanMs) count += value; });
-            buckets.push({ start: t, end: t + spanMs, count });
+            warnings.forEach((value, time) => { if (time >= t && time < t + spanMs) warn += value; });
+            buckets.push({ start: t, end: t + spanMs, count, warn });
         }
 
         return buckets;
     }
 
+    /**
+     * The query counting matching events per bucket and severity, so the timeline can show
+     * warnings and worse apart from the rest.
+     */
+    function severityTimelineQuery(query, span) {
+        const counts = timelineQuery(query, span);
+        return counts === null ? null : `${counts} by severity`;
+    }
+
+    /** A severity from the API or a query (a number, a number as text, or a name) as 0 to 6, or NaN. */
+    function severityLevel(value) {
+        if (typeof value === 'number') return value;
+        const text = String(value ?? '').trim().toLowerCase();
+        if (text === '') return NaN;
+        if (/^\d+$/.test(text)) return Number(text);
+        const names = { trace: 0, debug: 1, info: 2, information: 2, warn: 3, warning: 3, error: 4, err: 4, critical: 5, crit: 5, fatal: 6 };
+        return text in names ? names[text] : NaN;
+    }
+
     /** The timeline's geometry, shared by drawing, hovering and dragging. */
-    function timelineLayout(buckets, width, height) {
-        const margin = { top: 8, right: 8, bottom: 20, left: 44 };
+    function timelineLayout(buckets, width, height, compact) {
+        const margin = compact ? { top: 4, right: 2, bottom: 14, left: 2 } : { top: 8, right: 8, bottom: 20, left: 44 };
         const plotWidth = Math.max(10, width - margin.left - margin.right);
         const plotHeight = Math.max(10, height - margin.top - margin.bottom);
         const max = Math.max(1, ...buckets.map(b => b.count));
@@ -586,16 +610,25 @@ const CabinetSearch = (() => {
      * The timeline as SVG: one bar per bucket with rounded tops on a shared baseline, a
      * recessive count axis, time labels, and an optional highlighted selection.
      */
-    function timelineSvg(buckets, width, height, selection) {
+    function timelineSvg(buckets, width, height, selection, options) {
         if (!buckets || buckets.length === 0) return '';
-        const l = timelineLayout(buckets, width, height);
-        const parts = [];
+        const compact = !!(options && options.compact);
+        const l = timelineLayout(buckets, width, height, compact);
+        const parts = [
+            '<defs><linearGradient id="tl-moss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--moss-light)"/><stop offset="1" style="stop-color:var(--moss)"/></linearGradient>' +
+            '<linearGradient id="tl-amber" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--amber-top)"/><stop offset="1" style="stop-color:var(--amber-bottom)"/></linearGradient></defs>',
+        ];
         const top = l.max;
-        [0, top / 2, top].forEach(v => {
-            const py = l.y(v);
-            parts.push(`<line x1="${l.margin.left}" x2="${l.margin.left + l.plotWidth}" y1="${py.toFixed(1)}" y2="${py.toFixed(1)}" stroke="var(--chart-grid)" stroke-width="1"/>`);
-            parts.push(`<text x="${l.margin.left - 6}" y="${(py + 3).toFixed(1)}" text-anchor="end" class="chart-axis">${escapeHtml(formatCount(Math.round(v)))}</text>`);
-        });
+        if (compact) {
+            const base = l.y(0);
+            parts.push(`<line x1="${l.margin.left}" x2="${l.margin.left + l.plotWidth}" y1="${base.toFixed(1)}" y2="${base.toFixed(1)}" stroke="var(--divider)" stroke-width="1"/>`);
+        } else {
+            [0, top / 2, top].forEach(v => {
+                const py = l.y(v);
+                parts.push(`<line x1="${l.margin.left}" x2="${l.margin.left + l.plotWidth}" y1="${py.toFixed(1)}" y2="${py.toFixed(1)}" stroke="var(--chart-grid)" stroke-width="1"/>`);
+                parts.push(`<text x="${l.margin.left - 6}" y="${(py + 3).toFixed(1)}" text-anchor="end" class="chart-axis">${escapeHtml(formatCount(Math.round(v)))}</text>`);
+            });
+        }
 
         if (selection && selection.from !== selection.to) {
             const a = Math.min(selection.from, selection.to);
@@ -611,7 +644,18 @@ const CabinetSearch = (() => {
             const h = Math.max(1, l.margin.top + l.plotHeight - y);
             const r = Math.min(4, l.barWidth / 2, h);
             // Rounded at the top only, square on the baseline
-            parts.push(`<path class="timeline-bar" d="M${x.toFixed(1)},${(y + h).toFixed(1)} V${(y + r).toFixed(1)} Q${x.toFixed(1)},${y.toFixed(1)} ${(x + r).toFixed(1)},${y.toFixed(1)} H${(x + l.barWidth - r).toFixed(1)} Q${(x + l.barWidth).toFixed(1)},${y.toFixed(1)} ${(x + l.barWidth).toFixed(1)},${(y + r).toFixed(1)} V${(y + h).toFixed(1)} Z" fill="var(--series-1)"/>`);
+            const bar = (cls, fill, barY, barH) => {
+                const rr = Math.min(r, barH);
+                return `<path class="${cls}" d="M${x.toFixed(1)},${(barY + barH).toFixed(1)} V${(barY + rr).toFixed(1)} Q${x.toFixed(1)},${barY.toFixed(1)} ${(x + rr).toFixed(1)},${barY.toFixed(1)} H${(x + l.barWidth - rr).toFixed(1)} Q${(x + l.barWidth).toFixed(1)},${barY.toFixed(1)} ${(x + l.barWidth).toFixed(1)},${(barY + rr).toFixed(1)} V${(barY + barH).toFixed(1)} Z" fill="${fill}"/>`;
+            };
+            parts.push(bar('timeline-bar', 'url(#tl-moss)', y, h));
+            // Warnings and worse, from the baseline up, in amber
+            const warn = Math.min(bucket.warn || 0, bucket.count);
+            if (warn > 0) {
+                const wy = l.y(warn);
+                const wh = Math.max(1, l.margin.top + l.plotHeight - wy);
+                parts.push(warn === bucket.count ? bar('timeline-bar-warn', 'url(#tl-amber)', y, h) : `<rect class="timeline-bar-warn" x="${x.toFixed(1)}" y="${wy.toFixed(1)}" width="${l.barWidth.toFixed(1)}" height="${wh.toFixed(1)}" fill="url(#tl-amber)"/>`);
+            }
         });
 
         const labels = Math.min(6, buckets.length);
@@ -623,8 +667,10 @@ const CabinetSearch = (() => {
         }
 
         const total = buckets.reduce((sum, b) => sum + b.count, 0);
+        const warnings = buckets.reduce((sum, b) => sum + (b.warn || 0), 0);
+        const label = `${formatCount(total)} events over ${buckets.length} periods of ${spanLabel(span)}${warnings > 0 ? `, ${formatCount(warnings)} of them warnings or worse` : ''}`;
         return `<svg class="chart-svg timeline-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" tabindex="0" ` +
-            `aria-label="${escapeHtml(`${formatCount(total)} events over ${buckets.length} periods of ${spanLabel(span)}`)}">${parts.join('')}<g class="chart-hover"></g></svg>`;
+            `aria-label="${escapeHtml(label)}">${parts.join('')}<g class="chart-hover"></g></svg>`;
     }
 
     function spanLabel(ms) {
@@ -736,9 +782,513 @@ const CabinetSearch = (() => {
         }).slice(0, 14);
     }
 
+    /* ===== Saying a query back in words ===== */
+
+    function plural(n, unit) {
+        const amount = Number(n);
+        return `${amount} ${unit}${amount === 1 ? '' : 's'}`;
+    }
+
+    function ordinal(n) {
+        const v = Number(n) % 100;
+        const suffix = v >= 11 && v <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[Number(n) % 10] || 'th');
+        return `${n}${suffix}`;
+    }
+
+    function unquote(text) {
+        const t = String(text ?? '').trim();
+        if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) return t.slice(1, -1).replace(/\\(.)/g, '$1');
+        return t;
+    }
+
+    /** Like splitPipeline, with where each stage starts and ends in the query. */
+    function pipelineRanges(query) {
+        const text = query || '';
+        const ranges = [];
+        let quote = null;
+        let depth = 0;
+        let from = 0;
+        const close = to => {
+            const raw = text.slice(from, to);
+            const lead = raw.length - raw.trimStart().length;
+            const trimmed = raw.trim();
+            ranges.push({ text: trimmed, start: from + lead, end: from + lead + trimmed.length });
+        };
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (quote) {
+                if (c === '\\') { i++; continue; }
+                if (c === quote) quote = null;
+                continue;
+            }
+            if (c === '"' || c === "'") { quote = c; continue; }
+            if (c === '[' || c === '(') depth++;
+            if (c === ']' || c === ')') depth = Math.max(0, depth - 1);
+            if (c === '|' && depth === 0) { close(i); from = i + 1; }
+        }
+        close(text.length);
+        return ranges;
+    }
+
+    /** Splits text at a separator found outside quotes and brackets. */
+    function splitTopLevel(text, separator) {
+        const parts = [];
+        let quote = null;
+        let depth = 0;
+        let from = 0;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (quote) {
+                if (c === '\\') { i++; continue; }
+                if (c === quote) quote = null;
+                continue;
+            }
+            if (c === '"' || c === "'") { quote = c; continue; }
+            if (c === '(' || c === '[') { depth++; continue; }
+            if (c === ')' || c === ']') { depth = Math.max(0, depth - 1); continue; }
+            if (depth > 0) continue;
+            const match = separator.exec(text.slice(i));
+            if (match && match.index === 0) {
+                parts.push({ text: text.slice(from, i), joiner: null });
+                parts[parts.length - 1].joiner = match[1] ? match[1].toLowerCase() : match[0];
+                i += match[0].length - 1;
+                from = i + 1;
+            }
+        }
+        parts.push({ text: text.slice(from), joiner: null });
+        return parts;
+    }
+
+    function describeTime(earliest, latest) {
+        if (earliest === '-1d@d' && !latest) return 'since yesterday';
+        if (earliest === '-1d@d' && latest === '@d') return 'yesterday';
+        if (earliest === '@d' && !latest) return 'today';
+        const starts = { '@w': 'this week', '@w0': 'this week', '@w1': 'this week', '@M': 'this month', '@mon': 'this month', '@y': 'this year', '@h': 'this hour' };
+        if (earliest && !latest && starts[earliest]) return starts[earliest];
+        const relative = spec => {
+            const m = /^-(\d+)([smhdw])$/.exec(spec || '');
+            return m ? plural(m[1], UNIT_NAMES[m[2]]) : null;
+        };
+        if (earliest && !latest && relative(earliest)) return `past ${relative(earliest)}`;
+        const say = spec => relative(spec) ? `${relative(spec)} ago` : spec;
+        return [earliest ? `from ${say(earliest)}` : '', latest ? `until ${say(latest)}` : ''].filter(Boolean).join(' ');
+    }
+
+    function describeSearch(stage) {
+        let text = stage.replace(/^\s*(find|search)\b/i, ' ');
+        let time = null;
+        let earliest = null;
+        let latest = null;
+        let index = null;
+        text = text.replace(/\bfrom\s+last\s+(\d+)\s*([smhdw])\b/i, (_, n, u) => { time = `past ${plural(n, UNIT_NAMES[u])}`; return ' '; });
+        text = text.replace(/\bearliest\s*=\s*("[^"]*"|\S+)/i, (_, v) => { earliest = unquote(v); return ' '; });
+        text = text.replace(/\blatest\s*=\s*("[^"]*"|\S+)/i, (_, v) => { latest = unquote(v); return ' '; });
+        text = text.replace(/\bindex\s*=\s*("[^"]*"|\S+)/i, (_, v) => { index = unquote(v); return ' '; });
+        const conditions = [];
+        text = text.replace(/\b([A-Za-z_][\w.]*)\s*(!=|=)\s*("(?:[^"\\]|\\.)*"|[^\s()]+)/g, (_, f, op, v) => {
+            conditions.push(`${f} ${op === '=' ? 'is' : "isn't"} ${unquote(v)}`);
+            return ' ';
+        });
+        const words = text.replace(/\s+/g, ' ').trim();
+        let said = words === '' || words === '*' ? 'all events' : `events matching ${words.length > 60 ? words.slice(0, 57) + '…' : words}`;
+        if (conditions.length) said += ` where ${conditions.join(' and ')}`;
+        if (index) said += `, in ${index}`;
+        const when = time || ((earliest || latest) ? describeTime(earliest, latest) : '');
+        if (when) said += `, ${when}`;
+        return said;
+    }
+
+    function describeCondition(text) {
+        const c = text.trim().replace(/^\((.*)\)$/, '$1').trim();
+        let m;
+        if ((m = /^not\s+(.+)$/i.exec(c))) return `not ${describeCondition(m[1])}`;
+        if ((m = /^isnull\(\s*([\w.]+)\s*\)$/i.exec(c))) return `${m[1]} is missing`;
+        if ((m = /^isnotnull\(\s*([\w.]+)\s*\)$/i.exec(c))) return `${m[1]} is present`;
+        if ((m = /^([\w.]+)\s+like\s+("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$/i.exec(c))) {
+            const value = unquote(m[2]);
+            const inner = value.replace(/^%|%$/g, '');
+            if (value.startsWith('%') && value.endsWith('%') && value.length > 1) return `${m[1]} contains ${inner}`;
+            if (value.endsWith('%')) return `${m[1]} starts with ${inner}`;
+            if (value.startsWith('%')) return `${m[1]} ends with ${inner}`;
+            return `${m[1]} is like ${value}`;
+        }
+        if ((m = /^([\w.]+)\s*(==|=|!=|>=|<=|>|<)\s*(.+)$/.exec(c))) {
+            const field = m[1];
+            const op = m[2] === '==' ? '=' : m[2];
+            const value = unquote(m[3]);
+            if (field.toLowerCase() === 'severity') {
+                const level = severityLevel(value);
+                const name = Number.isNaN(level) ? value : (SEVERITIES[level] || value).toLowerCase();
+                if (op === '>=') return `${name} or worse`;
+                if (op === '>') return `worse than ${name}`;
+                if (op === '<=') return `${name} or milder`;
+                if (op === '<') return `milder than ${name}`;
+                return op === '=' ? `only ${name}` : `not ${name}`;
+            }
+            const say = { '=': 'is', '!=': "isn't", '>': 'is over', '>=': 'is at least', '<': 'is under', '<=': 'is at most' };
+            return `${field} ${say[op]} ${value}`;
+        }
+        return c;
+    }
+
+    function describeExpression(expression) {
+        return splitTopLevel(expression, /^\s+(and|or)\s+/i)
+            .map(part => describeCondition(part.text) + (part.joiner ? ` ${part.joiner}` : ''))
+            .join(' ');
+    }
+
+    function describeAggregate(fn, field) {
+        const f = fn.toLowerCase();
+        if (!field) return f === 'count' || f === 'c' ? 'count' : f;
+        const perc = /^(?:perc|p|percentile)(\d+)$/.exec(f);
+        if (perc) return `${ordinal(perc[1])} percentile of ${field}`;
+        const words = {
+            count: `count of ${field}`, c: `count of ${field}`, dc: `distinct ${field} values`, distinct_count: `distinct ${field} values`,
+            avg: `average ${field}`, mean: `average ${field}`, sum: `total ${field}`, min: `lowest ${field}`, max: `highest ${field}`,
+            median: `median ${field}`, mode: `most common ${field}`, stdev: `spread of ${field}`, stdevp: `spread of ${field}`,
+            var: `variance of ${field}`, varp: `variance of ${field}`, earliest: `first ${field}`, latest: `latest ${field}`,
+            first: `first ${field}`, last: `last ${field}`, values: `values of ${field}`, list: `every ${field}`, range: `range of ${field}`,
+        };
+        return words[f] || `${f} of ${field}`;
+    }
+
+    /** The aggregates and by-fields of a stats-like stage's arguments. */
+    function readAggregates(args) {
+        const byAt = splitTopLevel(args, /^\s+by\s+/i);
+        const list = byAt[0].text;
+        const by = byAt.length > 1 ? byAt.slice(1).map(p => p.text).join(' ').split(/[\s,]+/).filter(Boolean) : [];
+        const aggregates = [];
+        const pattern = /([A-Za-z_]\w*)\s*(?:\(\s*([^)]*?)\s*\))?(?:\s+as\s+[\w.]+)?/g;
+        let m;
+        const cleaned = list.replace(/,/g, ' ').replace(/\b(span|limit|bins|useother|usenull|cont)\s*=\s*\S+/gi, ' ');
+        while ((m = pattern.exec(cleaned)) !== null) {
+            if (m[0].trim() === '') { pattern.lastIndex++; continue; }
+            aggregates.push({ fn: m[1], field: m[2] || null });
+        }
+        return { aggregates, by };
+    }
+
+    function describeStage(stage) {
+        const command = commandOf(stage);
+        const args = stage.replace(/^\s*[A-Za-z_]+\s*/, '');
+        const list = text => text.split(/[\s,]+/).filter(Boolean).join(', ');
+        let m;
+        switch (command) {
+            case 'where': return `keep ${describeExpression(args)}`;
+            case 'search': return `keep ${describeSearch('find ' + args).replace(/^events matching /, 'lines matching ').replace(/^all events/, 'everything')}`;
+            case 'stats': {
+                const { aggregates, by } = readAggregates(args);
+                const what = aggregates.map(a => describeAggregate(a.fn, a.field)).join(', ') || 'count';
+                return by.length ? `${what}, per ${by.join(' and ')}` : `${what}, in total`;
+            }
+            case 'eventstats': case 'streamstats': {
+                const { aggregates, by } = readAggregates(args);
+                const what = aggregates.map(a => describeAggregate(a.fn, a.field)).join(', ') || 'count';
+                return `${command === 'streamstats' ? 'running ' : 'add '}${what}${command === 'eventstats' ? ' to each event' : ''}${by.length ? `, per ${by.join(' and ')}` : ''}`;
+            }
+            case 'timechart': {
+                const span = /\bspan\s*=\s*(\d+)([smhdw])\b/i.exec(args);
+                const { aggregates, by } = readAggregates(args);
+                const what = aggregates.map(a => describeAggregate(a.fn, a.field)).join(', ') || 'count';
+                const every = span ? (Number(span[1]) === 1 ? `every ${UNIT_NAMES[span[2].toLowerCase()]}` : `every ${plural(span[1], UNIT_NAMES[span[2].toLowerCase()])}`) : 'over time';
+                return `${what} ${every}${by.length ? `, one line per ${by[0]}` : ''}`;
+            }
+            case 'chart': {
+                const over = /\bover\s+([\w.]+)/i.exec(args);
+                const { aggregates, by } = readAggregates(args.replace(/\bover\s+[\w.]+/i, ' '));
+                const what = aggregates.map(a => describeAggregate(a.fn, a.field)).join(', ') || 'count';
+                return `${what}${over ? `, per ${over[1]}` : ''}${by.length ? `, split by ${by.join(' and ')}` : ''}`;
+            }
+            case 'top': case 'rare': {
+                const rest = args.replace(/\b(limit|countfield|percentfield|showcount|showperc)\s*=\s*\S+/gi, (all, key) => (key.toLowerCase() === 'limit' ? all.replace(/^\w+\s*=\s*/, '') + ' ' : ' '));
+                const parts = splitTopLevel(rest, /^\s+by\s+/i);
+                const words = parts[0].text.trim().split(/[\s,]+/).filter(Boolean);
+                const n = words.length && /^\d+$/.test(words[0]) ? words.shift() : '10';
+                const by = parts.length > 1 ? parts[1].text.trim() : '';
+                return `${n} ${command === 'top' ? 'most' : 'least'} common ${words.length ? `${words.join(', ')} values` : 'values'}${by ? `, for each ${by}` : ''}`;
+            }
+            case 'sort': {
+                m = /^(?:by\s+)?(?:limit\s*=\s*\d+\s+)?([-+]?)([\w.]+)(?:\s+(asc|desc))?/i.exec(args.trim());
+                if (!m) return 'put in order';
+                const descending = m[1] === '-' || (m[3] || '').toLowerCase() === 'desc';
+                if (/^(_time|timestamp)$/i.test(m[2])) return descending ? 'newest first' : 'oldest first';
+                return `${descending ? 'highest' : 'lowest'} ${m[2]} first`;
+            }
+            case 'head': return `first ${(/\d+/.exec(args) || ['10'])[0]}`;
+            case 'tail': return `last ${(/\d+/.exec(args) || ['10'])[0]}`;
+            case 'limit': return `at most ${(/\d+/.exec(args) || ['10'])[0]}`;
+            case 'table': return `show ${list(args)}`;
+            case 'fields': {
+                const drop = /^\s*-/.test(args);
+                const names = list(args.replace(/^\s*[-+]\s*/, ''));
+                return drop ? `leave out ${names}` : `keep only ${names}`;
+            }
+            case 'dedup': return `one event per ${list(args.replace(/\b\w+\s*=\s*\S+/g, ' ').replace(/^\s*\d+\s+/, ''))}`;
+            case 'eval': return `work out ${splitTopLevel(args, /^,/).map(p => p.text.split('=')[0].trim()).filter(Boolean).join(', ')}`;
+            case 'rename': return `rename ${args.replace(/\s+as\s+/gi, ' to ')}`;
+            case 'rex': return 'pull out fields with a pattern';
+            case 'regex': return 'keep lines matching a pattern';
+            case 'lookup': return args.trim() ? `add fields from the ${args.trim().split(/\s+/)[0]} lookup` : 'add fields from a lookup';
+            case 'fillnull': return 'fill in empty fields';
+            case 'transaction': return `group related events${args.trim() ? ` by ${list(args.replace(/\b\w+\s*=\s*\S+/g, ' '))}` : ''}`;
+            default: return COMMAND_HELP[command] || (command ? `run ${command}` : '');
+        }
+    }
+
+    /**
+     * Each stage of a query with what it does in words and where it is in the query, for the
+     * "Understood as" chips: [{ code, words, start, end }].
+     */
+    function pipelineSteps(query) {
+        return pipelineRanges(query)
+            .filter((r, i) => i === 0 || r.text !== '')
+            .map((r, i) => ({ code: r.text, words: i === 0 ? describeSearch(r.text) : describeStage(r.text), start: r.start, end: r.end }));
+    }
+
+    /** A sentence for a query that came with none, made from its steps. */
+    function sentenceFor(query) {
+        const steps = pipelineSteps(query);
+        if (steps.length === 0) return '';
+        const first = steps[0].words;
+        const rest = steps.slice(1).map(s => s.words).filter(Boolean);
+        const text = first + (rest.length ? `, then ${rest.join(', then ')}` : '');
+        return text.charAt(0).toUpperCase() + text.slice(1) + '.';
+    }
+
+    const PLAIN_WORDS = new Set(['by', 'as', 'and', 'or', 'not', 'desc', 'asc', 'span', 'limit', 'true', 'false', 'from', 'last', 'over', 'in', 'to', 'find', 'search', 'where', 'the', 'is', 'of']);
+
+    /**
+     * The sentence as escaped HTML with its key terms in bold: what's measured, the fields and
+     * values the query names, "each ...", the time, and severities.
+     */
+    function emphasize(sentence, query) {
+        const text = String(sentence ?? '');
+        const ranges = [];
+        const mark = (pattern) => {
+            let m;
+            pattern.lastIndex = 0;
+            while ((m = pattern.exec(text)) !== null) {
+                if (m[0].length === 0) { pattern.lastIndex++; continue; }
+                const part = m[1] ?? m[0];
+                const start = m.index + m[0].indexOf(part);
+                ranges.push([start, start + part.length]);
+            }
+        };
+        mark(/(\d+(?:st|nd|rd|th) percentile)/gi);
+        mark(/\b(average|median|total|count|distinct|most common|least common)\b/gi);
+        mark(/\b((?:each|per) [\w./-]+(?: and [\w./-]+)?)/gi);
+        mark(/\b((?:last|past) \d+ \w+|since yesterday|yesterday|today|this (?:week|month|year|hour)|until [^,;.]+|from the start of [^,;.]+)/gi);
+        mark(/\b(\w+ or worse)\b/gi);
+        const names = new Set();
+        tokenize(query || '').forEach(t => {
+            if (!['field', 'term', 'string', 'number'].includes(t.type)) return;
+            const word = unquote(t.text).replace(/[%*]/g, '');
+            if (word.length >= 2 && !PLAIN_WORDS.has(word.toLowerCase()) && !/^\d+[smhdw]?$/.test(word)) names.add(word);
+        });
+        names.forEach(name => mark(new RegExp(`(?<![\\w./-])(${escapeRegex(name)})(?![\\w./-])`, 'gi')));
+
+        ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+        const merged = [];
+        ranges.forEach(r => {
+            const last = merged[merged.length - 1];
+            if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+            else merged.push([r[0], r[1]]);
+        });
+        let html = '';
+        let at = 0;
+        merged.forEach(([start, end]) => {
+            html += escapeHtml(text.slice(at, start)) + `<b>${escapeHtml(text.slice(start, end))}</b>`;
+            at = end;
+        });
+        return html + escapeHtml(text.slice(at));
+    }
+
+    /** The commands after the search that turn events into something else, in order. */
+    function shapingStages(query) {
+        return splitPipeline(query || '').slice(1).filter(s => s !== '' && !EVENT_STAGES.has(commandOf(s)));
+    }
+
+    /**
+     * Which view suits a query's shape, and why, in words: ranked bars for one number per value,
+     * over time for a timechart, events for a plain find, a table for chosen columns.
+     * Views: ranked, timeseries, table, events.
+     */
+    function chooseView(query) {
+        const shaping = shapingStages(query);
+        if (shaping.length === 0) return { view: 'events', reason: 'Chosen because you asked to find specific events.' };
+        const commands = shaping.map(commandOf);
+        if (commands.includes('timechart')) return { view: 'timeseries', reason: 'Chosen because you asked how it changes over time.' };
+        const first = shaping[0];
+        const command = commands[0];
+        const args = first.replace(/^\s*[A-Za-z_]+\s*/, '');
+        if (command === 'table' || command === 'fields') return { view: 'table', reason: 'Chosen because you asked for particular columns.' };
+        if (command === 'top' || command === 'rare') {
+            const field = (args.replace(/\b\w+\s*=\s*\S+/g, ' ').trim().split(/[\s,]+/).filter(w => !/^\d+$/.test(w))[0]) || 'a field';
+            return { view: 'ranked', reason: `Chosen because you asked for the ${command === 'top' ? 'most' : 'least'} common values of ${field}.` };
+        }
+        if (command === 'stats' || command === 'chart') {
+            const { aggregates, by } = readAggregates(args.replace(/\bover\s+([\w.]+)/i, ' by $1'));
+            if (by.length > 1) return { view: 'table', reason: `Chosen because you asked for one row per combination of ${by.join(' and ')}.` };
+            if (by.length === 1 && aggregates.length > 1) return { view: 'table', reason: `Chosen because you asked for several numbers per ${by[0]}.` };
+            if (by.length === 1) return { view: 'ranked', reason: `Chosen because you asked for one number per ${by[0]}.` };
+            return { view: 'ranked', reason: aggregates.length > 1 ? 'Chosen because you asked for a few numbers in total.' : 'Chosen because you asked for a single number.' };
+        }
+        return { view: 'table', reason: 'Chosen because this search builds a table of its own.' };
+    }
+
+    /**
+     * Questions that follow from this result, as [{ label, query }]: the events behind the top
+     * value, how it changes over time, ranking a chart, or summing up events by a field.
+     * options: { rows, fields (names in the results), span }.
+     */
+    function followUps(query, options = {}) {
+        const base = baseSearch(query || 'find *') || 'find *';
+        const rows = options.rows || [];
+        const span = options.span || '1h';
+        const out = [];
+        const shaping = shapingStages(query);
+        const first = shaping[0] || '';
+        const command = commandOf(first);
+        const args = first.replace(/^\s*[A-Za-z_]+\s*/, '');
+        if (command === 'timechart') {
+            const { aggregates, by } = readAggregates(args);
+            const what = aggregates.length ? aggregates.map(a => (a.field ? `${a.fn}(${a.field})` : a.fn)).join(', ') : 'count';
+            const column = aggregates.length === 1 && !aggregates[0].field ? 'count' : null;
+            out.push({ label: by.length ? `Rank each ${by[0]} by the total` : 'Show it as a single total', query: `${base} | stats ${what}${by.length ? ` by ${by[0]}` : ''}${column && by.length ? ' | sort by count desc' : ''}` });
+            out.push({ label: 'Show the events behind this chart', query: base });
+        } else if (command === 'stats' || command === 'top' || command === 'rare') {
+            const by = command === 'stats'
+                ? readAggregates(args).by
+                : [args.replace(/\b\w+\s*=\s*\S+/g, ' ').trim().split(/\s+by\s+/i)[0].split(/[\s,]+/).filter(w => w && !/^\d+$/.test(w))[0]].filter(Boolean);
+            if (by.length === 1) {
+                const field = by[0];
+                const top = rows.find(r => r[field] !== undefined && r[field] !== null && r[field] !== '');
+                if (top) {
+                    const filtered = addFilter(base, field, top[field], false);
+                    if (filtered) out.push({ label: `Show the events where ${field} is ${displayValue(top[field])}`, query: filtered });
+                }
+                out.push({ label: `How each ${field} changes over time`, query: `${base} | timechart span=${span} count by ${field}` });
+            } else {
+                out.push({ label: 'Show the events behind this number', query: base });
+                out.push({ label: 'How it changes over time', query: `${base} | timechart span=${span} count` });
+            }
+        } else if (shaping.length === 0) {
+            const fields = (options.fields || []).filter(f => fieldName(f));
+            out.push({ label: 'Count these events by host', query: `${base} | stats count by host | sort by count desc` });
+            out.push({ label: 'How many there were over time', query: `${base} | timechart span=${span} count` });
+            const other = fields.find(f => !(f in BUILTIN_FIELDS) && !HIDDEN_FIELDS.has(f) && !/^(Message|LogLevel|Tags|ParserName)$/i.test(f));
+            if (other) out.push({ label: `The most common ${other} values`, query: `${base} | top 10 ${fieldName(other)}` });
+            if (!/severity\s*>=/i.test(query || '')) out.push({ label: 'Only errors and worse', query: `${base} | where severity >= 4` });
+        } else {
+            out.push({ label: 'Show the events behind this table', query: base });
+        }
+        return out.filter(item => item.query && item.query.trim() !== (query || '').trim()).slice(0, 4);
+    }
+
+    /* ===== Live tail filters ===== */
+
+    /**
+     * What a live stream can filter on, from the BQL a plain-English filter was understood as:
+     * words for the server to match, and simple field conditions checked as events arrive.
+     * Returns { words, conditions: [{ field, op, value }], unsupported } where unsupported names
+     * the first part that can't be checked live (an "or", a stats stage), or is null.
+     */
+    function liveFilter(query) {
+        const stages = splitPipeline(query || '');
+        let first = (stages[0] || '').replace(/^\s*(find|search)\b/i, ' ');
+        first = first.replace(/\bfrom\s+last\s+\d+\s*[smhdw]\b/gi, ' ')
+            .replace(/\b(earliest|latest|index)\s*=\s*("[^"]*"|\S+)/gi, ' ');
+        const conditions = [];
+        first = first.replace(/\b([A-Za-z_][\w.]*)\s*(!=|=)\s*("(?:[^"\\]|\\.)*"|[^\s()]+)/g, (_, f, op, v) => {
+            conditions.push({ field: f, op, value: unquote(v) });
+            return ' ';
+        });
+        const words = first.replace(/\s+/g, ' ').trim();
+        let unsupported = null;
+        const add = condition => {
+            const c = condition.trim().replace(/^\((.*)\)$/, '$1').trim();
+            let m;
+            if ((m = /^isnull\(\s*([\w.]+)\s*\)$/i.exec(c))) { conditions.push({ field: m[1], op: 'missing', value: null }); return; }
+            if ((m = /^isnotnull\(\s*([\w.]+)\s*\)$/i.exec(c))) { conditions.push({ field: m[1], op: 'present', value: null }); return; }
+            if ((m = /^([\w.]+)\s+like\s+("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$/i.exec(c))) { conditions.push({ field: m[1], op: 'like', value: unquote(m[2]) }); return; }
+            if ((m = /^([\w.]+)\s*(==|=|!=|>=|<=|>|<)\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s()"']+)$/.exec(c))) {
+                conditions.push({ field: m[1], op: m[2] === '==' ? '=' : m[2], value: unquote(m[3]) });
+                return;
+            }
+            unsupported = unsupported || c;
+        };
+        stages.slice(1).forEach(stage => {
+            if (stage === '' || unsupported) return;
+            const command = commandOf(stage);
+            const args = stage.replace(/^\s*[A-Za-z_]+\s*/, '');
+            if (command !== 'where') { unsupported = stage; return; }
+            const parts = splitTopLevel(args, /^\s+(and|or)\s+/i);
+            if (parts.some(p => p.joiner === 'or') || /^\s*not\b/i.test(args) || /\bnot\s+/i.test(args)) { unsupported = args; return; }
+            parts.forEach(p => add(p.text));
+        });
+        return { words: words === '*' ? '' : words, conditions, unsupported };
+    }
+
+    /** A field of a streamed event (camelCase from the stream, or as a search row), ignoring case. */
+    function eventField(event, field) {
+        if (!event) return undefined;
+        const aliases = { source_type: 'sourcetype', sourcetype: 'sourcetype', source_file: 'sourcefile', line_number: 'linenumber', _raw: 'rawline', raw: 'rawline', _time: 'timestamp' };
+        const want = field.toLowerCase();
+        const key = aliases[want] || want;
+        const top = Object.keys(event).find(k => k.toLowerCase() === key || k.toLowerCase() === want);
+        if (top !== undefined && (typeof event[top] !== 'object' || event[top] === null)) return event[top];
+        const fields = event.fields || event.Fields;
+        if (fields && typeof fields === 'object') {
+            const inner = Object.keys(fields).find(k => k.toLowerCase() === want);
+            if (inner !== undefined) return fields[inner];
+        }
+        return undefined;
+    }
+
+    /** Whether a streamed event passes a liveFilter's conditions. Missing values never match, as in BQL. */
+    function matchesLive(event, filter) {
+        return ((filter && filter.conditions) || []).every(c => {
+            const raw = eventField(event, c.field);
+            const missing = raw === undefined || raw === null || raw === '';
+            if (c.op === 'missing') return missing;
+            if (c.op === 'present') return !missing;
+            if (missing) return false;
+            if (c.field.toLowerCase() === 'severity') {
+                const have = severityLevel(raw);
+                const want = severityLevel(c.value);
+                if (Number.isNaN(have) || Number.isNaN(want)) return false;
+                return compare(have, want, c.op);
+            }
+            if (c.op === 'like') {
+                const pattern = new RegExp('^' + String(c.value).split('').map(ch => (ch === '%' ? '[\\s\\S]*' : ch === '_' ? '[\\s\\S]' : escapeRegex(ch))).join('') + '$', 'i');
+                return pattern.test(String(raw));
+            }
+            const a = Number(raw);
+            const b = Number(c.value);
+            if (String(raw).trim() !== '' && String(c.value).trim() !== '' && Number.isFinite(a) && Number.isFinite(b)) return compare(a, b, c.op);
+            const x = String(raw).toLowerCase();
+            const y = String(c.value).toLowerCase();
+            return compare(x < y ? -1 : x > y ? 1 : 0, 0, c.op);
+        });
+    }
+
+    function compare(a, b, op) {
+        switch (op) {
+            case '=': return a === b;
+            case '!=': return a !== b;
+            case '>': return a > b;
+            case '>=': return a >= b;
+            case '<': return a < b;
+            case '<=': return a <= b;
+            default: return false;
+        }
+    }
+
     return {
         PRESETS, COMMANDS, FUNCTIONS, AGGREGATES, SEVERITIES, BUILTIN_FIELDS,
         buildQuery, markProblems, mergeCompletions,
+        severityLevel, severityTimelineQuery, pipelineSteps, describeStage, sentenceFor, emphasize, chooseView, followUps,
+        liveFilter, matchesLive, eventField,
         escapeHtml, parseTime, resolveRange, formatDateTime, toLocalInput, chooseSpan, spanLabel,
         splitPipeline, returnsEvents, baseSearch, timelineQuery, fieldName, addFilter,
         searchTerms, highlight, summarizeFields, filterValue, displayValue,
