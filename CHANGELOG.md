@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `index=` in search text, or `where index=`, narrows what storage reads to that index, ignoring case as the search does; on the Cabinet engine only that index's files are read. A search of all time for one index used to read every event.
+- The CLI's remote commands (`query --server`, `rules`, `update`) trust a server's self-signed certificate by its fingerprint in `CABINET_CERT_SHA256`, as agents do, and `cabinet setup --mode agent` writes it into the agent's settings.
 - OIDC bearer tokens keep their claims' own names (`sub`, `roles`, `groups`), as the dashboard's sign-in already did. Role mappings on the long Microsoft claim URIs need the short names.
 
 ## [3.0.0] - 2026-11-13

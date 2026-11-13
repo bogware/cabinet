@@ -36,7 +36,7 @@ public sealed class SetupWizardCommand : Command
 
         var serverUrlOption = new Option<string?>(
             "--server-url",
-            "Cabinet API server URL (for agent mode)");
+            "Cabinet API server URL (for agent mode), such as https://cabinet.example.com:8443. Pin a self-signed certificate with CABINET_CERT_SHA256.");
 
         var skipSampleDataOption = new Option<bool>(
             "--skip-sample-data",
@@ -913,7 +913,9 @@ internal sealed class SetupWizard
                     ["ApiKey"] = "SET_VIA_ENV_VAR",
                     ["BatchSize"] = 100,
                     ["FlushIntervalSeconds"] = 5,
-                    ["VerifySsl"] = !_serverUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    ["VerifySsl"] = !_serverUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase),
+                    // A server's own certificate, pinned: the installer prints its fingerprint
+                    ["CertificateSha256"] = Environment.GetEnvironmentVariable(Services.RemoteServer.PinVariable) ?? string.Empty,
                 },
                 ["Registry"] = new Dictionary<string, object>
                 {
@@ -1514,7 +1516,7 @@ internal sealed class SetupWizard
                 steps.Add("  [dim]./config/sample-data/import-sample-data.sh[/]");
                 steps.Add("");
                 steps.Add("Install a forwarding agent on log sources:");
-                steps.Add("  [dim]cabinet setup --mode agent --server-url http://this-server:5000 --api-key YOUR_KEY[/]");
+                steps.Add("  [dim]cabinet setup --mode agent --server-url https://this-server:8443 --api-key YOUR_KEY[/]");
                 break;
 
             case "docker":

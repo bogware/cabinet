@@ -21,7 +21,7 @@ public class QueryCommand : Command
         var limitOption = new Option<int>("--limit", () => 100, "Maximum results to return");
         var timeRangeOption = new Option<string>("--time", "Time range (e.g., '1h', '24h', '7d')");
         var serverOption = new Option<string?>("--server",
-            "Run the query on a Cabinet server, such as https://cabinet.example.com, instead of local storage. Also CABINET_SERVER. The API key comes from CABINET_API_KEY.");
+            "Run the query on a Cabinet server, such as https://cabinet.example.com, instead of local storage. Also CABINET_SERVER. The API key comes from CABINET_API_KEY; pin a self-signed certificate with CABINET_CERT_SHA256.");
 
         AddArgument(queryArgument);
         AddOption(modeOption);
@@ -233,7 +233,7 @@ public class QueryCommand : Command
 
         try
         {
-            using var http = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(5) };
+            using var http = Services.RemoteServer.Create(server, TimeSpan.FromMinutes(5));
             http.DefaultRequestHeaders.Add("X-API-Key", apiKey);
             var request = new
             {
