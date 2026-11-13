@@ -340,6 +340,30 @@ public sealed class PostgresLeaderLeaseTests
     }
 
     [SkippableFact]
+    public async Task ALeaderThatStopsConfirming_StopsCountingItselfTheLeader()
+    {
+        // A stalled loop (a starved thread pool, a hung socket) must not leave this instance
+        // acting as leader beside whoever takes the lock next
+        var lease = new PostgresLeaderLease("Host=127.0.0.1;Port=1;Database=none;Username=x;Password=x", NullLogger<PostgresLeaderLease>.Instance);
+        try
+        {
+            var type = typeof(PostgresLeaderLease);
+            type.GetField("_isLeader", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(lease, true);
+            var confirmed = type.GetField("_confirmedAt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+            confirmed.SetValue(lease, System.Diagnostics.Stopwatch.GetTimestamp());
+            lease.IsLeader.Should().BeTrue("just confirmed");
+
+            confirmed.SetValue(lease, System.Diagnostics.Stopwatch.GetTimestamp() - (long)((PostgresLeaderLease.ConfirmationLasts.TotalSeconds + 1) * System.Diagnostics.Stopwatch.Frequency));
+            lease.IsLeader.Should().BeFalse("its last confirmation is too old to count");
+        }
+        finally
+        {
+            await lease.DisposeAsync();
+        }
+    }
+
+    [SkippableFact]
     public async Task Leader_WhoseConnectionIsKilled_StepsDown_AndLeadsAgain()
     {
         Skip.If(string.IsNullOrEmpty(ConnectionString), "Set CABINET_TEST_POSTGRES_CONNSTR to enable.");
