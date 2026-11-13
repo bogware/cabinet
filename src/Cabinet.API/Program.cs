@@ -190,6 +190,9 @@ try
     {
         options.ForwardDefaultSelector = context =>
         {
+            // SCIM takes only SCIM tokens, which work nowhere else
+            if (context.Request.Path.StartsWithSegments(Cabinet.API.Authentication.ScimAuthenticationHandler.PathPrefix))
+                return Cabinet.API.Authentication.ScimAuthenticationHandler.SchemeName;
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
                 return "Bearer";
@@ -834,6 +837,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         sp.GetRequiredService<ILogger<Cabinet.API.Services.ApiKeyService>>(),
         sp.GetService<IDocumentStore>()));
     services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp => sp.GetRequiredService<Cabinet.API.Services.ApiKeyService>());
+
+    // The user directory: local accounts, SCIM provisioning, and groups that give roles
+    Cabinet.API.Services.Identity.IdentityRegistration.AddCabinetIdentity(services, configuration);
 }
 
 // cabinet-api --restore <backup.db.gz> [--force]

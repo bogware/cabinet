@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Entra ID and Cognito presets** for single sign-on (`Sso:Oidc:Provider`): from the tenant, or the region and user pool, Cabinet works out the authority, accepts Entra's v1 and v2 tokens for that tenant only (never `common` or `organizations`), knows users by their Entra object ID (the one SCIM uses, where `sub` differs per app), maps app roles (`roles`) and groups, warns when Entra leaves groups out of a token, accepts Cognito access tokens by their `client_id`, and reads groups from `cognito:groups`. Tested against a real Entra tenant and Cognito user pool.
 - **Signed releases**: every archive, package and install script in a release has a `.sig`, an ECDSA P-256 / SHA-256 signature made by the release workflow, plus a signed `SHA256SUMS`. The public key is `build/release-signing.pub.pem`; DEPLOYMENT.md and SECURITY.md show how to check a download with `openssl`.
 - **One-step releases**: the manual Release workflow tests a commit, builds every artifact from it with the version stamped in, signs them, tags the commit and publishes the release, as a pre-release for versions like `3.1.0-rc.1`.
+- Local accounts: people can sign in to the dashboard with a user name and password kept in Cabinet. Passwords are hashed with PBKDF2-HMAC-SHA256 (600,000 iterations, `Accounts:PasswordIterations`) and must meet `Accounts:PasswordMinLength` (12) without containing the user name or email or being a common password. Repeated failures are slowed per account and per address and lock the account (`Accounts:LockoutThreshold`, `Accounts:LockoutMinutes`).
+- Multi-factor sign-in for local accounts with any authenticator app (TOTP, RFC 6238), with ten single-use recovery codes. `Accounts:RequireMfa` makes it compulsory for everyone or for a role and above. Administrators can reset a password (to a temporary one that must be changed), reset MFA, unlock and sign someone out everywhere.
+- A user directory, shared by every instance on every backend: users, groups, and the role and index permissions each group gives (the highest role wins; permissions combine). Managed on the new Users page, at `/api/v1/users` and `/api/v1/groups`, and from **My account** for one's own password and authenticator. Every change is audited.
+- Single sign-on users (OIDC, SAML, LDAP and OIDC bearer tokens) are matched to directory users by external ID or sign-in name: a user deactivated in the directory is refused whatever the identity provider says, and directory groups give roles. Deactivating, resetting or signing out a directory user ends their sessions on the next request.
+- SCIM 2.0 provisioning at `/scim/v2`, tested against the requests Microsoft Entra ID and Okta send, authenticated by SCIM tokens made on the Users page (`/api/v1/scim-tokens`) that work only there. New settings: `Accounts:*` and `Limits:ScimMaxRequestMB`.
+- `/auth/providers` says which OIDC provider is configured, and the dashboard labels its sign-in button for Microsoft or AWS.
 
 ### Changed
 
@@ -21,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI runs only when started by hand (`gh workflow run ci.yml --ref <branch>`); nothing runs on pushes, pull requests, tags or a schedule. Releases are made by running the Release workflow rather than pushing a tag. See docs/CI.md.
 - The Docker image carries the release's version, and is tagged with it, `sha-<commit>`, and for a release `<major>.<minor>` and `latest`; pushes to `main` no longer publish an image.
 - Updating logs the full running version and the release's tag, as in "Updating from 3.0.0-rc.4 to v3.0.1", where it used to drop the pre-release label from both.
+- ASP.NET Data Protection keys, which protect session cookies and now authenticator secrets, are kept in the metadata database, so sessions survive restarts and work across instances. Existing dashboard sessions end once on upgrade.
+- LDAP sign-in is slowed after repeated failures, like local accounts, and user names typed at sign-in are cleaned of control characters and shortened before they reach the audit log.
 
 ### Security
 
@@ -37,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Linux installer copies everything published with the server, including SQLite's native library, which it left out.
 - The alert log went to a `cabinet` folder in the program's folder when the service account has no home, as Linux services don't; it goes beside the server's logs.
 - `scripts/build-release.sh` had a syntax error and couldn't run.
+
 
 ## [3.0.0] - 2026-11-13
 

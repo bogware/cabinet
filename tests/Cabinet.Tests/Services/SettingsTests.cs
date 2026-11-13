@@ -98,6 +98,7 @@ public sealed class SettingsCatalogTests
         // Turning signature checks off is for development builds, so it's only in the settings
         // file or environment, never something the dashboard can change
         { "Updates", typeof(UpdateOptions), ["AllowUnsigned"] },
+        { "Accounts", typeof(Cabinet.API.Services.Identity.AccountOptions), [] },
         // Algorithm is fixed; the cloud key providers and rotation days aren't implemented
         { "Encryption", typeof(EncryptionConfiguration), ["Algorithm", "AwsKmsKeyArn", "AzureKeyVaultUrl", "KeyRotationDays"] },
         // SAML and LDAP aren't implemented; Oidc is described setting by setting

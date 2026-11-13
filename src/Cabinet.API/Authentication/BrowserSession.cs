@@ -56,7 +56,7 @@ public static class BrowserSession
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return Task.CompletedTask;
             };
-            options.Events.OnValidatePrincipal = context =>
+            options.Events.OnValidatePrincipal = async context =>
             {
                 if (!IsSafe(context.Request.Method) && !context.Request.Headers.ContainsKey(RequestHeader))
                 {
@@ -68,8 +68,16 @@ public static class BrowserSession
                     context.RejectPrincipal();
                     context.ShouldRenew = false;
                 }
-
-                return Task.CompletedTask;
+                else if (context.Principal != null && !await DirectoryClaims.SessionIsValidAsync(
+                    context.Principal,
+                    context.HttpContext.RequestServices.GetService<Services.Identity.UserDirectory>(),
+                    context.HttpContext.RequestAborted))
+                {
+                    // Deactivated, deleted, or signed out everywhere since the session began
+                    context.RejectPrincipal();
+                    context.ShouldRenew = false;
+                    await context.HttpContext.SignOutAsync(Scheme);
+                }
             };
         });
 
@@ -97,14 +105,25 @@ public static class BrowserSession
                 // The correlation and nonce cookies cross from the identity provider back here
                 options.CorrelationCookie.SameSite = SameSiteMode.Lax;
                 options.NonceCookie.SameSite = SameSiteMode.Lax;
-                options.Events.OnTokenValidated = context =>
+                options.Events.OnTokenValidated = async context =>
                 {
                     if (context.Principal?.Identity is ClaimsIdentity identity)
                     {
                         OidcProviders.Normalize(identity, oidc, context.HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("Cabinet.Sso"));
                         context.HttpContext.RequestServices.GetRequiredService<ClaimRoleMapper>().MapClaims(identity, sso, "oidc");
-                    }
 
+                        // A user deactivated in the directory can't sign in, whatever the provider says
+                        if (!await DirectoryClaims.LinkSsoAsync(identity, context.HttpContext.RequestServices.GetService<Services.Identity.UserDirectory>(), session: true, context.HttpContext.RequestAborted))
+                        {
+                            context.Fail("This account is deactivated in Cabinet");
+                        }
+                    }
+                };
+                options.Events.OnRemoteFailure = context =>
+                {
+                    // Back to the dashboard, which offers sign-in again, rather than an error page
+                    context.Response.Redirect("/?signin=failed");
+                    context.HandleResponse();
                     return Task.CompletedTask;
                 };
                 options.Events.OnTicketReceived = context =>
@@ -199,7 +218,7 @@ public sealed class LdapAuthenticator
             var response = (SearchResponse)directory.SendRequest(request, Timeout);
             if (response.Entries.Count != 1)
             {
-                _logger.LogInformation("LDAP sign-in for {User} found {Count} entries", username, response.Entries.Count);
+                _logger.LogInformation("LDAP sign-in for {User} found {Count} entries", AuditName.Sanitize(username), response.Entries.Count);
                 return null;
             }
 
@@ -232,12 +251,12 @@ public sealed class LdapAuthenticator
         catch (LdapException ex) when (ex.ErrorCode == 49)
         {
             // Invalid credentials
-            _logger.LogInformation("LDAP sign-in for {User} failed: wrong password", username);
+            _logger.LogInformation("LDAP sign-in for {User} failed: wrong password", AuditName.Sanitize(username));
             return null;
         }
         catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
         {
-            _logger.LogWarning(ex, "LDAP sign-in for {User} couldn't reach or query the directory", username);
+            _logger.LogWarning(ex, "LDAP sign-in for {User} couldn't reach or query the directory", AuditName.Sanitize(username));
             return null;
         }
     }

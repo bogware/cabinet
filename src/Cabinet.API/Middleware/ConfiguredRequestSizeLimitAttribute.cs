@@ -12,6 +12,9 @@ public enum RequestSizeLimitKind
 
     /// <summary><see cref="ServerLimits.OtlpMaxRequestMB"/>.</summary>
     Otlp,
+
+    /// <summary><see cref="ServerLimits.ScimMaxRequestMB"/>.</summary>
+    Scim,
 }
 
 /// <summary>
@@ -30,7 +33,12 @@ public sealed class ConfiguredRequestSizeLimitAttribute : Attribute, IResourceFi
 
     /// <summary>The limit in bytes for a kind of request.</summary>
     public static long BytesFor(ServerLimits limits, RequestSizeLimitKind kind) =>
-        (kind == RequestSizeLimitKind.Hec ? limits.HecMaxRequestMB : limits.OtlpMaxRequestMB) * ServerLimits.Megabyte;
+        kind switch
+        {
+            RequestSizeLimitKind.Hec => limits.HecMaxRequestMB,
+            RequestSizeLimitKind.Scim => limits.ScimMaxRequestMB,
+            _ => limits.OtlpMaxRequestMB,
+        } * ServerLimits.Megabyte;
 
     public void OnResourceExecuting(ResourceExecutingContext context)
     {

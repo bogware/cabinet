@@ -43,14 +43,20 @@ public sealed class EndpointCapabilityTests
                 .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .Where(method => method.GetCustomAttributes().Any(attribute => attribute is Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute))
                 .Where(method => method.GetCustomAttribute<AllowAnonymousAttribute>() == null)
-                .Where(method => method.GetCustomAttribute<RequireCapabilityAttribute>() == null
-                    && type.GetCustomAttribute<RequireCapabilityAttribute>() == null)
+                .Where(method => !IsChecked(method) && !IsChecked(type))
                 .Select(method => $"{type.Name}.{method.Name}"))
             .Where(name => !Exempt.Contains(name))
             .ToList();
 
         unprotected.Should().BeEmpty("a new endpoint has no RBAC check unless it asks for one");
     }
+
+    // A capability; or, for endpoints that only act on the caller's own local account, that the
+    // caller is signed in as one; or, for SCIM, a SCIM token, which can call nothing else
+    private static bool IsChecked(MemberInfo member) =>
+        member.GetCustomAttribute<RequireCapabilityAttribute>() != null
+        || member.GetCustomAttribute<RequireLocalAccountAttribute>() != null
+        || member.GetCustomAttribute<RequireScimTokenAttribute>() != null;
 
     [Theory]
     [InlineData(SystemRole.SuperAdmin, Capability.UserManagement, true)]
@@ -723,7 +729,7 @@ public sealed class AccessControlApiTests : IDisposable
         using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = api.Client.BaseAddress };
 
         var providers = await (await noRedirects.GetAsync("/auth/providers")).Content.ReadAsStringAsync();
-        providers.Should().Contain("\"oidc\":true").And.Contain("\"signedIn\":false");
+        providers.Should().Contain("\"oidc\":true").And.Contain("\"oidcProvider\":\"Generic\"").And.Contain("\"signedIn\":false");
 
         using var login = await noRedirects.GetAsync("/auth/login/oidc?returnUrl=https://evil.example/");
         login.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -768,13 +774,13 @@ public sealed class AccessControlApiTests : IDisposable
 
         var providers = await api.Client.GetStringAsync("/auth/providers");
 
-        providers.Should().Contain("\"oidc\":false").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
+        providers.Should().Contain("\"oidc\":false").And.Contain("\"oidcProvider\":null").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
         (await api.Client.GetAsync("/auth/login/oidc")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await api.Client.PostAsJsonAsync("/auth/login/ldap", new { username = "a", password = "b" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     /// <summary>A running API process.</summary>
-    private sealed class ApiProcess : IAsyncDisposable
+    internal sealed class ApiProcess : IAsyncDisposable
     {
         private readonly Process _process;
         private readonly Task<string> _stdout;
@@ -852,7 +858,7 @@ public sealed class AccessControlApiTests : IDisposable
     }
 
     /// <summary>The two documents a JWT validator fetches from an identity provider, and tokens to match.</summary>
-    private sealed class OidcTestProvider : IAsyncDisposable
+    internal sealed class OidcTestProvider : IAsyncDisposable
     {
         private readonly TcpListener _listener;
         private readonly Task _serving;
@@ -877,12 +883,12 @@ public sealed class AccessControlApiTests : IDisposable
             return Task.FromResult(new OidcTestProvider(listener, key, $"http://localhost:{port}"));
         }
 
-        public string CreateToken(string subject, string group, string audience) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        public string CreateToken(string subject, string group, string audience, Dictionary<string, object>? extra = null) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = Authority,
             Audience = audience,
             Expires = DateTime.UtcNow.AddMinutes(10),
-            Claims = new Dictionary<string, object> { ["sub"] = subject, ["groups"] = group },
+            Claims = new Dictionary<string, object>(extra ?? new Dictionary<string, object>()) { ["sub"] = subject, ["groups"] = group },
             SigningCredentials = new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
         });
 

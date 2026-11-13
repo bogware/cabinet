@@ -661,3 +661,390 @@ async function deleteConnector(name) {
 async function connectorNames() {
     try { return (await api('GET', '/api/v1/connectors')).map(c => c.name); } catch { return []; }
 }
+
+/* ===== Users, groups and SCIM tokens ===== */
+window.EXTRA_PAGES.users = { title: 'Users', load: () => loadUsers() };
+
+let directoryUsers = [];
+let directoryGroups = [];
+let editingUserId = null;
+let editingGroupId = null;
+
+/** Index permissions as lines of "pattern: Capability, Capability". */
+function permissionsToText(list) {
+    return (list || []).map(p => `${p.indexPattern}: ${(p.capabilities || []).join(', ')}`).join('\n');
+}
+
+function textToPermissions(text) {
+    return String(text || '').split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+        const colon = line.lastIndexOf(':');
+        const pattern = (colon > 0 ? line.slice(0, colon) : line).trim();
+        const caps = colon > 0 ? line.slice(colon + 1).split(',').map(c => c.trim()).filter(Boolean) : ['Search'];
+        return { indexPattern: pattern, capabilities: caps };
+    });
+}
+
+function showOnce(title, note, value) {
+    document.getElementById('onceTitle').textContent = title;
+    document.getElementById('onceNote').textContent = note;
+    document.getElementById('onceValue').textContent = value;
+    openModal('onceModal');
+}
+
+async function loadUsers() {
+    const usersBody = document.getElementById('usersBody');
+    const groupsBody = document.getElementById('groupsBody');
+    if (!usersBody) return;
+    document.getElementById('scimEndpoint').textContent = window.location.origin + '/scim/v2';
+    usersBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    try {
+        [directoryUsers, directoryGroups] = await Promise.all([api('GET', '/api/v1/users'), api('GET', '/api/v1/groups')]);
+    } catch (e) {
+        usersBody.innerHTML = `<tr><td colspan="7" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`;
+        return;
+    }
+    usersBody.innerHTML = directoryUsers.length === 0
+        ? '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-secondary)">No users yet. Add a local account, or connect your identity provider through SCIM.</td></tr>'
+        : directoryUsers.map(u => {
+            const status = [u.active ? 'Active' : 'Deactivated', u.locked ? 'Locked' : '', u.mfaEnabled ? 'MFA' : '', u.mustChangePassword ? 'Must change password' : ''].filter(Boolean).join(', ');
+            const id = esc(JSON.stringify([u.id]));
+            const local = u.source === 'Local';
+            return `<tr><td><strong>${esc(u.userName)}</strong>${u.displayName ? `<br><span style="color:var(--text-secondary)">${esc(u.displayName)}</span>` : ''}${u.email ? `<br><span class="mono" style="color:var(--text-secondary)">${esc(u.email)}</span>` : ''}</td>
+                <td>${esc(u.source)}</td><td>${esc(u.effectiveRole || 'None')}${u.role && u.role !== u.effectiveRole ? ` (own: ${esc(u.role)})` : ''}</td>
+                <td>${esc((u.groups || []).map(g => g.displayName).join(', '))}</td><td>${esc(status)}</td>
+                <td>${esc(u.lastSignInAt ? fmtTime(u.lastSignInAt) : 'Never')}</td>
+                <td style="white-space:nowrap"><button type="button" class="btn btn-secondary btn-sm" data-click="showUserModal" data-args='${id}'>Edit</button>
+                    ${local ? `<button type="button" class="btn btn-secondary btn-sm" data-click="resetUserPassword" data-args='${id}'>Reset password</button>` : ''}
+                    ${u.mfaEnabled ? `<button type="button" class="btn btn-secondary btn-sm" data-click="resetUserMfa" data-args='${id}'>Reset MFA</button>` : ''}
+                    ${u.locked ? `<button type="button" class="btn btn-secondary btn-sm" data-click="unlockUser" data-args='${id}'>Unlock</button>` : ''}
+                    <button type="button" class="btn btn-secondary btn-sm" data-click="signOutUser" data-args='${id}'>Sign out</button>
+                    <button type="button" class="btn btn-danger btn-sm" data-click="deleteUser" data-args='${id}'>Del</button></td></tr>`;
+        }).join('');
+    const names = Object.fromEntries(directoryUsers.map(u => [u.id, u.userName]));
+    groupsBody.innerHTML = directoryGroups.length === 0
+        ? '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-secondary)">No groups yet.</td></tr>'
+        : directoryGroups.map(g => `<tr><td><strong>${esc(g.displayName)}</strong></td><td>${esc(g.source)}</td><td>${esc(g.role || 'None')}</td>
+            <td class="mono">${esc(permissionsToText(g.indexPermissions) || 'Every index')}</td>
+            <td title="${esc(g.members.map(m => names[m] || m).join(', '))}">${esc(String(g.members.length))}</td>
+            <td style="white-space:nowrap"><button type="button" class="btn btn-secondary btn-sm" data-click="showGroupModal" data-args='${esc(JSON.stringify([g.id]))}'>Edit</button>
+                <button type="button" class="btn btn-danger btn-sm" data-click="deleteGroup" data-args='${esc(JSON.stringify([g.id]))}'>Del</button></td></tr>`).join('');
+    loadScimTokens();
+}
+
+function userKindChanged() {
+    const sso = document.getElementById('userKind').value === 'sso';
+    document.getElementById('userPasswordGroup').style.display = sso || editingUserId ? 'none' : '';
+}
+
+function showUserModal(id) {
+    const u = (typeof id === 'string' && directoryUsers.find(x => x.id === id)) || null;
+    editingUserId = u ? u.id : null;
+    document.getElementById('userModalTitle').textContent = u ? 'Edit User' : 'New User';
+    document.getElementById('userName').value = u ? u.userName : '';
+    document.getElementById('userDisplayName').value = u?.displayName || '';
+    document.getElementById('userEmail').value = u?.email || '';
+    document.getElementById('userKind').value = u && u.source !== 'Local' ? 'sso' : 'local';
+    document.getElementById('userKindGroup').style.display = u ? 'none' : '';
+    document.getElementById('userPassword').value = '';
+    document.getElementById('userExternalId').value = u?.externalId || '';
+    document.getElementById('userRole').value = u?.role || '';
+    document.getElementById('userPermissions').value = permissionsToText(u?.indexPermissions);
+    document.getElementById('userActive').checked = u ? u.active : true;
+    const inGroups = new Set((u?.groups || []).map(g => g.id));
+    document.getElementById('userGroups').innerHTML = directoryGroups.length === 0
+        ? '<span class="page-note">No groups yet.</span>'
+        : directoryGroups.map(g => `<label class="check-label"><input type="checkbox" class="user-group" value="${esc(g.id)}"${inGroups.has(g.id) ? ' checked' : ''}> ${esc(g.displayName)}</label>`).join(' ');
+    document.getElementById('userResult').textContent = '';
+    userKindChanged();
+    openModal('userModal');
+}
+
+async function saveUser() {
+    const body = {
+        userName: document.getElementById('userName').value.trim(),
+        displayName: document.getElementById('userDisplayName').value.trim() || null,
+        email: document.getElementById('userEmail').value.trim() || null,
+        externalId: document.getElementById('userExternalId').value.trim(),
+        role: document.getElementById('userRole').value || null,
+        indexPermissions: textToPermissions(document.getElementById('userPermissions').value),
+        groups: [...document.querySelectorAll('#userGroups .user-group:checked')].map(c => c.value),
+        active: document.getElementById('userActive').checked,
+    };
+    try {
+        if (editingUserId) {
+            await api('PUT', '/api/v1/users/' + encodeURIComponent(editingUserId), body);
+            toast('User saved', 'success');
+        } else {
+            body.sso = document.getElementById('userKind').value === 'sso';
+            body.password = body.sso ? null : (document.getElementById('userPassword').value || null);
+            const created = await api('POST', '/api/v1/users', body);
+            if (created.temporaryPassword) {
+                showOnce('Temporary password', `Give this to ${created.user.userName}. They choose their own password when they first sign in. It isn't shown again.`, created.temporaryPassword);
+            } else {
+                toast('User added', 'success');
+            }
+        }
+        closeModal('userModal');
+        loadUsers();
+    } catch (e) { document.getElementById('userResult').textContent = e.message; }
+}
+
+async function userAction(id, path, confirmText, done) {
+    const u = directoryUsers.find(x => x.id === id);
+    if (confirmText && !confirm(confirmText.replace('{0}', u ? u.userName : id))) return null;
+    try {
+        const result = await api('POST', `/api/v1/users/${encodeURIComponent(id)}/${path}`);
+        if (done) toast(done, 'success');
+        loadUsers();
+        return result;
+    } catch (e) { toast('Failed: ' + e.message, 'error'); return null; }
+}
+
+async function resetUserPassword(id) {
+    const r = await userAction(id, 'reset-password', 'Give {0} a temporary password? Their sessions end and they choose a new password at their next sign-in.');
+    if (r) showOnce('Temporary password', 'Give this to the user. It isn\'t shown again, and must be changed at their next sign-in.', r.password);
+}
+
+function resetUserMfa(id) { return userAction(id, 'reset-mfa', 'Remove the authenticator app of {0}? Their sessions end; they can set up a new one.', 'Authenticator removed'); }
+
+function unlockUser(id) { return userAction(id, 'unlock', null, 'Unlocked'); }
+
+function signOutUser(id) { return userAction(id, 'sign-out', 'Sign {0} out everywhere?', 'Signed out everywhere'); }
+
+async function deleteUser(id) {
+    const u = directoryUsers.find(x => x.id === id);
+    if (!confirm(`Remove ${u ? u.userName : id}? To keep the record, deactivate them instead.`)) return;
+    try { await api('DELETE', '/api/v1/users/' + encodeURIComponent(id)); loadUsers(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+function showGroupModal(id) {
+    const g = (typeof id === 'string' && directoryGroups.find(x => x.id === id)) || null;
+    editingGroupId = g ? g.id : null;
+    document.getElementById('groupModalTitle').textContent = g ? 'Edit Group' : 'New Group';
+    document.getElementById('groupName').value = g ? g.displayName : '';
+    document.getElementById('groupRole').value = g?.role || '';
+    document.getElementById('groupPermissions').value = permissionsToText(g?.indexPermissions);
+    const members = new Set(g?.members || []);
+    document.getElementById('groupMembers').innerHTML = directoryUsers.length === 0
+        ? '<span class="page-note">No users yet.</span>'
+        : directoryUsers.map(u => `<label class="check-label" style="display:block"><input type="checkbox" class="group-member" value="${esc(u.id)}"${members.has(u.id) ? ' checked' : ''}> ${esc(u.userName)}</label>`).join('');
+    document.getElementById('groupResult').textContent = '';
+    openModal('groupModal');
+}
+
+async function saveGroup() {
+    const body = {
+        displayName: document.getElementById('groupName').value.trim(),
+        role: document.getElementById('groupRole').value || null,
+        indexPermissions: textToPermissions(document.getElementById('groupPermissions').value),
+        members: [...document.querySelectorAll('#groupMembers .group-member:checked')].map(c => c.value),
+    };
+    try {
+        if (editingGroupId) await api('PUT', '/api/v1/groups/' + encodeURIComponent(editingGroupId), body);
+        else await api('POST', '/api/v1/groups', body);
+        closeModal('groupModal');
+        toast('Group saved', 'success');
+        loadUsers();
+    } catch (e) { document.getElementById('groupResult').textContent = e.message; }
+}
+
+async function deleteGroup(id) {
+    const g = directoryGroups.find(x => x.id === id);
+    if (!confirm(`Remove group ${g ? g.displayName : id}? Its members lose the role it gave them.`)) return;
+    try { await api('DELETE', '/api/v1/groups/' + encodeURIComponent(id)); loadUsers(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function loadScimTokens() {
+    const body = document.getElementById('scimTokensBody');
+    if (!body) return;
+    try {
+        const tokens = await api('GET', '/api/v1/scim-tokens');
+        body.innerHTML = tokens.length === 0
+            ? '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-secondary)">No SCIM tokens.</td></tr>'
+            : tokens.map(t => `<tr><td>${esc(t.name)}</td><td class="mono">${esc(t.prefix || '')}</td><td>${esc(fmtTime(t.createdAt))}</td>
+                <td>${esc(t.lastUsedAt ? fmtTime(t.lastUsedAt) : 'Never')}</td><td>${t.revoked ? 'Revoked' : 'Active'}</td>
+                <td>${t.revoked ? '' : `<button type="button" class="btn btn-danger btn-sm" data-click="revokeScimToken" data-args='${esc(JSON.stringify([t.id]))}'>Revoke</button>`}</td></tr>`).join('');
+    } catch (e) { body.innerHTML = `<tr><td colspan="6" style="color:var(--error);padding:16px">${esc(e.message)}</td></tr>`; }
+}
+
+async function createScimToken() {
+    const name = document.getElementById('scimTokenName').value.trim() || `SCIM ${new Date().toISOString().slice(0, 10)}`;
+    try {
+        const t = await api('POST', '/api/v1/scim-tokens', { name });
+        showOnce('SCIM token', `Paste this into your identity provider as the secret token, with ${window.location.origin}/scim/v2 as the tenant URL. It isn't shown again.`, t.token);
+        loadScimTokens();
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function revokeScimToken(id) {
+    if (!confirm('Revoke this SCIM token? Provisioning with it stops at once.')) return;
+    try { await api('DELETE', '/api/v1/scim-tokens/' + encodeURIComponent(id)); loadScimTokens(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+/* ===== Signing in with a local account ===== */
+let localChallenge = null;
+
+function showLocalStep(step) {
+    ['localStepPassword', 'localStepMfa', 'localStepPasswordChange', 'localStepEnroll'].forEach(id => {
+        document.getElementById(id).hidden = id !== step;
+    });
+}
+
+async function localPost(path, body) {
+    const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Cabinet-Request': '1' },
+        body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    return { ok: res.ok, status: res.status, data };
+}
+
+/** Moves the sign-in to whatever the server says comes next. */
+async function handleLocalStep(result) {
+    const error = document.getElementById('loginError');
+    error.textContent = '';
+    const d = result.data || {};
+    if (d.challenge) localChallenge = d.challenge;
+    if (result.ok && d.status === 'signed-in') {
+        if (d.recoveryCodes && d.recoveryCodes.length) {
+            closeModal('loginModal');
+            showOnce('Recovery codes', 'Keep these somewhere safe. Each signs you in once if you lose your authenticator. They aren\'t shown again.', d.recoveryCodes.join('\n'));
+            document.getElementById('onceModal').addEventListener('click', () => window.location.reload(), { once: true });
+            return;
+        }
+        window.location.reload();
+        return;
+    }
+    if (d.status === 'mfa-required') { showLocalStep('localStepMfa'); document.getElementById('localMfaCode').focus(); return; }
+    if (d.status === 'password-change-required') {
+        document.getElementById('localPasswordChangeNote').textContent = `${d.message || 'Choose a new password to continue.'} Use at least ${d.minLength || 12} characters.`;
+        showLocalStep('localStepPasswordChange');
+        return;
+    }
+    if (d.status === 'mfa-enrollment-required') {
+        const r = await localPost('/auth/login/mfa/enroll', { challenge: localChallenge });
+        if (r.ok) {
+            localChallenge = r.data.challenge;
+            document.getElementById('localEnrollSecret').value = r.data.secret;
+            document.getElementById('localEnrollLink').href = r.data.otpauthUri;
+            showLocalStep('localStepEnroll');
+            return;
+        }
+        error.textContent = r.data.message || 'Sign-in failed';
+        showLocalStep('localStepPassword');
+        return;
+    }
+    error.textContent = d.message || 'Sign-in failed';
+    // A challenge that can't be used again means starting over
+    if (!d.challenge && result.status !== 429) { localChallenge = null; showLocalStep('localStepPassword'); }
+}
+
+async function signInLocal() {
+    const userName = document.getElementById('localUser').value.trim();
+    const password = document.getElementById('localPassword').value;
+    if (!userName || !password) return;
+    const result = await localPost('/auth/login/local', { userName, password });
+    document.getElementById('localPassword').value = '';
+    await handleLocalStep(result);
+}
+
+async function signInLocalMfa() {
+    const code = document.getElementById('localMfaCode').value.trim();
+    if (!code) return;
+    document.getElementById('localMfaCode').value = '';
+    await handleLocalStep(await localPost('/auth/login/mfa', { challenge: localChallenge, code }));
+}
+
+async function signInLocalNewPassword() {
+    const newPassword = document.getElementById('localNewPassword').value;
+    if (newPassword !== document.getElementById('localNewPassword2').value) {
+        document.getElementById('loginError').textContent = 'The two passwords differ.';
+        return;
+    }
+    document.getElementById('localNewPassword').value = '';
+    document.getElementById('localNewPassword2').value = '';
+    await handleLocalStep(await localPost('/auth/login/password', { challenge: localChallenge, newPassword }));
+}
+
+async function signInLocalEnroll() {
+    const code = document.getElementById('localEnrollCode').value.trim();
+    if (!code) return;
+    document.getElementById('localEnrollCode').value = '';
+    await handleLocalStep(await localPost('/auth/login/mfa/enroll/confirm', { challenge: localChallenge, code }));
+}
+
+/* ===== My account ===== */
+async function showAccount() {
+    document.getElementById('accountResult').textContent = '';
+    document.getElementById('accountMfaEnroll').hidden = true;
+    document.getElementById('accountMfaCode').value = '';
+    try {
+        const me = await api('GET', '/auth/account');
+        document.getElementById('accountSummary').textContent = `${me.displayName || me.userName} (${me.userName})${me.email ? ', ' + me.email : ''}. Role: ${me.role || 'none'}.`;
+        document.getElementById('accountMfaStatus').textContent = me.mfaEnabled
+            ? `On. ${me.recoveryCodesLeft} recovery codes left.${me.mfaRequired ? ' Your role has to use one.' : ''}`
+            : (me.mfaRequired ? 'Your role has to use one.' : 'Off. Turn it on so a stolen password isn\'t enough to sign in.');
+        document.getElementById('accountMfaStart').hidden = me.mfaEnabled;
+        document.getElementById('accountMfaConfirm').hidden = true;
+        document.getElementById('accountMfaCodes').hidden = !me.mfaEnabled;
+        document.getElementById('accountMfaRemove').hidden = !me.mfaEnabled || me.mfaRequired;
+        openModal('accountModal');
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function changeOwnPassword() {
+    const currentPassword = document.getElementById('accountCurrentPassword').value;
+    const newPassword = document.getElementById('accountNewPassword').value;
+    try {
+        await api('POST', '/auth/account/password', { currentPassword, newPassword });
+        document.getElementById('accountCurrentPassword').value = '';
+        document.getElementById('accountNewPassword').value = '';
+        document.getElementById('accountResult').textContent = 'Password changed. Your other sessions have ended.';
+    } catch (e) { document.getElementById('accountResult').textContent = e.message; }
+}
+
+async function startOwnMfa() {
+    try {
+        const r = await api('POST', '/auth/account/mfa/enroll');
+        document.getElementById('accountMfaSecret').value = r.secret;
+        document.getElementById('accountMfaLink').href = r.otpauthUri;
+        document.getElementById('accountMfaEnroll').hidden = false;
+        document.getElementById('accountMfaConfirm').hidden = false;
+        document.getElementById('accountResult').textContent = 'Add the key to your authenticator app, then type the code it shows and confirm.';
+    } catch (e) { document.getElementById('accountResult').textContent = e.message; }
+}
+
+async function confirmOwnMfa() {
+    try {
+        const r = await api('POST', '/auth/account/mfa/confirm', { code: document.getElementById('accountMfaCode').value.trim() });
+        closeModal('accountModal');
+        showOnce('Recovery codes', 'Your authenticator is set up. Keep these somewhere safe: each signs you in once if you lose it. They aren\'t shown again.', r.recoveryCodes.join('\n'));
+    } catch (e) { document.getElementById('accountResult').textContent = e.message; }
+}
+
+async function newOwnRecoveryCodes() {
+    try {
+        const r = await api('POST', '/auth/account/mfa/recovery-codes', { code: document.getElementById('accountMfaCode').value.trim() });
+        closeModal('accountModal');
+        showOnce('Recovery codes', 'These replace your old recovery codes. They aren\'t shown again.', r.recoveryCodes.join('\n'));
+    } catch (e) { document.getElementById('accountResult').textContent = e.message; }
+}
+
+async function removeOwnMfa() {
+    if (!confirm('Remove your authenticator app? Signing in will need only your password.')) return;
+    try {
+        await api('POST', '/auth/account/mfa/disable', { code: document.getElementById('accountMfaCode').value.trim() });
+        showAccount();
+    } catch (e) { document.getElementById('accountResult').textContent = e.message; }
+}
+
+async function signOutEverywhere() {
+    if (!confirm('Sign out of every browser, this one included?')) return;
+    try { await api('POST', '/auth/account/sign-out-everywhere'); } catch (e) { toast('Failed: ' + e.message, 'error'); return; }
+    window.location.reload();
+}

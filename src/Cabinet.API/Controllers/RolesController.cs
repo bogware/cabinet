@@ -36,7 +36,7 @@ public class RolesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetCurrentPrincipal(CancellationToken cancellationToken = default)
     {
-        var principal = await PrincipalResolver.ResolveAsync(User, _rbacService, cancellationToken);
+        var principal = await PrincipalResolver.ResolveAsync(User, _rbacService, cancellationToken, HttpContext?.RequestServices?.GetService<Cabinet.API.Services.Identity.UserDirectory>());
         return principal == null
             ? Problem(detail: "This identity has no capabilities assigned", statusCode: 403)
             : Ok(MapToDto(principal));

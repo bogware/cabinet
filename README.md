@@ -54,7 +54,7 @@ One server process with no database to run, no JVM, and no cluster to babysit. I
 <td valign="top">
 
 ### Secure and dependable
-Per-index access control, masking, encryption at rest, SSO (OIDC, SAML, LDAP) and a hash-chained audit log. Delivery is at-least-once with server-side de-duplication, and chaos tests kill the agent, the API and the database mid-stream.
+Per-index access control, masking, encryption at rest, SSO (OIDC, SAML, LDAP), local accounts with MFA, SCIM provisioning and a hash-chained audit log. Delivery is at-least-once with server-side de-duplication, and chaos tests kill the agent, the API and the database mid-stream.
 
 </td>
 </tr>
@@ -135,7 +135,7 @@ Cabinet also takes OpenTelemetry (OTLP/HTTP), syslog, a REST API, and its own fo
 - **Ingest**: Splunk HEC, OpenTelemetry logs, traces and metrics, syslog, REST, and an agent with a disk spool and checkpoints, so outages and restarts don't lose or repeat lines. An ingest pipeline drops, samples, routes or redacts before anything is stored.
 - **Detection and response**: rules evaluated on every event at ingest, 29 built-in rules, Sigma import, ATT&CK coverage, anomaly rules (spikes, silence, new values, new kinds of line), backtesting, cases, and actions to Slack, Teams, PagerDuty, Opsgenie, Jira, ServiceNow, email and webhooks.
 - **Dashboards and reports**: line, area, bar, pie, single value, gauge, heatmap, map and table panels, and scheduled reports emailed as HTML with a PDF.
-- **Access and audit**: API keys with tiers and expiry, OIDC, SAML and LDAP sign-in, roles and per-index grants on every endpoint, field masking, AES-256-GCM encryption at rest, and a hash-chained audit log.
+- **Access and audit**: API keys with tiers and expiry, OIDC (Microsoft Entra ID, Amazon Cognito or any other provider), SAML and LDAP sign-in, local accounts with TOTP multi-factor sign-in, a user directory with groups that give roles, SCIM 2.0 provisioning from Entra ID and Okta, roles and per-index grants on every endpoint, field masking, AES-256-GCM encryption at rest, and a hash-chained audit log.
 - **Operations**: health and Prometheus metrics, OpenTelemetry tracing of its own work, several instances on PostgreSQL, Kubernetes manifests, and verified backups.
 
 The [feature list](docs/FEATURES.md) says how finished each part is.
