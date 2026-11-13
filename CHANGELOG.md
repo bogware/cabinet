@@ -68,6 +68,10 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 
 ### Fixed
 
+- A query with a very long chain of operators (`eval x=1+1+...`) or search text nested thousands of parentheses deep overflowed the stack and stopped the server. Expressions deeper than 1,000 and search parentheses deeper than 100 are now a parse error; use `IN (...)` for long lists of values.
+- `LIKE`, search wildcards and phrases match without backtracking, so a padded log line can't make them slow. A slow regular expression in `match()`, `replace()` or `mvfind()` fails the query instead of quietly not matching; in a detection rule it's counted and logged, and the configured timeouts apply.
+- Plain-word questions compared every word with every field name letter by letter, so a huge field name from a log and a huge word took hundreds of megabytes. Long words aren't fuzzy-matched, and field names over 128 characters stay out of the field list.
+- Cabinet engine: index names differing only in case shared a folder on Windows and macOS; a retention purge under steady ingest never finished and blocked merges, and rewrote segments while holding up writes and searches; a damaged segment stopped the server starting instead of being set aside; a merge could close a segment under a slow search; and events without an index showed none until written to a segment.
 - Moving off the Cabinet engine opened a second engine on the running one's folder, which replayed and deleted its write-ahead log. The move now reads through the running engine.
 - A write to the engine's log cancelled or failed partway left half a record, and recovery dropped every batch after it. Records are written whole, and the log is cut back after a failed write.
 - A release candidate and its release were downloaded into the same folder, so updating to the release could reinstall the candidate, and agents could be offered it in a loop.
