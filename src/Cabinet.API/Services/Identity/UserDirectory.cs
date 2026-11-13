@@ -139,8 +139,15 @@ public sealed class UserDirectory
         return user;
     }
 
-    private void Remember(string id, DirectoryUser? user)
+    private void Remember(string id, DirectoryUser? user, bool written = false)
     {
+        // Which user a token or sign-in matched may change with any write: a user provisioned,
+        // renamed or given an external ID. Forget the matches so this instance sees it at once.
+        if (written)
+        {
+            _matches.Clear();
+        }
+
         if (_users.Count > 100_000)
         {
             _users.Clear();
@@ -219,7 +226,7 @@ public sealed class UserDirectory
             // The lookups first: a user without them couldn't be found, while a lookup without its user is ignored
             await WriteNamesAsync(user, null, cancellationToken);
             await _documents.PutAsync(UsersCollection, user.Id, user, cancellationToken);
-            Remember(user.Id, user);
+            Remember(user.Id, user, written: true);
             _hasLocalUsers = null;
             return user;
         }
@@ -259,7 +266,7 @@ public sealed class UserDirectory
 
             user.UpdatedAt = Now;
             await _documents.PutAsync(UsersCollection, id, user, cancellationToken);
-            Remember(id, user);
+            Remember(id, user, written: true);
             _hasLocalUsers = null;
             return user;
         }
@@ -297,7 +304,7 @@ public sealed class UserDirectory
             }
 
             _groups = null;
-            Remember(id, null);
+            Remember(id, null, written: true);
             _hasLocalUsers = null;
             return true;
         }

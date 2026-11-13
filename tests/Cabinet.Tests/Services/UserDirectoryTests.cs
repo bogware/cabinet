@@ -218,4 +218,20 @@ public sealed class UserDirectoryTests
 
         (await directory.MatchAsync(identity)).Should().BeNull();
     }
+
+    [Fact]
+    public async Task AUserProvisionedJustAfterATokenWasSeen_IsMatchedAtOnce()
+    {
+        // A token checked before its user was provisioned cached "no directory user"; provisioning
+        // and then deactivating them within the cache window must still apply on this instance
+        var directory = Directory(cacheSeconds: 60);
+        var identity = new System.Security.Claims.ClaimsIdentity([new System.Security.Claims.Claim("oid", "obj-1")], "Bearer");
+        (await directory.MatchCachedAsync("token-1", identity)).Should().BeNull();
+
+        var user = await directory.CreateAsync(User("alice@example.test", externalId: "obj-1"));
+        (await directory.MatchCachedAsync("token-1", identity))!.Id.Should().Be(user.Id);
+
+        await directory.UpdateAsync(user.Id, u => u.Active = false);
+        (await directory.MatchCachedAsync("token-1", identity))!.Active.Should().BeFalse();
+    }
 }
