@@ -249,7 +249,18 @@ public sealed class PostgresDocumentStoreTests : DocumentStoreTests
         new PostgresDocumentStore(ConnectionString!, NullLogger<PostgresDocumentStore>.Instance);
 }
 
+/// <summary>
+/// The lease's own timers decide whether it notices a lost connection in time. With the rest of
+/// the suite running alongside, the thread pool can be starved long enough that they don't fire
+/// for a minute, so these run with nothing else in parallel.
+/// </summary>
+[CollectionDefinition(nameof(PostgresLeaderLeaseTests), DisableParallelization = true)]
+public sealed class PostgresLeaderLeaseCollection
+{
+}
+
 [Trait("Category", "Integration")]
+[Collection(nameof(PostgresLeaderLeaseTests))]
 public sealed class PostgresLeaderLeaseTests
 {
     private static readonly string? ConnectionString = Environment.GetEnvironmentVariable("CABINET_TEST_POSTGRES_CONNSTR");
