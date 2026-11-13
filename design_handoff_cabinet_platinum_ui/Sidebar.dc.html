@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="width:100%;height:100%;display:flex;flex-direction:column;background:{{ c.bg }};border-right:1px solid {{ c.edge }};font-family:'Atkinson Hyperlegible Next','Atkinson Hyperlegible',system-ui,sans-serif;color:{{ c.ink }}">
+  <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px">
+    <img src="assets/icon.svg" alt="" style="width:24px;height:24px"></img>
+    <div style="display:flex;flex-direction:column;line-height:1.15">
+      <span style="font-weight:700;font-size:15px">Cabinet</span>
+      <span style="font-size:11px;color:{{ c.ink2 }}">bogware-prod</span>
+    </div>
+  </div>
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:10px;padding:6px 10px">
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="5">
+      <div style="display:flex;flex-direction:column;gap:1px">
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 10px 4px 6px;font-size:11.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:{{ c.ink2 }}">
+          <span style="font-size:9px;width:10px">▼</span><span style="flex:1">{{ g.label }}</span>
+        </div>
+        <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 22px;border-radius:4px;background:{{ it.bg }};color:{{ it.fg }};font-size:13px;font-weight:{{ it.weight }}">
+            <span style="flex:1">{{ it.label }}</span>
+            <span style="font-size:11.5px;font-weight:{{ it.metaW }};color:{{ it.metaFg }}">{{ it.meta }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+  </div>
+  <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px;font-size:12px;color:{{ c.ink2 }}">
+    <span style="width:8px;height:8px;border-radius:50%;background:{{ c.green }}"></span>
+    <span style="flex:1">Healthy · 1,240 events/s</span>
+    <span>J. Rivera</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:232,&quot;height&quot;:800},&quot;active&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Search&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dark&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const dark = !!this.props.dark;
+    const active = this.props.active ?? 'Search';
+    const c = dark
+      ? { bg:'#1E1E20', edge:'#2E2E31', ink:'#ECEAE5', ink2:'#A9A69F', accent:'#6A8957', red:'#F07167', green:'#8FAD78' }
+      : { bg:'#ECEAE5', edge:'#DCD9D2', ink:'#1D1D1F', ink2:'#5B5852', accent:'#5A7848', red:'#B8322A', green:'#5A7848' };
+    const defs = [
+      ['Ask', [['Search',''],['Live Tail','live'],['Saved questions','12'],['AI investigator','']]],
+      ['Watch', [['Dashboards','8'],['Scheduled reports','3'],['System health','OK']]],
+      ['Respond', [['Alerts','3 new'],['Cases','5 open'],['Detection rules','29'],['ATT&CK coverage','41%']]],
+      ['Data', [['Sources','6'],['Ingest pipeline',''],['Indexes & fields','']]],
+      ['Admin', [['Users & groups','24'],['API keys','7'],['Settings','']]]
+    ];
+    const groups = defs.map(([label, items]) => ({ label, items: items.map(([l, meta]) => {
+      const on = l === active, alert = meta.includes('new');
+      return { label:l, meta, bg: on ? c.accent : 'transparent', fg: on ? '#fff' : c.ink, weight: on ? 700 : 400,
+        metaFg: on ? 'rgba(255,255,255,.9)' : alert ? c.red : c.ink2, metaW: alert ? 700 : 400 };
+    }) }));
+    return { c, groups };
+  }
+}
+</script>
+</body>
+</html>

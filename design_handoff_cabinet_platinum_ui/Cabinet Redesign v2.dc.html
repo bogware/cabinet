@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500;700&family=Atkinson+Hyperlegible+Next:wght@400;500;700;800&display=swap" rel="stylesheet"><style>body{margin:0;background:#D9D7D2;font-family:'Atkinson Hyperlegible Next','Atkinson Hyperlegible',system-ui,sans-serif;color:#1D1D1F}a{color:#5A7848}a:hover{color:#43593A}.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.1);scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 8px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}.dv-tname{font:700 15px/1.2 'Atkinson Hyperlegible Next',sans-serif;color:#1a1a1a}.dv-tnote{font:14px/1.5 'Atkinson Hyperlegible Next',sans-serif;color:rgba(0,0,0,.62);max-width:900px;margin:0 0 24px}.dv-opts{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.09);color:#1a1a1a;border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 13px/1.3 'Atkinson Hyperlegible Next',sans-serif;color:rgba(0,0,0,.6)}.dv-card{max-width:100%;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.12),0 12px 32px rgba(0,0,0,.12);overflow:hidden}.dv-opt:target .dv-oid{background:#5A7848;color:#fff}.dv-next{margin:24px 0 0;font:13px/1.5 'Atkinson Hyperlegible Next',sans-serif;color:rgba(0,0,0,.55)}</style></helmet>
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Refined — classic sidebar, moss green, no bezels</span></div>
+<p class="dv-tnote">Built on the grouped sidebar from 1a, with the Setup Assistant’s calm. Moss green replaces blue as the single accent; etched group boxes, pinstripes and inset wells are gone — grouping now comes from soft tonal fills and spacing. Controls are squarer (4px). The default button keeps a soft moss focus ring so the next step is still obvious.</p>
+<div class="dv-opts">
+<div class="dv-opt" id="3a"><div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a>Search — the question, explained step by step</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Search" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-weight:700;font-size:15px">Search</span>
+      <span style="font-size:13px;color:#5B5852">Ask in plain words, or write SPL / BQL</span>
+      <span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Indexes</span> All <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Time</span> Last 7 days <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px">Share</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;gap:22px;padding:22px 24px">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:20px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <div style="flex:1;display:flex;align-items:center;gap:14px;height:54px;padding:0 16px;background:#fff;border:1px solid #C9C5BD;border-radius:5px">
+            <span style="font-size:11.5px;font-weight:800;color:#5B5852;letter-spacing:.06em">ASK</span>
+            <span style="flex:1;font-size:18px">p95 response time by endpoint in the last 7 days</span>
+            <span style="font-size:12px;color:#5B5852">Return ↵</span>
+          </div>
+          <span style="display:inline-flex;align-items:center;height:38px;padding:0 22px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700;font-size:15px;box-shadow:0 0 0 2px #F3F2EE,0 0 0 4px #BACBA9">Search</span>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:42px 18px 16px;display:flex;flex-direction:column;gap:14px">
+          <span style="position:absolute;top:12px;left:18px;font-size:12.5px;font-weight:700">Understood as</span>
+          <div style="font-size:15px;line-height:1.45;text-wrap:pretty">The <b>95th percentile</b> of <b>duration_ms</b> for <b>each path</b>, over the <b>last 7 days</b>, slowest first.</div>
+          <div style="display:flex;align-items:stretch;gap:5px">
+            <sc-for list="{{ segs }}" as="s" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:5px;min-width:0">
+                <sc-if value="{{ s.pipe }}" hint-placeholder-val="{{ false }}"><span style="font-family:'Atkinson Hyperlegible Mono',monospace;color:#9C988F;font-size:15px">|</span></sc-if>
+                <div style="display:flex;flex-direction:column;gap:5px;padding:7px 9px;background:#fff;border:1px solid #E1DED8;border-radius:7px;min-width:0">
+                  <code style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:11.5px;color:#43593A;white-space:nowrap">{{ s.code }}</code>
+                  <span style="font-size:12px;color:#5B5852">{{ s.words }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Edit query</span>
+            <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px">Search these exact words instead</span>
+            <span style="flex:1"></span>
+            <span style="font-size:12.5px;color:#5B5852">Fixed typo: “endpont” → endpoint</span>
+          </div>
+        </div>
+        <div style="flex:1;min-height:0;background:#fff;border:1px solid #C9C5BD;border-radius:5px;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #E1DED8;background:#FAF9F6">
+            <div style="display:flex;border:1px solid #9C988F;border-radius:4px;overflow:hidden;font-size:12.5px">
+              <span style="padding:4px 12px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700">Ranked</span>
+              <span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#FFFFFF,#ECEAE5)">Over time</span>
+              <span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#FFFFFF,#ECEAE5)">Table</span>
+              <span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#FFFFFF,#ECEAE5)">Events</span>
+            </div>
+            <span style="font-size:12.5px;color:#5B5852">Chosen because you asked for one number per endpoint.</span>
+          </div>
+          <div style="flex:1;padding:18px 22px;display:flex;flex-direction:column;gap:9px">
+            <sc-for list="{{ bars }}" as="b" hint-placeholder-count="8">
+              <div style="display:grid;grid-template-columns:130px 1fr 70px;align-items:center;gap:14px">
+                <span style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12.5px;text-align:right">{{ b.path }}</span>
+                <span style="height:18px;background:#EFEDE9;border-radius:4px"><span style="display:block;height:100%;width:{{ b.pct }};border-radius:4px;background:linear-gradient(#9DB687,#5A7848)"></span></span>
+                <span style="font-size:13px;font-weight:700">{{ b.v }} ms</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <div style="width:260px;flex:none;display:flex;flex-direction:column;gap:22px;padding-top:10px">
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 14px 12px;display:flex;flex-direction:column;gap:2px">
+          <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">Ask next</span>
+          <sc-for list="{{ nexts }}" as="n" hint-placeholder-count="4">
+            <div style="padding:7px 8px;border-radius:5px;font-size:13px;line-height:1.35;color:#43593A" style-hover="background:#E6EDDD">{{ n }}</div>
+          </sc-for>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 14px 14px;display:grid;grid-template-columns:auto 1fr;gap:8px 12px;font-size:13px">
+          <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">About this result</span>
+          <span style="color:#5B5852">Rows</span><span style="font-weight:700">8</span>
+          <span style="color:#5B5852">Took</span><span style="font-weight:700">125 ms</span>
+          <span style="color:#5B5852">Read</span><span style="font-weight:700">41,768 events</span>
+          <span style="color:#5B5852">Where</span><span style="font-weight:700">Computed in storage</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span style="display:inline-flex;justify-content:center;align-items:center;height:30px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Save question…</span>
+          <span style="display:inline-flex;justify-content:center;align-items:center;height:30px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Add to dashboard…</span>
+          <span style="display:inline-flex;justify-content:center;align-items:center;height:30px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Alert me when…</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+
+<div class="dv-opt" id="3b"><div class="dv-olabel"><a class="dv-oid" href="#3b">3b</a>First run — Setup Assistant, step 1 of 4</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;align-items:center;justify-content:center;background:#E6E4DF">
+  <div style="width:940px;height:640px;display:flex;flex-direction:column;background:#F3F2EE;border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.14);overflow:hidden">
+    <div style="height:40px;flex:none;display:flex;align-items:center;justify-content:center;gap:10px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <img src="assets/icon.svg" alt="" style="width:18px;height:18px"></img><span style="font-weight:700;font-size:14px;background:#EDEBE6;padding:0 8px">Set up Cabinet</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex">
+      <div style="width:250px;flex:none;display:flex;flex-direction:column;gap:4px;padding:22px 14px;background:#E9E7E2;border-right:1px solid #DCD9D2">
+        <sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+          <div style="display:flex;gap:12px;align-items:center;padding:10px 12px;border-radius:8px;background:{{ s.bg }};color:{{ s.fg }}">
+            <span style="width:26px;height:26px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;background:{{ s.nbg }};color:{{ s.nfg }};border:1px solid #9C988F">{{ s.n }}</span>
+            <span style="display:flex;flex-direction:column"><span style="font-weight:700;font-size:14px">{{ s.label }}</span><span style="font-size:12px;color:{{ s.sfg }}">{{ s.sub }}</span></span>
+          </div>
+        </sc-for>
+        <span style="flex:1"></span>
+        <span style="font-size:12px;color:#5B5852;line-height:1.45;padding:0 8px">You can change any of this later in Admin › Settings.</span>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:28px 32px 22px;gap:18px">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:12.5px;font-weight:700;color:#5B5852">Step 1 of 4</span>
+          <span style="font-size:26px;font-weight:800;letter-spacing:-0.01em">How will your logs get here?</span>
+          <span style="font-size:14.5px;color:#5B5852;text-wrap:pretty">Pick one to start. You can add more sources any time — they all end up in the same place.</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <sc-for list="{{ srcs }}" as="r" hint-placeholder-count="4">
+            <div style="display:flex;gap:12px;padding:14px;border:1.5px solid {{ r.border }};border-radius:6px;background:{{ r.bg }}">
+              <span style="width:16px;height:16px;flex:none;margin-top:2px;border-radius:50%;border:1px solid #6B6862;background:{{ r.dot }}"></span>
+              <span style="display:flex;flex-direction:column;gap:4px"><span style="display:flex;gap:8px;align-items:center"><span style="font-weight:700;font-size:15px">{{ r.name }}</span><sc-if value="{{ r.tag }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;font-weight:700;color:#2F7D4F;border:1px solid #9CC7AE;background:#E4F1E8;border-radius:4px;padding:0 6px">{{ r.tag }}</span></sc-if></span><span style="font-size:13px;line-height:1.4;color:#5B5852">{{ r.desc }}</span></span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 16px 14px;display:flex;flex-direction:column;gap:12px">
+          <span style="position:absolute;top:12px;left:18px;font-size:12.5px;font-weight:700">Run this on the machine with the logs</span>
+          <div style="display:flex;gap:8px">
+            <div style="display:flex;border:1px solid #9C988F;border-radius:4px;overflow:hidden;font-size:12.5px"><span style="padding:4px 12px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700">Linux</span><span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#fff,#ECEAE5)">Windows</span><span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#fff,#ECEAE5)">Kubernetes</span></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#fff;border:1px solid #C9C5BD;border-radius:5px">
+            <code style="flex:1;font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">curl -fsSL https://cabinet.bogware.io/install-agent.sh | sudo sh -s -- --key ck_live_7Hq…</code>
+            <span style="display:inline-flex;align-items:center;height:26px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-size:12.5px;font-weight:700">Copy</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="width:180px;height:12px;border:1px solid #6B6862;border-radius:6px;background:repeating-linear-gradient(-45deg,#BACBA9 0 6px,#E6EDDD 6px 12px)"></span>
+            <span style="font-size:13px;color:#5B5852">Waiting for the first event… this page will move on by itself.</span>
+          </div>
+        </div>
+        <span style="flex:1"></span>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-size:13px;color:#5A7848;font-weight:700">I’ll do this later</span>
+          <span style="flex:1"></span>
+          <span style="display:inline-flex;align-items:center;height:32px;padding:0 18px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-weight:700;font-size:14px">Go Back</span>
+          <span style="display:inline-flex;align-items:center;height:32px;padding:0 22px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700;font-size:14px;box-shadow:0 0 0 2px #F3F2EE,0 0 0 4px #BACBA9">Continue</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3c"><div class="dv-olabel"><a class="dv-oid" href="#3c">3c</a>Search results — a “find” question becomes events + inspector</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Search" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-weight:700;font-size:15px">Search</span><span style="font-size:13px;color:#5B5852">Ask in plain words, or write SPL / BQL</span><span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Indexes</span> security <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Time</span> Since yesterday <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px">Export…</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:14px;padding:18px 20px">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="flex:1;display:flex;align-items:center;gap:14px;height:46px;padding:0 16px;background:#fff;border:1px solid #C9C5BD;border-radius:5px">
+          <span style="font-size:11.5px;font-weight:800;color:#5B5852;letter-spacing:.06em">ASK</span><span style="flex:1;font-size:16px">failed logins for alice since yesterday</span>
+        </div>
+        <span style="display:inline-flex;align-items:center;height:34px;padding:0 20px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700;font-size:14px;box-shadow:0 0 0 2px #F3F2EE,0 0 0 4px #BACBA9">Search</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:13.5px;flex-wrap:wrap">
+        <span style="font-weight:700">Understood as</span><span>login failures where <b>user is alice</b>, <b>since yesterday</b></span>
+        <code style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12px;color:#43593A;background:#fff;border:1px solid #E1DED8;border-radius:5px;padding:2px 8px">find index=security earliest=-1d@d action=failure user=alice</code>
+        <span style="color:#5A7848;font-weight:700">Edit</span>
+      </div>
+      <div style="flex:1;min-height:0;display:flex;gap:16px">
+        <div style="flex:1;min-width:0;background:#fff;border:1px solid #C9C5BD;border-radius:5px;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #E1DED8;background:#FAF9F6">
+            <div style="display:flex;border:1px solid #9C988F;border-radius:4px;overflow:hidden;font-size:12.5px"><span style="padding:4px 12px;background:linear-gradient(#fff,#ECEAE5)">Ranked</span><span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#fff,#ECEAE5)">Over time</span><span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#fff,#ECEAE5)">Table</span><span style="padding:4px 12px;border-left:1px solid #9C988F;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700">Events</span></div>
+            <span style="font-size:12.5px;color:#5B5852">Chosen because you asked to find specific events.</span><span style="flex:1"></span><span style="font-size:13px;font-weight:700">23 events</span>
+          </div>
+          <div style="height:64px;flex:none;display:flex;align-items:flex-end;gap:3px;padding:10px 14px 0;border-bottom:1px solid #E1DED8">
+            <sc-for list="{{ timeline }}" as="t" hint-placeholder-count="16"><span style="flex:1;height:{{ t }};background:linear-gradient(#E3B866,#B7791F);border-radius:2px 2px 0 0"></span></sc-for>
+          </div>
+          <sc-for list="{{ evs }}" as="e" hint-placeholder-count="8">
+            <div style="display:grid;grid-template-columns:142px 72px 64px 1fr;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid #E6E4DF;background:{{ e.bg }};color:{{ e.fg }};font-size:13px">
+              <span style="color:{{ e.sub }}">{{ e.t }}</span>
+              <span style="font-size:11.5px;font-weight:700;border-radius:4px;padding:1px 6px;text-align:center;background:{{ e.chip }};color:{{ e.chipFg }}">{{ e.sev }}</span>
+              <span style="font-weight:700">{{ e.host }}</span>
+              <span style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ e.msg }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="width:300px;flex:none;display:flex;flex-direction:column;gap:20px;padding-top:10px">
+          <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 12px 12px;display:flex;flex-direction:column">
+            <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">Selected event</span>
+            <sc-for list="{{ evFields }}" as="f" hint-placeholder-count="8">
+              <div style="display:grid;grid-template-columns:84px 1fr auto;gap:8px;align-items:center;padding:5px 4px;border-bottom:1px solid #E1DED8;font-size:12.5px">
+                <span style="color:#5B5852">{{ f.0 }}</span><span style="font-family:'Atkinson Hyperlegible Mono',monospace;font-weight:700">{{ f.1 }}</span>
+                <span style="display:flex;gap:3px"><span style="font-size:11px;border:1px solid #B5B1A9;border-radius:4px;padding:0 5px;background:#fff">Only</span><span style="font-size:11px;border:1px solid #B5B1A9;border-radius:4px;padding:0 5px;background:#fff">Hide</span></span>
+              </div>
+            </sc-for>
+            <div style="display:flex;gap:8px;padding-top:10px"><span style="flex:1;display:inline-flex;justify-content:center;align-items:center;height:28px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-size:12.5px;font-weight:700">Add to case…</span><span style="flex:1;display:inline-flex;justify-content:center;align-items:center;height:28px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-size:12.5px;font-weight:700">Events around</span></div>
+          </div>
+          <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 12px 10px;display:flex;flex-direction:column">
+            <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">Fields in these results</span>
+            <sc-for list="{{ fieldSum }}" as="f" hint-placeholder-count="6">
+              <div style="display:flex;gap:8px;padding:5px 4px;font-size:12.5px"><span style="font-family:'Atkinson Hyperlegible Mono',monospace;color:#43593A;flex:1">{{ f.0 }}</span><span style="color:#5B5852">{{ f.1 }}</span><span style="color:#5B5852;width:36px;text-align:right">{{ f.2 }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3d"><div class="dv-olabel"><a class="dv-oid" href="#3d">3d</a>Dashboard — every panel says what it measures</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Dashboards" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-weight:700;font-size:15px">Web traffic</span><span style="font-size:13px;color:#5B5852">Dashboard · updated 12 s ago</span><span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Refresh</span> Every minute <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px"><span style="color:#5B5852">Time</span> Last 24 hours <span style="font-size:10px;color:#5B5852">▼</span></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Edit layout</span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Add panel…</span>
+    </div>
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:2fr 1fr 1fr;grid-template-rows:minmax(0,1fr) auto;gap:16px;padding:20px">
+      <div style="grid-column:1;background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:700;font-size:14.5px">Requests per hour</span><span style="font-size:12.5px;color:#5B5852">All web servers. Peak 850/h at 4 PM.</span></div>
+        <svg viewBox="0 0 560 150" preserveAspectRatio="none" style="width:100%;flex:1;min-height:170px;display:block">
+          <defs><linearGradient id="ar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5A7848" stop-opacity=".28"></stop><stop offset="1" stop-color="#5A7848" stop-opacity="0"></stop></linearGradient></defs>
+          <line x1="0" y1="50" x2="560" y2="50" stroke="#E6E4DF"></line><line x1="0" y1="100" x2="560" y2="100" stroke="#E6E4DF"></line>
+          <path d="{{ area }}" fill="url(#ar)"></path><path d="{{ line }}" fill="none" stroke="#5A7848" stroke-width="2.2" vector-effect="non-scaling-stroke"></path>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#5B5852"><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>Now</span></div>
+      </div>
+      <div style="background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:6px">
+        <span style="font-weight:700;font-size:14.5px">Server errors</span><span style="font-size:12.5px;color:#5B5852">Responses 500–599, last 24 h</span>
+        <span style="height:18px"></span>
+        <span style="font-size:48px;font-weight:800;letter-spacing:-0.02em;color:#B8322A;line-height:1">1,284</span>
+        <span style="font-size:13px;color:#B8322A;font-weight:700">Up 12% on yesterday</span>
+        <span style="font-size:12.5px;color:#5B5852">Mostly web-02 · <span style="color:#5A7848;font-weight:700">Show events</span></span>
+      </div>
+      <div style="background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:6px">
+        <span style="font-weight:700;font-size:14.5px">Blocked connections</span><span style="font-size:12.5px;color:#5B5852">Firewall denies, last 24 h</span>
+        <span style="height:18px"></span>
+        <span style="font-size:48px;font-weight:800;letter-spacing:-0.02em;line-height:1">316</span>
+        <span style="font-size:13px;color:#2F7D4F;font-weight:700">Down 4% on yesterday</span>
+        <span style="font-size:12.5px;color:#5B5852">Top source 203.0.113.7</span>
+      </div>
+      <div style="background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:700;font-size:14.5px">Slowest endpoints</span><span style="font-size:12.5px;color:#5B5852">95th percentile response time, ms</span></div>
+        <sc-for list="{{ bars }}" as="b" hint-placeholder-count="8">
+          <div style="display:grid;grid-template-columns:120px 1fr 54px;align-items:center;gap:10px">
+            <span style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12px;text-align:right">{{ b.path }}</span>
+            <span style="height:14px;background:#EFEDE9;border-radius:3px"><span style="display:block;height:100%;width:{{ b.pct }};border-radius:3px;background:linear-gradient(#9DB687,#5A7848)"></span></span>
+            <span style="font-size:12.5px;font-weight:700">{{ b.v }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:700;font-size:14.5px">Status codes</span><span style="font-size:12.5px;color:#5B5852">Share of all responses</span></div>
+        <div style="display:flex;height:22px;border-radius:5px;overflow:hidden;border:1px solid #9C988F">
+          <sc-for list="{{ codes }}" as="k" hint-placeholder-count="4"><span style="width:{{ k.p }};background:{{ k.col }}"></span></sc-for>
+        </div>
+        <sc-for list="{{ codes }}" as="k" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px"><span style="width:10px;height:10px;border-radius:2px;background:{{ k.col }}"></span><span style="flex:1;font-family:'Atkinson Hyperlegible Mono',monospace">{{ k.c }}</span><span style="font-weight:700">{{ k.p }}</span></div>
+        </sc-for>
+      </div>
+      <div style="background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:700;font-size:14.5px">Events by source type</span><span style="font-size:12.5px;color:#5B5852">Last 24 h</span></div>
+        <sc-for list="{{ stypes }}" as="s" hint-placeholder-count="5">
+          <div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;font-size:13px"><span style="flex:1">{{ s.n }}</span><span style="font-weight:700">{{ s.v }}</span></div><span style="height:6px;background:#EFEDE9;border-radius:3px"><span style="display:block;height:100%;width:{{ s.p }};border-radius:3px;background:#6B6862"></span></span></div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3e"><div class="dv-olabel"><a class="dv-oid" href="#3e">3e</a>Detections &amp; ATT&amp;CK — rules on the left, what they can see on the right</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Detection rules" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-weight:700;font-size:15px">Detection rules</span><span style="font-size:13px;color:#5B5852">Checked on every event as it arrives</span><span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Import Sigma…</span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 14px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-size:13px;font-weight:700">New rule…</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;gap:18px;padding:20px">
+      <div style="width:380px;flex:none;background:#fff;border:1px solid #C9C5BD;border-radius:5px;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:grid;grid-template-columns:28px 1fr 70px 52px;gap:10px;padding:9px 14px;border-bottom:1px solid #E1DED8;background:#FAF9F6;font-size:12px;font-weight:700;color:#5B5852"><span>On</span><span>Rule</span><span>Severity</span><span style="text-align:right">Fired</span></div>
+        <sc-for list="{{ rules }}" as="r" hint-placeholder-count="7">
+          <div style="display:grid;grid-template-columns:28px 1fr 70px 52px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #E6E4DF;opacity:{{ r.dim }}">
+            <span style="width:16px;height:16px;border:1px solid #6B6862;border-radius:4px;background:{{ r.box }};color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center">{{ r.mark }}</span>
+            <span style="display:flex;flex-direction:column"><span style="font-size:13.5px;font-weight:700">{{ r.n }}</span><span style="font-size:12px;color:#5B5852">Last fired {{ r.last }}</span></span>
+            <span style="font-size:12.5px;font-weight:700;color:{{ r.sevFg }}">{{ r.sev }}</span>
+            <span style="font-size:13.5px;font-weight:700;text-align:right">{{ r.f }}</span>
+          </div>
+        </sc-for>
+        <div style="padding:10px 14px;font-size:12.5px;color:#5B5852">7 of 29 shown · <span style="color:#5A7848;font-weight:700">Show all</span></div>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:baseline;gap:12px"><span style="font-size:22px;font-weight:800">41%</span><span style="font-size:14px;color:#1D1D1F">of common attacker techniques are covered by your turned-on rules.</span></div>
+        <div style="display:flex;gap:16px;font-size:12.5px;color:#5B5852">
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#5A7848"></span>Covered</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#BACBA9"></span>Rule exists, turned off</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#E9E7E2;border:1px solid #D0CCC4"></span>Not covered</span>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #C9C5BD;border-radius:5px;padding:16px;display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:8px;align-content:start">
+          <sc-for list="{{ tactics }}" as="t" hint-placeholder-count="10">
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <span style="font-size:11.5px;font-weight:700;line-height:1.15;height:30px;min-width:0">{{ t.name }}</span>
+              <sc-for list="{{ t.cells }}" as="c" hint-placeholder-count="5"><span style="height:30px;border-radius:4px;background:{{ c.bg }};border:1px solid {{ c.bd }}"></span></sc-for>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:38px 14px 12px;font-size:13.5px;line-height:1.45">
+          <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">Biggest gap</span>
+          <b>Defense Evasion</b> — 1 of 8 techniques covered. Turning on “Windows: log cleared” would cover T1070.001. <span style="color:#5A7848;font-weight:700">Backtest it on last 30 days</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3f"><div class="dv-olabel"><a class="dv-oid" href="#3f">3f</a>Case — the investigation as one timeline</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Cases" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-size:13px;color:#5B5852">Cases ›</span><span style="font-weight:700;font-size:15px">#42 Brute force against auth-01</span><span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Export report</span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 14px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-size:13px;font-weight:700">Close case…</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;gap:22px;padding:22px 24px">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px;height:44px;padding:0 14px;background:#fff;border:1px solid #C9C5BD;border-radius:5px">
+          <span style="font-size:11.5px;font-weight:800;color:#5B5852;letter-spacing:.06em">ADD</span><span style="flex:1;font-size:14.5px;color:#6B6862">Write a note, or ask a question to search inside this case…</span>
+          <span style="font-size:12px;color:#5B5852">Return ↵</span>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;position:relative;padding-left:22px">
+          <span style="position:absolute;left:6px;top:10px;bottom:10px;width:2px;background:#C8C4BC"></span>
+          <sc-for list="{{ caseItems }}" as="c" hint-placeholder-count="5">
+            <div style="position:relative;display:grid;grid-template-columns:70px 1fr;gap:14px;padding:0 0 16px">
+              <span style="position:absolute;left:-21px;top:12px;width:12px;height:12px;border-radius:50%;background:{{ c.col }};border:2px solid #F3F2EE"></span>
+              <span style="font-size:12.5px;color:#5B5852;padding-top:10px">{{ c.t }}</span>
+              <div style="background:#fff;border:1px solid #E1DED8;border-radius:9px;padding:10px 14px;display:flex;flex-direction:column;gap:4px">
+                <span style="display:flex;gap:8px;align-items:center"><span style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:{{ c.col }}">{{ c.kind }}</span><span style="font-size:14px;font-weight:700">{{ c.title }}</span></span>
+                <span style="font-size:13px;line-height:1.45;color:#3E3C38;text-wrap:pretty">{{ c.body }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="width:280px;flex:none;display:flex;flex-direction:column;gap:22px;padding-top:10px">
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 14px 14px;display:grid;grid-template-columns:auto 1fr;gap:10px 12px;font-size:13px;align-items:center">
+          <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">Case details</span>
+          <span style="color:#5B5852">Status</span><span style="display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 8px 0 10px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-weight:700;justify-self:start">Investigating <span style="font-size:10px;color:#5B5852">▼</span></span>
+          <span style="color:#5B5852">Severity</span><span style="font-weight:700;color:#9C3B1A">High</span>
+          <span style="color:#5B5852">Owner</span><span style="font-weight:700">J. Rivera</span>
+          <span style="color:#5B5852">Opened</span><span style="font-weight:700">Today, 9:13 AM</span>
+          <span style="color:#5B5852">Technique</span><span style="font-weight:700">T1110 Brute Force</span>
+          <span style="color:#5B5852">Ticket</span><span style="font-weight:700;color:#5A7848">SEC-1183</span>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:40px 14px 14px;display:flex;flex-direction:column;gap:8px;font-size:13px">
+          <span style="position:absolute;top:12px;left:16px;font-size:12.5px;font-weight:700">In this case</span>
+          <div style="display:flex"><span style="flex:1">Alerts</span><b>1</b></div><div style="display:flex"><span style="flex:1">Pinned events</span><b>5</b></div><div style="display:flex"><span style="flex:1">Searches</span><b>2</b></div><div style="display:flex"><span style="flex:1">Notes</span><b>1</b></div>
+        </div>
+        <span style="display:inline-flex;justify-content:center;align-items:center;height:30px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#FFFFFF,#ECEAE5);font-size:13px;font-weight:700">Ask the AI investigator…</span>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3g"><div class="dv-olabel"><a class="dv-oid" href="#3g">3g</a>Live Tail in Graphite — a stream you can stop, filter and pin</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#232325;color:#ECEAE5">
+  <dc-import name="Sidebar" active="Live Tail" dark="{{ true }}" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#1E1E20;border-bottom:1px solid #2E2E31">
+      <span style="font-weight:700;font-size:15px">Live Tail</span><span style="font-size:13px;color:#A9A69F">Events as they arrive, newest at the bottom</span><span style="flex:1"></span>
+      <span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #0E0E0F;border-radius:4px;background:linear-gradient(#3A3A3E,#2E2E31);font-size:13px;font-weight:700">Save as search</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:14px;padding:18px 20px">
+      <div style="display:flex;align-items:center;gap:14px">
+        <span style="display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 20px;border:1px solid #3B4F30;border-radius:4px;background:linear-gradient(#8FAD78,#6A8957);color:#fff;font-weight:700;font-size:14.5px;box-shadow:0 0 0 2px #232325,0 0 0 4px #4F6640"><span style="display:flex;gap:3px"><span style="width:4px;height:13px;background:#fff;border-radius:1px"></span><span style="width:4px;height:13px;background:#fff;border-radius:1px"></span></span>Pause</span>
+        <div style="flex:1;display:flex;align-items:center;gap:12px;height:42px;padding:0 14px;background:#18181A;border:1px solid #3A3936;border-radius:5px">
+          <span style="font-size:11.5px;font-weight:800;color:#A9A69F;letter-spacing:.06em">ONLY SHOW</span>
+          <span style="flex:1;font-size:15px">web servers, warnings and worse — or anything mentioning checkout</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px;width:150px">
+          <div style="height:22px;display:flex;align-items:flex-end;gap:2px"><sc-for list="{{ spark }}" as="h" hint-placeholder-count="20"><span style="flex:1;height:{{ h }};background:#5DBB7E;border-radius:1px"></span></sc-for></div>
+          <span style="font-size:12px;color:#A9A69F"><b style="color:#ECEAE5">1,240</b> events/s · 4% shown</span>
+        </div>
+      </div>
+      <div style="font-size:12.5px;color:#A9A69F">Understood as <code style="font-family:'Atkinson Hyperlegible Mono',monospace;color:#B9D3A2">(host like "web%" and severity &gt;= warning) or "checkout"</code></div>
+      <div style="flex:1;min-height:0;background:#18181A;border:1px solid #2E2E31;border-radius:6px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;padding:8px 0">
+        <sc-for list="{{ tail }}" as="l" hint-placeholder-count="14">
+          <div style="display:grid;grid-template-columns:4px 110px 54px 64px 1fr;gap:12px;align-items:center;padding:6px 14px 6px 0;background:{{ l.bg }};font-family:'Atkinson Hyperlegible Mono',monospace;font-size:12.5px">
+            <span style="height:100%;background:{{ l.col }}"></span>
+            <span style="color:#8A877F">{{ l.t }}</span><span style="color:{{ l.col }};font-weight:700">{{ l.sev }}</span><span style="color:#C9C6BF">{{ l.host }}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ l.msg }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;gap:18px;font-size:12.5px;color:#A9A69F"><span>Space to pause · Click a line to inspect · ⌘F to find in stream</span><span style="flex:1"></span><span>Keeping last 5,000 lines</span></div>
+    </div>
+  </div>
+</div></div>
+
+<div class="dv-opt" id="3h"><div class="dv-olabel"><a class="dv-oid" href="#3h">3h</a>Settings — control-panel style; every setting explains itself and where it comes from</div>
+<div class="dv-card" style="width:1280px;height:800px;display:flex;background:#F3F2EE">
+  <dc-import name="Sidebar" active="Settings" hint-size="232px,800px" style="width:232px;height:800px;flex:none"></dc-import>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:#ECEAE5;border-bottom:1px solid #DCD9D2">
+      <span style="font-weight:700;font-size:15px">Settings</span><span style="font-size:13px;color:#5B5852">How this Cabinet server behaves</span><span style="flex:1"></span>
+      <div style="display:flex;align-items:center;gap:8px;width:240px;height:28px;padding:0 10px;background:#fff;border:1px solid #C9C5BD;border-radius:5px;font-size:13px;color:#6B6862">Find a setting</div>
+    </div>
+    <div style="flex:1;min-height:0;display:flex">
+      <div style="width:210px;flex:none;display:flex;flex-direction:column;gap:2px;padding:16px 10px;border-right:1px solid #DCD9D2;background:#ECEAE5">
+        <sc-for list="{{ panels }}" as="p" hint-placeholder-count="9">
+          <div style="display:flex;align-items:center;padding:7px 10px;border-radius:5px;background:{{ p.bg }};color:{{ p.fg }};font-size:13.5px"><span style="flex:1">{{ p.n }}</span><span style="font-size:11.5px;opacity:.75">{{ p.m }}</span></div>
+        </sc-for>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:22px 28px;gap:22px">
+        <div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:22px;font-weight:800">Storage</span><span style="font-size:14px;color:#5B5852">Where events are kept and how they’re stored.</span></div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:42px 18px 16px;display:flex;flex-direction:column;gap:10px">
+          <span style="position:absolute;top:12px;left:18px;font-size:12.5px;font-weight:700">Disk</span>
+          <div style="display:flex;align-items:baseline;gap:10px"><span style="font-family:'Atkinson Hyperlegible Mono',monospace;font-size:13px;flex:1">/var/lib/cabinet/data</span><span style="font-size:13px"><b>50.2 MB</b> used of 118 GB free · 1.04 M events · Oct 1 – today</span></div>
+          <span style="height:14px;border:1px solid #6B6862;border-radius:7px;background:#fff;overflow:hidden"><span style="display:block;width:6%;height:100%;background:linear-gradient(#9DB687,#5A7848)"></span></span>
+          <div style="display:flex;gap:8px"><span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-size:13px;font-weight:700">Move to another drive…</span><span style="display:inline-flex;align-items:center;height:28px;padding:0 12px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-size:13px;font-weight:700">Back up now</span></div>
+        </div>
+        <div style="position:relative;background:#EAE8E3;border-radius:6px;padding:42px 18px 14px;display:grid;grid-template-columns:1fr 1fr;gap:10px 28px">
+          <span style="position:absolute;top:12px;left:18px;font-size:12.5px;font-weight:700">Storage engine</span>
+          <sc-for list="{{ backends }}" as="b" hint-placeholder-count="5">
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:16px;height:16px;flex:none;margin-top:1px;border-radius:50%;border:1px solid {{ b.bd }};background:{{ b.dot }}"></span><span style="display:flex;flex-direction:column"><span style="font-size:14px;font-weight:{{ b.w }}">{{ b.n }}</span><span style="font-size:12.5px;color:#5B5852">{{ b.d }}</span></span></div>
+          </sc-for>
+          <span style="grid-column:1 / span 2;font-size:12px;color:#5B5852;border-top:1px solid #DAD7D0;padding-top:8px">Default: SQLite · Set in <code style="font-family:'Atkinson Hyperlegible Mono',monospace">appsettings.Production.json</code> as <code style="font-family:'Atkinson Hyperlegible Mono',monospace">Storage:Type</code> · Switching pauses ingest only for the move</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:4px 20px;align-items:center;padding:0 4px">
+          <span style="font-size:14px;font-weight:700">Keep events for</span>
+          <span style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;align-items:center;justify-content:space-between;width:90px;height:28px;padding:0 4px 0 10px;background:#fff;border:1px solid #9C988F;border-radius:6px;font-size:13.5px;font-weight:700">90<span style="display:flex;flex-direction:column;font-size:8px;line-height:9px;color:#5B5852;border-left:1px solid #E1DED8;padding-left:5px">▲▼</span></span><span style="font-size:13.5px">days</span></span>
+          <span style="font-size:12.5px;color:#5B5852">Older events are archived to S3 first, then deleted. 0 keeps everything. Default 0.</span><span></span>
+        </div>
+        <span style="flex:1"></span>
+        <div style="display:flex;align-items:center;gap:12px;border-top:1px solid #E1DED8;padding-top:14px">
+          <span style="font-size:13px;color:#5B5852">1 change · takes effect without a restart</span><span style="flex:1"></span>
+          <span style="display:inline-flex;align-items:center;height:32px;padding:0 18px;border:1px solid #9C988F;border-radius:4px;background:linear-gradient(#fff,#ECEAE5);font-weight:700;font-size:14px">Revert</span>
+          <span style="display:inline-flex;align-items:center;height:32px;padding:0 22px;border:1px solid #43593A;border-radius:4px;background:linear-gradient(#6F8C5A,#57744A);color:#fff;font-weight:700;font-size:14px;box-shadow:0 0 0 2px #F3F2EE,0 0 0 4px #BACBA9">Apply</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+</div>
+<p class="dv-next">Try next: "make the sidebar groups collapse" · "show <a class="dv-oid" href="#3d">3d</a> in Graphite" · "riff on <a class="dv-oid" href="#3c">3c</a>"</p>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const raw = [['/api/v1/search',483],['/checkout',464.55],['/health',125],['/static/app.js',122],['/api/v1/orders',122],['/',119],['/login',119],['/api/v1/users',118]];
+    const bars = raw.map(([path, v]) => ({ path, v, pct: (v / 483 * 100).toFixed(1) + '%' }));
+    const segs = [
+      { code:'find * from last 7d', words:'all events, past 7 days', pipe:false },
+      { code:'stats perc95(duration_ms) as p95 by path', words:'95th percentile of duration, per endpoint', pipe:true },
+      { code:'sort by p95 desc', words:'slowest first', pipe:true }
+    ];
+    const nexts = ['How has /api/v1/search p95 changed this week?','Which hosts are slowest for /checkout?','Compare with the previous 7 days','Show the slowest 20 requests'];
+    const sel = 'Alerts';
+    const menu = [
+      ['Alerts','⌘1','3 new — rules that fired and need a look'],
+      ['Cases','⌘2','Investigations: alerts, events and notes together'],
+      ['Detection rules','⌘3','29 rules checked on every event as it arrives',true],
+      ['ATT&CK coverage','','Which attacker techniques your rules can see'],
+      ['Anomalies','','Spikes, silences and never-seen-before values'],
+      ['Import Sigma rules…','','Paste one or many; they become Cabinet rules',true],
+      ['Connectors…','','Send alerts to Slack, PagerDuty, Jira and more']
+    ].map(([label,key,desc,sep]) => ({ label, key, desc, sep:!!sep, bg: label===sel ? '#5A7848' : 'transparent', fg: label===sel ? '#fff' : '#1D1D1F' }));
+    const timeline = [40,52,38,61,70,44,35,58,92,100,76,48,41,63,57,46].map(h => h + '%');
+    const events = [
+      { t:'Nov 12, 4:20:25 PM', code:'500', line:'192.0.2.44 - - "GET /static/app.js HTTP/1.1" 500 116ms' },
+      { t:'Nov 12, 4:07:05 PM', code:'503', line:'10.0.1.8 - - "GET /api/v1/search HTTP/1.1" 503 176ms' },
+      { t:'Nov 12, 4:06:59 PM', code:'500', line:'10.0.2.6 - - "GET / HTTP/1.1" 500 37ms' },
+      { t:'Nov 12, 3:59:55 PM', code:'500', line:'10.0.3.23 - - "GET /static/app.js HTTP/1.1" 500 45ms' },
+      { t:'Nov 12, 3:58:47 PM', code:'500', line:'10.0.3.22 - - "POST /api/v1/orders HTTP/1.1" 500 29ms' }
+    ];
+    const srcs = [
+      ['Cabinet agent','Recommended','Files, systemd journal, Windows event logs and Kubernetes. Spools to disk, so restarts and outages lose nothing.',true],
+      ['Splunk HEC','','Already sending to Splunk? Point those senders here — nothing changes on their side.'],
+      ['OpenTelemetry','','OTLP over HTTP. Logs, traces and metrics become searchable events.'],
+      ['Syslog','','Network devices and appliances. UDP, TCP or TLS.']
+    ].map(([name,tag,desc,on]) => ({ name, tag, desc, on:!!on, bg: on ? '#E6EDDD' : '#fff', border: on ? '#5A7848' : '#C8C4BC', dot: on ? 'radial-gradient(circle,#fff 0 3px,#5A7848 3.5px)' : 'linear-gradient(#fff,#E9E7E2)' }));
+    const steps = [['1','Choose a source','Where your logs come from','cur'],['2','See logs arrive','We\u2019ll confirm the first events',''],['3','Ask a first question','Starter questions from your data',''],['4','Invite your team','Optional','']]
+      .map(([n,label,sub,st]) => ({ n, label, sub, bg: st ? '#5A7848' : 'transparent', fg: st ? '#fff' : '#1D1D1F', sfg: st ? 'rgba(255,255,255,.85)' : '#5B5852', nbg: st ? '#fff' : 'linear-gradient(#fff,#E9E7E2)', nfg: st ? '#5A7848' : '#5B5852' }));
+    const evs = [
+      ['Nov 13, 9:14:02 AM','Warning','auth-01','Failed password for alice from 203.0.113.7 port 52144 ssh2',true],
+      ['Nov 13, 9:14:01 AM','Warning','auth-01','Failed password for alice from 203.0.113.7 port 52141 ssh2'],
+      ['Nov 13, 9:13:58 AM','Warning','auth-01','Failed password for alice from 203.0.113.7 port 52139 ssh2'],
+      ['Nov 13, 9:13:55 AM','Warning','auth-01','Failed password for alice from 203.0.113.7 port 52133 ssh2'],
+      ['Nov 13, 9:13:51 AM','Warning','auth-01','Failed password for alice from 203.0.113.7 port 52130 ssh2'],
+      ['Nov 13, 2:41:17 AM','Warning','auth-02','Failed password for alice from 198.51.100.23 port 40022 ssh2'],
+      ['Nov 12, 6:02:44 PM','Warning','auth-01','Failed password for alice from 10.0.4.12 port 61822 ssh2'],
+      ['Nov 12, 5:58:10 PM','Warning','auth-01','Failed password for alice from 10.0.4.12 port 61790 ssh2']
+    ].map(([t,sev,host,msg,sel]) => ({ t, sev, host, msg, bg: sel ? '#5A7848' : 'transparent', fg: sel ? '#fff' : '#1D1D1F', sub: sel ? 'rgba(255,255,255,.85)' : '#5B5852', chip: sel ? 'rgba(255,255,255,.2)' : '#F6EBD3', chipFg: sel ? '#fff' : '#7A5410' }));
+    const evFields = [['user','alice'],['src_ip','203.0.113.7'],['src_port','52144'],['host','auth-01'],['sourcetype','auth'],['action','failure'],['process','sshd[2291]'],['index','security']];
+    const fieldSum = [['user','1 value','100%'],['src_ip','3 values','100%'],['host','2 values','100%'],['action','1 value','100%'],['src_port','47 values','100%'],['country','2 values','71%']];
+    const hourly = [310,280,240,210,190,205,260,380,540,690,760,800,820,790,770,810,850,830,720,610,520,460,400,350];
+    const W = 560, H = 150, mx = 900;
+    const pts = hourly.map((v,i) => [(i*(W/23)).toFixed(1), (H - v/mx*H).toFixed(1)]);
+    const line = 'M' + pts.map(p => p.join(',')).join(' L');
+    const area = line + ` L${W},${H} L0,${H} Z`;
+    const codes = [['200','82%','#2F7D4F'],['304','9%','#7FA88E'],['404','6%','#C79A3C'],['500','3%','#B8322A']].map(([c,p,col]) => ({ c, p, col }));
+    const stypes = [['nginx','412,880','100%'],['auth','98,204','24%'],['kube','61,377','15%'],['windows','22,910','6%'],['otel','9,450','2%']].map(([n,v,p]) => ({ n, v, p }));
+    const rules = [
+      ['SSH brute force','High','14',true,'2 min ago'],['Sudo to root by new user','High','1',true,'Yesterday'],['New cron job persistence','Medium','0',true,'—'],['Kerberoasting (RC4 TGS)','High','0',true,'—'],['Web: SQL injection probes','Medium','38',true,'11 min ago'],['AWS: root console login','Critical','0',false,'—'],['Windows: log cleared','High','0',false,'—']
+    ].map(([n,sev,f,on,last]) => ({ n, sev, f, last, box: on ? 'linear-gradient(#6F8C5A,#57744A)' : 'linear-gradient(#fff,#E9E7E2)', mark: on ? '✓' : '', sevFg: sev==='Critical' ? '#B8322A' : sev==='High' ? '#9C3B1A' : '#7A5410', dim: on ? '1' : '.55' }));
+    const tactics = [
+      ['Initial access',[2,1,0,2,0]],['Execute',[1,2,0,0,1,0]],['Persist',[2,2,1,0,0,1,0]],['Priv. esc.',[2,1,0,0,0]],['Evasion',[1,0,2,0,0,0,1,0]],['Creds',[2,2,2,1,0,0]],['Discover',[0,1,0,0,0,1]],['Lateral',[1,0,2,0]],['C2',[0,1,0,0,1]],['Exfil',[0,0,1,0]]
+    ].map(([name, cells]) => ({ name, cells: cells.map(v => ({ bg: v===2 ? '#5A7848' : v===1 ? '#BACBA9' : '#E9E7E2', bd: v ? 'transparent' : '#D0CCC4' })) }));
+    const caseItems = [
+      ['9:13 AM','Alert','SSH brute force fired on auth-01','14 failed passwords for alice from 203.0.113.7 in 30 s','#B8322A'],
+      ['9:16 AM','Search','failed logins for alice since yesterday','23 events · 3 source addresses · pinned 5','#5A7848'],
+      ['9:21 AM','Note','J. Rivera','203.0.113.7 is not ours. 10.0.4.12 is the VPN — likely alice mistyping on Tuesday. Blocking the external address.','#5B5852'],
+      ['9:24 AM','Action','Firewall block requested via Jira','SEC-1183 created · assigned to Network team','#2F7D4F'],
+      ['9:40 AM','Search','successful logins for alice today','0 events — no sign the attempts got in','#5A7848']
+    ].map(([t,kind,title,body,col]) => ({ t, kind, title, body, col }));
+    const tail = [
+      ['09:41:07.214','INFO','web-01','GET /api/v1/orders 200 41ms','#A4BF8D',''],
+      ['09:41:07.219','INFO','web-03','GET /static/app.js 304 3ms','#A4BF8D',''],
+      ['09:41:07.233','WARN','web-02','upstream response slow: /checkout 1,204ms','#D9A441',''],
+      ['09:41:07.240','INFO','web-01','POST /api/v1/search 200 188ms','#A4BF8D',''],
+      ['09:41:07.251','ERROR','web-02','GET /api/v1/search 503 176ms — upstream timed out','#F07167','rgba(240,113,103,.08)'],
+      ['09:41:07.266','INFO','api-04','job 4471 finished in 2.1s','#A4BF8D',''],
+      ['09:41:07.270','INFO','web-03','GET /health 200 1ms','#A4BF8D',''],
+      ['09:41:07.288','WARN','auth-01','Failed password for alice from 203.0.113.7','#D9A441',''],
+      ['09:41:07.301','INFO','web-01','GET /login 200 12ms','#A4BF8D',''],
+      ['09:41:07.315','INFO','kube','pod web-02-7c9f restarted (OOMKilled)','#A4BF8D',''],
+      ['09:41:07.322','ERROR','web-02','GET / 500 37ms','#F07167','rgba(240,113,103,.08)'],
+      ['09:41:07.340','INFO','web-01','GET /api/v1/users 200 22ms','#A4BF8D',''],
+      ['09:41:07.352','INFO','web-03','GET /api/v1/orders 200 39ms','#A4BF8D',''],
+      ['09:41:07.367','INFO','web-01','POST /checkout 200 412ms','#A4BF8D','rgba(164,191,141,.14)']
+    ].map(([t,sev,host,msg,col,bg]) => ({ t, sev, host, msg, col, bg }));
+    const spark = [30,42,38,50,46,61,58,49,55,72,64,58,61,70,66,59,62,75,68,71].map(h => h + '%');
+    const panels = [['General',''],['Storage','sel'],['Ingest',''],['Sign-in & SSO',''],['API keys',''],['Retention & archive',''],['AI investigator','Off'],['Email & reports',''],['Updates','3.5 available']]
+      .map(([n,m]) => ({ n, m: m==='sel' ? '' : m, bg: m==='sel' ? '#5A7848' : 'transparent', fg: m==='sel' ? '#fff' : '#1D1D1F' }));
+    const backends = [['Cabinet engine','Fastest on one server. Recommended.',true],['SQLite','Simple single file. Slower on large data.'],['PostgreSQL','Needed for several Cabinet servers.'],['OpenSearch','Use an existing cluster.'],['ClickHouse','More than one machine\u2019s disk.']]
+      .map(([n,d,on]) => ({ n, d, dot: on ? 'radial-gradient(circle,#fff 0 3px,#5A7848 3.5px)' : 'linear-gradient(#fff,#E9E7E2)', bd: on ? '#43593A' : '#9C988F', w: on ? 700 : 400 }));
+    const toObj = a => a.map(r => ({ 0:r[0], 1:r[1], 2:r[2] }));
+    return { bars, segs, nexts, menu, timeline, events, srcs, steps, evs, evFields, fieldSum, line, area, codes, stypes, rules, tactics, caseItems, tail, spark, panels, backends };
+  }
+}
+</script>
+</body>
+</html>
