@@ -22,7 +22,7 @@ const DASH_RANGES = [
     ['15m', 'Last 15 minutes', 15 * 60, 'the 15 minutes before'],
     ['1h', 'Last hour', 3600, 'the hour before'],
     ['4h', 'Last 4 hours', 4 * 3600, 'the 4 hours before'],
-    ['24h', 'Last 24 hours', 86400, 'yesterday'],
+    ['24h', 'Last 24 hours', 86400, 'the day before'],
     ['7d', 'Last 7 days', 7 * 86400, 'the week before'],
     ['30d', 'Last 30 days', 30 * 86400, 'the 30 days before'],
 ];

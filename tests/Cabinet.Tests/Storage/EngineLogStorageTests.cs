@@ -566,4 +566,28 @@ public sealed class EngineLogStorageTests : IDisposable
 
         read.Should().Be(50_000);
     }
+
+    [Fact]
+    public async Task ListValuedFields_AreKeptAsJson_NotTheirTypeName()
+    {
+        // The generic parser stores IP addresses and quoted strings as lists; the other backends
+        // keep them as JSON text, and the engine kept "System.Collections.Generic.List`1[...]"
+        var engine = Open();
+        await engine.InitializeAsync();
+        var logEvent = Event(1);
+        logEvent.SetField("IpAddresses", new List<string> { "10.0.0.1", "192.0.2.44" });
+        logEvent.SetField("Labels", new Dictionary<string, object> { ["team"] = "web" });
+        await engine.StoreBatchAsync([logEvent]);
+
+        var read = await engine.GetByIdAsync(logEvent.Id);
+        read!.Fields["IpAddresses"].Should().Be("[\"10.0.0.1\",\"192.0.2.44\"]");
+        read.Fields["Labels"].Should().Be("{\"team\":\"web\"}");
+
+        // Written to a segment and read back, the same
+        await engine.FlushAsync();
+        Close(engine);
+        var reopened = Open();
+        await reopened.InitializeAsync();
+        (await reopened.GetByIdAsync(logEvent.Id))!.Fields["IpAddresses"].Should().Be("[\"10.0.0.1\",\"192.0.2.44\"]");
+    }
 }

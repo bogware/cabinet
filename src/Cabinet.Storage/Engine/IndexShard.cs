@@ -290,6 +290,15 @@ internal sealed class IndexShard : IDisposable
             {
                 // An event stored with no index is in this one, in memory as in a segment
                 logEvent.Index = Index;
+
+                // Field values as a segment will hold them, so a search before and after a flush agree
+                foreach (var key in logEvent.Fields.Keys.ToList())
+                {
+                    if (logEvent.Fields[key] is not (null or string or long or double or bool or DateTime))
+                    {
+                        logEvent.Fields[key] = FieldValues.Normalize(logEvent.Fields[key])!;
+                    }
+                }
             }
 
             // One record for the batch: it's in the log whole, or not at all

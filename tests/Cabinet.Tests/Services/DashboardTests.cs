@@ -267,11 +267,11 @@ public sealed class DashboardTests
     }
 
     [Theory]
-    [InlineData(1284, 1146, true, "Up 12% on yesterday", "bad")]
-    [InlineData(316, 330, true, "Down 4% on yesterday", "good")]
-    [InlineData(500, 400, null, "Up 25% on yesterday", "neutral")]
-    [InlineData(5, 5, true, "Same as yesterday", "neutral")]
-    [InlineData(3, 0, true, "Up from none in yesterday", "bad")]
+    [InlineData(1284, 1146, true, "Up 12% on the day before", "bad")]
+    [InlineData(316, 330, true, "Down 4% on the day before", "good")]
+    [InlineData(500, 400, null, "Up 25% on the day before", "neutral")]
+    [InlineData(5, 5, true, "Same as the day before", "neutral")]
+    [InlineData(3, 0, true, "Up from none in the day before", "bad")]
     public void ABigNumber_ComparesWithThePreviousPeriod(double current, double previous, bool? lowerIsBetter, string text, string tone)
     {
         var engine = Charts();
@@ -279,8 +279,8 @@ public sealed class DashboardTests
         engine.SetValue("previous", previous);
         engine.SetValue("lower", lowerIsBetter.HasValue ? lowerIsBetter.Value : Jint.Native.JsValue.Null);
 
-        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'yesterday').text").AsString().Should().Be(text);
-        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'yesterday').tone").AsString().Should().Be(tone);
+        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'the day before').text").AsString().Should().Be(text);
+        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'the day before').tone").AsString().Should().Be(tone);
     }
 
     [Theory]

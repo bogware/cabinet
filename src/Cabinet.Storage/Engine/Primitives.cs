@@ -180,6 +180,8 @@ internal static class FieldValues
         DateTime t => t.Kind == DateTimeKind.Local ? t.ToUniversalTime() : t,
         DateTimeOffset o => o.UtcDateTime,
         JsonElement element => JsonFieldValue.Unwrap(element),
+        // Lists and objects as the JSON text the other backends store, not the type's name
+        System.Collections.IEnumerable or System.Collections.IDictionary => JsonFieldValue.Unwrap(JsonSerializer.SerializeToElement(value)),
         _ => Convert.ToString(value, CultureInfo.InvariantCulture),
     };
 
