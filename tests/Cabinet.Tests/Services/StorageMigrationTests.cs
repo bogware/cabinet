@@ -70,7 +70,7 @@ public sealed class StorageMigrationTests : IDisposable
             Id = $"evt-{i:D6}-{Guid.NewGuid():N}"[..26],
             RawLine = $"line {i}",
             Timestamp = start.AddSeconds(i),
-            Host = i % 2 == 0 ? "l4d2-dev" : "l4d2-prod",
+            Host = i % 2 == 0 ? "game-dev" : "game-prod",
             Index = "l4d2",
             Fields = { ["n"] = i },
         }).ToList());

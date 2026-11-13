@@ -194,7 +194,7 @@ public sealed class BqlParser : IQueryParser
         return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
     }
 
-    // Spaced as typed, so host=l4d2-dev stays one comparison rather than becoming host = l4d2 - dev
+    // Spaced as typed, so host=game-dev stays one comparison rather than becoming host = l4d2 - dev
     private void AppendSearchToken(StringBuilder sb)
     {
         var position = Current.Position;
@@ -913,7 +913,7 @@ public sealed class BqlParser : IQueryParser
 
     /// <summary>
     /// Reads a bracketed subquery, starting at its "[", and returns its text exactly as written:
-    /// re-joining tokens would change spacing (host=l4d2-dev) and lose escaped quotes.
+    /// re-joining tokens would change spacing (host=game-dev) and lose escaped quotes.
     /// </summary>
     private string ReadBracketed(bool skipSearchKeyword = false)
     {

@@ -134,9 +134,9 @@ public sealed class UpdateTests : IDisposable
 
     [Theory]
     [InlineData(new string[0], "anything", true)]
-    [InlineData(new[] { "l4d2-dev" }, "l4d2-dev", true)]
-    [InlineData(new[] { "l4d2-dev" }, "L4D2-DEV", true)]
-    [InlineData(new[] { "l4d2-dev" }, "l4d2-prod", false)]
+    [InlineData(new[] { "game-dev" }, "game-dev", true)]
+    [InlineData(new[] { "game-dev" }, "GAME-DEV", true)]
+    [InlineData(new[] { "game-dev" }, "game-prod", false)]
     [InlineData(new[] { "web-*", "db-1" }, "web-07", true)]
     [InlineData(new[] { "web-*" }, "xweb-07", false)]
     [InlineData(new[] { "a.b" }, "axb", false)]

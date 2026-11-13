@@ -34,7 +34,7 @@ public sealed class SearchPageTests
     [InlineData("find * | where x = 1 | stats count by host", "Weapon", "\"smg\"", "find * | where x = 1 | where Weapon = \"smg\" | stats count by host")]
     [InlineData("find *", "status", "500", "find * | where status = 500")]
     [InlineData("find *", "metric.name", "\"orders\"", "find * | where metric.name = \"orders\"")]
-    [InlineData("find *", "Host", "\"l4d2-dev\"", "find * | where host = \"l4d2-dev\"")]
+    [InlineData("find *", "Host", "\"game-dev\"", "find * | where host = \"game-dev\"")]
     [InlineData("find *", "Severity", "\"Warning\"", "find * | where severity = 3")]
     [InlineData("find *", "Team", "null", "find * | where isnull(Team)")]
     [InlineData("find *", "Victim", "\"a \\\"b\\\" \\\\c\"", "find * | where Victim = \"a \\\"b\\\" \\\\c\"")]

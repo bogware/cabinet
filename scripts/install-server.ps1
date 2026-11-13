@@ -33,7 +33,7 @@
     re-run keeps the addresses already allowed.
 
 .PARAMETER IngestKeys
-    Names for ingest-only keys to create on first install, one per sender, such as l4d2-dev.
+    Names for ingest-only keys to create on first install, one per sender, such as game-dev.
 
 .PARAMETER Https
     Serve HTTPS on -HttpsPort (default 8443) with a self-signed certificate made here, for agents
