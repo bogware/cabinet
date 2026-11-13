@@ -7,7 +7,11 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Cabinet.API.Controllers;
 
-/// <summary>Cases: investigations that gather alerts, events, searches and notes, with a timeline.</summary>
+/// <summary>
+/// Cases: investigations that gather alerts, events, searches and notes, with a timeline. A case
+/// can draw on any index and its notes often quote log lines, so reading cases needs Search on
+/// every index, and changing them needs Alerts.
+/// </summary>
 [ApiController]
 [Route("api/v1/cases")]
 public sealed class CasesController : ControllerBase
@@ -32,6 +36,7 @@ public sealed class CasesController : ControllerBase
     /// <summary>Every case, most recently changed first.</summary>
     [HttpGet]
     [RequireCapability(Capability.Search)]
+    [RequireEveryIndex(Capability.Search)]
     [ProducesResponseType(typeof(List<Case>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] CaseStatus? status = null, CancellationToken cancellationToken = default) =>
         Ok((await _cases.ListAsync(cancellationToken)).Where(c => status == null || c.Status == status));
@@ -39,6 +44,7 @@ public sealed class CasesController : ControllerBase
     /// <summary>One case.</summary>
     [HttpGet("{id}")]
     [RequireCapability(Capability.Search)]
+    [RequireEveryIndex(Capability.Search)]
     [ProducesResponseType(typeof(Case), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(string id, CancellationToken cancellationToken) =>
@@ -106,7 +112,7 @@ public sealed class CasesController : ControllerBase
 
     /// <summary>Adds a note, events, alerts or a search to a case.</summary>
     [HttpPost("{id}/items")]
-    [RequireCapability(Capability.Search)]
+    [RequireCapability(Capability.Alerts)]
     [ProducesResponseType(typeof(Case), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Add(string id, [FromBody] CaseItemsRequest request, CancellationToken cancellationToken)
@@ -158,6 +164,7 @@ public sealed class CasesController : ControllerBase
     /// </summary>
     [HttpGet("{id}/timeline")]
     [RequireCapability(Capability.Search)]
+    [RequireEveryIndex(Capability.Search)]
     [ProducesResponseType(typeof(List<TimelineItem>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Timeline(string id, CancellationToken cancellationToken)

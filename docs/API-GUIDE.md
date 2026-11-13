@@ -77,7 +77,7 @@ Send a token as `Authorization: Bearer <token>`. `Sso:RoleMappings` maps claims 
 }
 ```
 
-The first matching mapping applies. With `AutoProvision` on, the default, anyone else gets `DefaultRole`. With it off, anyone else gets 403. A principal saved through `/api/v1/roles` with the ID `oidc-<subject>` overrides the mapping.
+The first matching mapping applies. With `AutoProvision` off, the default, anyone else gets 403. With it on, anyone else gets `DefaultRole`, which means every account the identity provider knows. A principal saved through `/api/v1/roles` with the ID `oidc-<subject>` overrides the mapping.
 
 ### Development Keys
 

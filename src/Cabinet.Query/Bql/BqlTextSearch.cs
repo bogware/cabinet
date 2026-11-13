@@ -40,7 +40,7 @@ public sealed class BqlTextSearch
     {
         var tokens = Tokenize(text ?? string.Empty);
         var position = 0;
-        var root = tokens.Count == 0 ? new All() : ParseOr(tokens, ref position);
+        var root = tokens.Count == 0 ? new All() : ParseOr(tokens, ref position, depth: 0);
         if (position < tokens.Count)
         {
             throw new QueryParseException($"Unexpected '{tokens[position].Text}' in the search");
@@ -139,21 +139,27 @@ public sealed class BqlTextSearch
 
     // ─── Grammar: or := and (OR and)*; and := unary (AND? unary)*; unary := (NOT|-) unary | primary ─
 
-    private static Node ParseOr(List<Token> tokens, ref int position)
+    /// <summary>
+    /// How deep parentheses can nest. Parsing and matching recurse once per level, so without a
+    /// limit enough of them would overflow the stack and end the process.
+    /// </summary>
+    internal const int MaxDepth = 100;
+
+    private static Node ParseOr(List<Token> tokens, ref int position, int depth)
     {
-        var parts = new List<Node> { ParseAnd(tokens, ref position) };
+        var parts = new List<Node> { ParseAnd(tokens, ref position, depth) };
         while (position < tokens.Count && tokens[position].Kind == Kind.Or)
         {
             position++;
-            parts.Add(ParseAnd(tokens, ref position));
+            parts.Add(ParseAnd(tokens, ref position, depth));
         }
 
         return parts.Count == 1 ? parts[0] : new Or(parts);
     }
 
-    private static Node ParseAnd(List<Token> tokens, ref int position)
+    private static Node ParseAnd(List<Token> tokens, ref int position, int depth)
     {
-        var parts = new List<Node> { ParseUnary(tokens, ref position) };
+        var parts = new List<Node> { ParseUnary(tokens, ref position, depth) };
         while (position < tokens.Count && tokens[position].Kind is not (Kind.Or or Kind.Close))
         {
             if (tokens[position].Kind == Kind.And)
@@ -161,13 +167,27 @@ public sealed class BqlTextSearch
                 position++;
             }
 
-            parts.Add(ParseUnary(tokens, ref position));
+            parts.Add(ParseUnary(tokens, ref position, depth));
         }
 
         return parts.Count == 1 ? parts[0] : new And(parts);
     }
 
-    private static Node ParseUnary(List<Token> tokens, ref int position)
+    private static Node ParseUnary(List<Token> tokens, ref int position, int depth)
+    {
+        // In a loop: recursing here would let a long chain of NOT overflow the stack
+        var negations = 0;
+        while (position < tokens.Count && tokens[position].Kind == Kind.Not)
+        {
+            position++;
+            negations++;
+        }
+
+        var operand = ParseOperand(tokens, ref position, depth);
+        return negations % 2 == 0 ? operand : new Not(operand);
+    }
+
+    private static Node ParseOperand(List<Token> tokens, ref int position, int depth)
     {
         if (position >= tokens.Count)
         {
@@ -175,11 +195,6 @@ public sealed class BqlTextSearch
         }
 
         var token = tokens[position];
-        if (token.Kind == Kind.Not)
-        {
-            position++;
-            return new Not(ParseUnary(tokens, ref position));
-        }
 
         if (token.Kind == Kind.Term && token.Text.Length > 1 && token.Text[0] == '-')
         {
@@ -189,8 +204,13 @@ public sealed class BqlTextSearch
 
         if (token.Kind == Kind.Open)
         {
+            if (depth >= MaxDepth)
+            {
+                throw new QueryParseException($"The search nests parentheses too deeply (maximum depth: {MaxDepth})");
+            }
+
             position++;
-            var inner = ParseOr(tokens, ref position);
+            var inner = ParseOr(tokens, ref position, depth + 1);
             if (position >= tokens.Count || tokens[position].Kind != Kind.Close)
             {
                 throw new QueryParseException("Missing ')' in the search");
@@ -318,9 +338,8 @@ public sealed class BqlTextSearch
             if (words.Count > 1)
             {
                 _pattern = new Regex(
-                    $@"(?<![\p{{L}}\p{{N}}]){string.Join(@"[^\p{L}\p{N}]+", words.Select(Regex.Escape))}(?![\p{{L}}\p{{N}}])",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                    RegexTimeout);
+                    $"{WordStart}{string.Join(@"[^\p{L}\p{N}]+", words.Select(Regex.Escape))}{WordEnd}",
+                    LinearTime);
             }
         }
 
@@ -349,19 +368,7 @@ public sealed class BqlTextSearch
                 return SearchTerms.Matches(line, Words);
             }
 
-            if (string.IsNullOrEmpty(line))
-            {
-                return false;
-            }
-
-            try
-            {
-                return _pattern.IsMatch(line);
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                return false;
-            }
+            return !string.IsNullOrEmpty(line) && _pattern.IsMatch(line);
         }
     }
 
@@ -374,22 +381,8 @@ public sealed class BqlTextSearch
             _pattern = WildcardRegex(text, wholeValue: false);
         }
 
-        public override bool Matches(string? line, IDictionary<string, object?> row)
-        {
-            if (string.IsNullOrEmpty(line))
-            {
-                return false;
-            }
-
-            try
-            {
-                return _pattern.IsMatch(line);
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                return false;
-            }
-        }
+        public override bool Matches(string? line, IDictionary<string, object?> row) =>
+            !string.IsNullOrEmpty(line) && _pattern.IsMatch(line);
     }
 
     /// <summary>
@@ -401,9 +394,22 @@ public sealed class BqlTextSearch
         var body = string.Join(wholeValue ? ".*" : @"\S*", text.Split('*').Select(Regex.Escape));
         var pattern = wholeValue
             ? $"^{body}$"
-            : $"{(char.IsLetterOrDigit(text[0]) ? @"(?<![\p{L}\p{N}])" : string.Empty)}{body}{(char.IsLetterOrDigit(text[^1]) ? @"(?![\p{L}\p{N}])" : string.Empty)}";
-        return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline, RegexTimeout);
+            : $"{(char.IsLetterOrDigit(text[0]) ? WordStart : string.Empty)}{body}{(char.IsLetterOrDigit(text[^1]) ? WordEnd : string.Empty)}";
+        return new Regex(pattern, LinearTime | RegexOptions.Singleline);
     }
+
+    /// <summary>
+    /// Phrases and wildcards never need backtracking, and without it matching takes time linear in
+    /// the line, however the line is padded, so there's no timeout to run out of and turn a match
+    /// into a miss. Linear matching has no lookarounds, so word edges are matched characters.
+    /// </summary>
+    private const RegexOptions LinearTime = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+
+    /// <summary>The start of a word: the start of the line, or a character that isn't a letter or digit.</summary>
+    private const string WordStart = @"(?:^|[^\p{L}\p{N}])";
+
+    /// <summary>The end of a word: the end of the line, or a character that isn't a letter or digit.</summary>
+    private const string WordEnd = @"(?:[^\p{L}\p{N}]|$)";
 
     private sealed class FieldTerm : Node
     {
@@ -433,18 +439,10 @@ public sealed class BqlTextSearch
             var text = raw is DateTime time ? time.ToString("O", CultureInfo.InvariantCulture) : Convert.ToString(raw, CultureInfo.InvariantCulture) ?? string.Empty;
             if (_op is "=" or "!=")
             {
-                bool equal;
-                try
-                {
-                    equal = _wildcard?.IsMatch(text)
-                        ?? (_number is { } n && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var actual)
-                            ? Math.Abs(actual - n) < 1e-9
-                            : string.Equals(text, _value, StringComparison.OrdinalIgnoreCase));
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    equal = false;
-                }
+                var equal = _wildcard?.IsMatch(text)
+                    ?? (_number is { } n && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var actual)
+                        ? Math.Abs(actual - n) < 1e-9
+                        : string.Equals(text, _value, StringComparison.OrdinalIgnoreCase));
 
                 return _op == "=" ? equal : !equal;
             }

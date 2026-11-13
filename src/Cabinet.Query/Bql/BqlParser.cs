@@ -17,6 +17,14 @@ public sealed class BqlParser : IQueryParser
     private int _pos;
     private int _recursionDepth;
     private const int MaxRecursionDepth = 100;
+
+    /// <summary>
+    /// How deep an expression can go. A chain like <c>1+1+...</c> or <c>a OR b OR ...</c> nests one
+    /// level per operator, and evaluating it recurses that deep, so a long enough chain would
+    /// overflow the stack and end the process. This keeps it well short of that.
+    /// </summary>
+    internal const int MaxExpressionDepth = 1_000;
+    private const int MaxSubsearchDepth = 20;
     private const int MaxQueryLength = 100_000;
     private const int MaxPipelineStages = 100;
     private readonly object _parseLock = new();
@@ -194,7 +202,7 @@ public sealed class BqlParser : IQueryParser
         return new SearchStage(TakeTimeModifiers(query, sb.ToString()));
     }
 
-    // Spaced as typed, so host=l4d2-dev stays one comparison rather than becoming host = l4d2 - dev
+    // Spaced as typed, so host=game-dev stays one comparison rather than becoming host = l4d2 - dev
     private void AppendSearchToken(StringBuilder sb)
     {
         var position = Current.Position;
@@ -305,7 +313,7 @@ public sealed class BqlParser : IQueryParser
         {
             Advance();
             var right = ParseAndExpression();
-            left = new LogicalExpression(left, "OR", right);
+            left = Bounded(new LogicalExpression(left, "OR", right));
         }
 
         return left;
@@ -319,7 +327,7 @@ public sealed class BqlParser : IQueryParser
         {
             Advance();
             var right = ParseNotExpression();
-            left = new LogicalExpression(left, "AND", right);
+            left = Bounded(new LogicalExpression(left, "AND", right));
         }
 
         return left;
@@ -336,7 +344,7 @@ public sealed class BqlParser : IQueryParser
         }
 
         var expression = ParseComparison();
-        return negations % 2 == 0 ? negations == 0 ? expression : new NotExpression(new NotExpression(expression)) : new NotExpression(expression);
+        return Bounded(negations % 2 == 0 ? negations == 0 ? expression : new NotExpression(new NotExpression(expression)) : new NotExpression(expression));
     }
 
     private BqlExpression ParseComparison()
@@ -356,7 +364,7 @@ public sealed class BqlParser : IQueryParser
                 values.Add(SeverityLiteral(left, ParsePrimary()));
             }
             Expect(BqlTokenKind.CloseParen, ")");
-            return new InExpression(left, values);
+            return Bounded(new InExpression(left, values));
         }
 
         // LIKE expression
@@ -367,7 +375,7 @@ public sealed class BqlParser : IQueryParser
                 throw new QueryParseException("Expected string pattern after LIKE", $"position {Current.Position}");
             var pattern = Current.Value;
             Advance();
-            return new LikeExpression(left, pattern);
+            return Bounded(new LikeExpression(left, pattern));
         }
 
         // Comparison operators
@@ -376,7 +384,7 @@ public sealed class BqlParser : IQueryParser
             var op = Current.Value;
             Advance();
             var right = ParseAdditive();
-            return new ComparisonExpression(left, op, SeverityLiteral(left, right));
+            return Bounded(new ComparisonExpression(left, op, SeverityLiteral(left, right)));
         }
 
         return left;
@@ -391,7 +399,7 @@ public sealed class BqlParser : IQueryParser
             var op = Current.Value;
             Advance();
             var right = ParseMultiplicative();
-            left = new ArithmeticExpression(left, op, right);
+            left = Bounded(new ArithmeticExpression(left, op, right));
         }
 
         return left;
@@ -406,7 +414,7 @@ public sealed class BqlParser : IQueryParser
             var op = Current.Value;
             Advance();
             var right = ParseUnary();
-            left = new ArithmeticExpression(left, op, right);
+            left = Bounded(new ArithmeticExpression(left, op, right));
         }
 
         return left;
@@ -418,11 +426,16 @@ public sealed class BqlParser : IQueryParser
         {
             Advance();
             var operand = ParsePrimary();
-            return new ArithmeticExpression(new LiteralExpression(0), "-", operand);
+            return Bounded(new ArithmeticExpression(new LiteralExpression(0), "-", operand));
         }
 
         return ParsePrimary();
     }
+
+    private static BqlExpression Bounded(BqlExpression expression) =>
+        expression.Depth <= MaxExpressionDepth
+            ? expression
+            : throw new QueryParseException($"Expression too long or too deeply nested (maximum depth: {MaxExpressionDepth}); use IN (...) for a long list of values");
 
     private BqlExpression ParsePrimary()
     {
@@ -501,7 +514,7 @@ public sealed class BqlParser : IQueryParser
                         }
                     }
                     Expect(BqlTokenKind.CloseParen, ")");
-                    return new FunctionExpression(name, args);
+                    return Bounded(new FunctionExpression(name, args));
                 }
                 finally
                 {
@@ -913,7 +926,7 @@ public sealed class BqlParser : IQueryParser
 
     /// <summary>
     /// Reads a bracketed subquery, starting at its "[", and returns its text exactly as written:
-    /// re-joining tokens would change spacing (host=l4d2-dev) and lose escaped quotes.
+    /// re-joining tokens would change spacing (host=game-dev) and lose escaped quotes.
     /// </summary>
     private string ReadBracketed(bool skipSearchKeyword = false)
     {
@@ -929,7 +942,11 @@ public sealed class BqlParser : IQueryParser
         {
             if (Current.Kind == BqlTokenKind.OpenBracket)
             {
-                depth++;
+                // Each level runs inside the one around it, so the nesting has to stop somewhere
+                if (++depth > MaxSubsearchDepth)
+                {
+                    throw new QueryParseException($"Subsearches nested too deeply (maximum depth: {MaxSubsearchDepth})");
+                }
             }
             else if (Current.Kind == BqlTokenKind.CloseBracket && --depth == 0)
             {

@@ -319,7 +319,22 @@ public sealed class SortField
 /// <summary>
 /// Abstract base for all expressions
 /// </summary>
-public abstract class BqlExpression { }
+public abstract class BqlExpression
+{
+    /// <summary>
+    /// How many levels deep the expression goes: 1 for a field or literal. Code that walks an
+    /// expression recurses this deep, so the parser refuses expressions deeper than it can walk.
+    /// </summary>
+    public int Depth { get; protected init; } = 1;
+
+    /// <summary>The depth of an expression holding these children.</summary>
+    protected static int Over(params BqlExpression[] children) =>
+        1 + children.Select(child => child.Depth).DefaultIfEmpty(0).Max();
+
+    /// <summary>The depth of an expression holding this one and these.</summary>
+    protected static int Over(BqlExpression first, IEnumerable<BqlExpression> rest) =>
+        1 + Math.Max(first.Depth, rest.Select(child => child.Depth).DefaultIfEmpty(0).Max());
+}
 
 /// <summary>
 /// Binary logical: left AND/OR right
@@ -335,6 +350,7 @@ public sealed class LogicalExpression : BqlExpression
         Left = left;
         Operator = op.ToUpperInvariant();
         Right = right;
+        Depth = Over(left, right);
     }
 }
 
@@ -348,6 +364,7 @@ public sealed class NotExpression : BqlExpression
     public NotExpression(BqlExpression operand)
     {
         Operand = operand;
+        Depth = Over(operand);
     }
 }
 
@@ -365,6 +382,7 @@ public sealed class ComparisonExpression : BqlExpression
         Left = left;
         Operator = op;
         Right = right;
+        Depth = Over(left, right);
     }
 }
 
@@ -382,6 +400,7 @@ public sealed class ArithmeticExpression : BqlExpression
         Left = left;
         Operator = op;
         Right = right;
+        Depth = Over(left, right);
     }
 }
 
@@ -423,6 +442,7 @@ public sealed class FunctionExpression : BqlExpression
     {
         Name = name.ToLowerInvariant();
         Arguments = arguments;
+        Depth = Over([.. arguments]);
     }
 }
 
@@ -438,6 +458,7 @@ public sealed class InExpression : BqlExpression
     {
         Field = field;
         Values = values;
+        Depth = Over(field, values);
     }
 }
 
@@ -453,6 +474,7 @@ public sealed class LikeExpression : BqlExpression
     {
         Field = field;
         Pattern = pattern;
+        Depth = Over(field);
     }
 }
 

@@ -123,9 +123,9 @@ public sealed class RealServerLogTests
     [Fact]
     public async Task SourceModBlaming_NamesThePlugin()
     {
-        var e = await SourceMod("[SM] Blaming: bizzymod/l4d_boss_percent.smx");
+        var e = await SourceMod("[SM] Blaming: example/l4d_boss_percent.smx");
 
-        e.Fields.Should().Contain("Plugin", "bizzymod/l4d_boss_percent.smx");
+        e.Fields.Should().Contain("Plugin", "example/l4d_boss_percent.smx");
         e.Severity.Should().Be(LogSeverity.Error);
     }
 }

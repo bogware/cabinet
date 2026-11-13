@@ -95,6 +95,11 @@ internal sealed class BloomFilter
     {
         var hashes = reader.ReadByte();
         var words = reader.ReadInt32();
+        if (words < 0 || (long)words * sizeof(ulong) > reader.BaseStream.Length - reader.BaseStream.Position)
+        {
+            throw new InvalidDataException($"A filter claims {words} words, more than is left to read");
+        }
+
         var bits = new ulong[words];
         for (var i = 0; i < words; i++)
         {

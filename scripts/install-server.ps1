@@ -33,7 +33,7 @@
     re-run keeps the addresses already allowed.
 
 .PARAMETER IngestKeys
-    Names for ingest-only keys to create on first install, one per sender, such as l4d2-dev.
+    Names for ingest-only keys to create on first install, one per sender, such as game-dev.
 
 .PARAMETER Https
     Serve HTTPS on -HttpsPort (default 8443) with a self-signed certificate made here, for agents
@@ -87,6 +87,16 @@ function Protect-File([string]$Path) {
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($who in @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) {
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "Allow")))
+    }
+    Set-Acl -Path $Path -AclObject $acl
+}
+
+# A folder, and everything in it, for administrators and SYSTEM only
+function Protect-Folder([string]$Path) {
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($who in @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
     }
     Set-Acl -Path $Path -AclObject $acl
 }
@@ -212,6 +222,8 @@ Write-Host "[2/6] Copying files" -ForegroundColor Green
 foreach ($dir in @("$InstallDir\api", "$InstallDir\cli", "$DataDir\db", "$DataDir\backups")) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
+# Events and backups: administrators and the service only, not every local user as ProgramData allows
+foreach ($dir in @("$DataDir\db", "$DataDir\backups")) { Protect-Folder $dir }
 # Settings live in $DataDir and are kept on upgrade
 Get-ChildItem "$source\api" | Where-Object { $_.Name -ne "appsettings.Production.json" } |
     Copy-Item -Destination "$InstallDir\api" -Recurse -Force
@@ -252,6 +264,8 @@ else {
         ApiKeys = @{ Keys = $keys }
         Gaming = @{ Enabled = [bool]$Gaming }
         Backup = @{ ArchivePath = "$DataDir\backups" }
+        # Metrics only with a key, or from this machine; Metrics:AllowFrom adds a Prometheus server
+        Metrics = @{ RequireKey = $true }
     }
     $settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsPath -Encoding UTF8
     Protect-File $settingsPath

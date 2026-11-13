@@ -224,6 +224,10 @@ public sealed class SecurityReviewTests
         principal.HasCapability(Capability.Search, "main").Should().BeFalse();
         principal.HasCapabilityOnAnyIndex(Capability.Search).Should().BeFalse();
         principal.HasCapability(Capability.IndexManagement).Should().BeFalse();
+
+        // Nor the fleet's host names and versions, or index retention, which SystemHealth reads
+        principal.HasCapability(Capability.SystemHealth).Should().BeFalse();
+        principal.HasCapabilityOnAnyIndex(Capability.SystemHealth).Should().BeFalse();
     }
 
     [Fact]

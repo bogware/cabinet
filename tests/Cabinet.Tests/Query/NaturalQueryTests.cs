@@ -298,4 +298,42 @@ public sealed class NaturalQueryTests
             await run.Should().NotThrowAsync($"\"{text}\" reads as {query}");
         }
     }
+
+    [Theory]
+    [InlineData("severity", "severity", 0)]
+    [InlineData("sevrity", "severity", 1)]
+    [InlineData("hsot", "host", 1)]
+    [InlineData("Status", "stauts", 1)]
+    [InlineData("duration", "durtaion_ms", 4)]
+    [InlineData("abcdef", "badcfe", 3)]
+    public void Distance_CountsEditsAndSwaps(string a, string b, int expected)
+    {
+        Fuzzy.Distance(a, b).Should().Be(expected);
+    }
+
+    [Fact]
+    public void Distance_OfHugeWords_DoesNotCompareThem()
+    {
+        // The old code allocated a table of both lengths: 324 MB for these two
+        var a = new string('a', 9_000) + "x";
+        var b = new string('a', 9_000) + "y";
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var distance = Fuzzy.Distance(a, b);
+
+        distance.Should().BeGreaterThan(Fuzzy.Allowed(a.Length));
+        (GC.GetAllocatedBytesForCurrentThread() - before).Should().BeLessThan(1_000_000);
+    }
+
+    [Fact]
+    public void AHugeWord_AgainstAHugeFieldName_IsReadQuickly()
+    {
+        var name = new string('f', 9_000);
+        var catalog = new FieldCatalog([name, name + "g"], new Dictionary<string, IReadOnlyCollection<string>>());
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        _understander.Understand("errors " + new string('f', 8_999) + "h", catalog, Now);
+
+        (GC.GetAllocatedBytesForCurrentThread() - before).Should().BeLessThan(50_000_000);
+    }
 }

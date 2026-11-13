@@ -51,12 +51,17 @@ public sealed class MetricsMiddleware
         // Exactly, so that a proxy rule blocking /metrics also blocks every way of asking for it
         if (context.Request.Path.Equals("/metrics", StringComparison.Ordinal))
         {
-            // Design decision: /metrics is intentionally unauthenticated.
-            // Prometheus scrapers typically do not support API key authentication, and requiring
-            // auth here would break standard monitoring setups. Access should be restricted at
-            // the network level instead — e.g., Kubernetes NetworkPolicy, firewall rules, or
-            // ingress annotations that limit /metrics to the monitoring namespace/CIDR only.
-            // See also: IpRateLimitingMiddleware bypasses /metrics to avoid false positives.
+            // Open unless Metrics:RequireKey is on (new installs turn it on). Then a scrape needs a
+            // key above Ingest, as X-API-Key or a bearer token, which Prometheus can send, unless
+            // it comes from this machine or an address in Metrics:AllowFrom.
+            if (!await MayReadMetricsAsync(context))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.Headers.WWWAuthenticate = "Bearer";
+                await context.Response.WriteAsync("/metrics needs an API key: send it as X-API-Key or Authorization: Bearer.");
+                return;
+            }
+
             await WriteMetricsAsync(context);
             return;
         }
@@ -75,6 +80,58 @@ public sealed class MetricsMiddleware
 
             MetricsCollector.RecordRequest(method, path, status, sw.Elapsed.TotalSeconds);
         }
+    }
+
+    /// <summary>Whether this request may read /metrics, under Metrics:RequireKey and Metrics:AllowFrom.</summary>
+    internal static async Task<bool> MayReadMetricsAsync(HttpContext context)
+    {
+        var configuration = context.RequestServices.GetService<IConfiguration>();
+        if (configuration == null || !configuration.GetValue<bool>("Metrics:RequireKey"))
+        {
+            return true;
+        }
+
+        var address = context.Connection.RemoteIpAddress;
+        if (address != null && (System.Net.IPAddress.IsLoopback(address) || AllowedAddress(address, configuration.GetSection("Metrics:AllowFrom").Get<string[]>() ?? [])))
+        {
+            return true;
+        }
+
+        var key = context.Request.Headers["X-API-Key"].FirstOrDefault();
+        var authorization = context.Request.Headers.Authorization.FirstOrDefault();
+        if (string.IsNullOrEmpty(key) && authorization?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            key = authorization["Bearer ".Length..].Trim();
+        }
+
+        if (string.IsNullOrEmpty(key) || context.RequestServices.GetService<Cabinet.API.Authentication.IApiKeyService>() is not { } keys)
+        {
+            return false;
+        }
+
+        var result = await keys.ValidateKeyAsync(key);
+        return result.IsValid && !result.Tier.Equals("Ingest", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Whether an address is one of these, or in one of these ranges (10.0.0.0/8).</summary>
+    internal static bool AllowedAddress(System.Net.IPAddress address, IEnumerable<string> allowed)
+    {
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        foreach (var entry in allowed)
+        {
+            var text = entry.Trim();
+            if (text.Contains('/', StringComparison.Ordinal) ? System.Net.IPNetwork.TryParse(text, out var network) && network.Contains(address)
+                : System.Net.IPAddress.TryParse(text, out var single) && single.Equals(address))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task WriteMetricsAsync(HttpContext context)

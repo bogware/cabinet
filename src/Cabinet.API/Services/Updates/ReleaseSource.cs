@@ -24,6 +24,21 @@ public sealed class UpdateOptions
 
     /// <summary>The service to restart when updating. Empty = CabinetAPI on Windows, cabinet-api elsewhere.</summary>
     public string? ServiceName { get; set; }
+
+    /// <summary>
+    /// Agents that take this server's agent build, by the host name they report, with * as a
+    /// wildcard: a staged rollout, such as a test machine first and the rest after. Empty, the
+    /// default, means every agent.
+    /// </summary>
+    public List<string> AgentHosts { get; set; } = [];
+
+    /// <summary>Whether an agent reporting this host name takes this server's agent build.</summary>
+    public bool OffersAgentTo(string host) =>
+        AgentHosts.Count == 0 || AgentHosts.Any(pattern => System.Text.RegularExpressions.Regex.IsMatch(
+            host,
+            "^" + System.Text.RegularExpressions.Regex.Escape(pattern.Trim()).Replace("\\*", ".*", StringComparison.Ordinal) + "$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(100)));
 }
 
 /// <summary>A published release.</summary>
@@ -67,8 +82,74 @@ public static partial class ReleaseVersions
     /// <summary>Major, minor and patch only, so 2.0.1.0 and 2.0.1 compare equal.</summary>
     public static Version Normalize(Version version) => new(version.Major, version.Minor, Math.Max(0, version.Build));
 
-    /// <summary>The running program's version.</summary>
+    /// <summary>The running program's version, without any pre-release label.</summary>
     public static Version Current { get; } = Normalize(typeof(ReleaseVersions).Assembly.GetName().Version ?? new Version(0, 0, 0));
+
+    /// <summary>
+    /// The running program's full version, such as 3.0.0 or 3.0.0-rc.1, from the version it was
+    /// built with. A pre-release counts as just below the release of the same number.
+    /// </summary>
+    public static string CurrentFull { get; } = FullVersion(
+        typeof(ReleaseVersions).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+        Current);
+
+    /// <summary>Whether this build is a pre-release, such as a release candidate.</summary>
+    public static bool CurrentIsPrerelease => CurrentFull.Contains('-', StringComparison.Ordinal);
+
+    /// <summary>The tag this build was released under.</summary>
+    public static string CurrentTag => "v" + CurrentFull;
+
+    /// <summary>A built version's text without build metadata, or the plain version when it doesn't match it.</summary>
+    public static string FullVersion(string? informational, Version core)
+    {
+        var text = (informational ?? string.Empty).Split('+')[0];
+        return PrereleasePattern().Match(text) is { Success: true } match && FromTag(match.Groups["core"].Value) == core ? text : core.ToString();
+    }
+
+    [GeneratedRegex(@"^v?(?<core>\d+\.\d+\.\d+)(?:-(?<pre>[0-9A-Za-z.-]+))?$")]
+    private static partial Regex PrereleasePattern();
+
+    /// <summary>The version and pre-release label in a tag like v3.0.0-rc.1, or null.</summary>
+    public static (Version Core, string? Pre)? Parse(string? text)
+    {
+        var match = PrereleasePattern().Match((text ?? string.Empty).Split('+')[0]);
+        return match.Success && FromTag(match.Groups["core"].Value) is { } core
+            ? (core, match.Groups["pre"].Success ? match.Groups["pre"].Value : null)
+            : null;
+    }
+
+    /// <summary>
+    /// Orders two versions as semantic versioning does: by number, then a pre-release below the
+    /// release, then pre-release labels part by part, numbers as numbers.
+    /// </summary>
+    public static int Compare((Version Core, string? Pre) a, (Version Core, string? Pre) b)
+    {
+        var byCore = a.Core.CompareTo(b.Core);
+        if (byCore != 0)
+        {
+            return byCore;
+        }
+
+        if (a.Pre == null || b.Pre == null)
+        {
+            return a.Pre == null ? (b.Pre == null ? 0 : 1) : -1;
+        }
+
+        var left = a.Pre.Split('.');
+        var right = b.Pre.Split('.');
+        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
+        {
+            var numbers = long.TryParse(left[i], out var x) & long.TryParse(right[i], out var y);
+            var order = numbers ? x.CompareTo(y) : string.CompareOrdinal(left[i], right[i]);
+            if (order != 0)
+            {
+                return order;
+            }
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
 
     /// <summary>Platforms releases are built for. Anything else asked for is refused.</summary>
     public static readonly IReadOnlySet<string> Platforms = new HashSet<string>(StringComparer.Ordinal)
@@ -102,9 +183,24 @@ public sealed class GitHubReleaseSource : IReleaseSource
         }
     }
 
-    public async Task<ReleaseInfo> GetLatestAsync(CancellationToken cancellationToken = default) =>
-        await GetAsync($"repos/{_repository}/releases/latest", cancellationToken)
-        ?? throw new InvalidOperationException($"No releases found for {_repository}. If the repository is private, set Updates:Token.");
+    public async Task<ReleaseInfo> GetLatestAsync(CancellationToken cancellationToken = default)
+    {
+        // GitHub's latest release is never a pre-release. A server running one is testing the next
+        // version, so it's offered the newest of all, which may be the next candidate or the release.
+        var latest = ReleaseVersions.CurrentIsPrerelease
+            ? Newest(await GetListAsync($"repos/{_repository}/releases?per_page=30", cancellationToken))
+            : await GetAsync($"repos/{_repository}/releases/latest", cancellationToken);
+        return latest ?? throw new InvalidOperationException($"No releases found for {_repository}. If the repository is private, set Updates:Token.");
+    }
+
+    /// <summary>The highest version among published releases, pre-releases included.</summary>
+    public static ReleaseInfo? Newest(IEnumerable<ReleaseInfo> releases) =>
+        releases
+            .Select(release => (Release: release, Version: ReleaseVersions.Parse(release.Tag)))
+            .Where(item => item.Version != null && item.Release.Assets.Count > 0)
+            .OrderByDescending(item => item.Version!.Value, Comparer<(Version Core, string? Pre)>.Create(ReleaseVersions.Compare))
+            .Select(item => item.Release)
+            .FirstOrDefault();
 
     public Task<ReleaseInfo?> GetByTagAsync(string tag, CancellationToken cancellationToken = default) =>
         GetAsync($"repos/{_repository}/releases/tags/{Uri.EscapeDataString(tag)}", cancellationToken);
@@ -118,7 +214,24 @@ public sealed class GitHubReleaseSource : IReleaseSource
         return await response.Content.ReadAsStreamAsync(cancellationToken);
     }
 
+    private async Task<List<ReleaseInfo>> GetListAsync(string path, CancellationToken cancellationToken)
+    {
+        using var document = await SendAsync(path, cancellationToken);
+        return document == null ? [] : document.RootElement.EnumerateArray()
+            .Where(release => !(release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True))
+            .Select(Read)
+            .OfType<ReleaseInfo>()
+            .ToList();
+    }
+
     private async Task<ReleaseInfo?> GetAsync(string path, CancellationToken cancellationToken)
+    {
+        using var document = await SendAsync(path, cancellationToken);
+        return document == null ? null
+            : Read(document.RootElement) ?? throw new InvalidOperationException($"Release tag '{document.RootElement.GetProperty("tag_name").GetString()}' isn't a version");
+    }
+
+    private async Task<JsonDocument?> SendAsync(string path, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
@@ -134,10 +247,18 @@ public sealed class GitHubReleaseSource : IReleaseSource
         }
 
         response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        var root = document.RootElement;
+        return await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+    }
+
+    /// <summary>A release from GitHub's JSON, or null if its tag isn't a version.</summary>
+    private static ReleaseInfo? Read(JsonElement root)
+    {
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
-        var version = ReleaseVersions.FromTag(tag) ?? throw new InvalidOperationException($"Release tag '{tag}' isn't a version");
+        if (ReleaseVersions.Parse(tag)?.Core is not { } version)
+        {
+            return null;
+        }
+
         var assets = root.GetProperty("assets").EnumerateArray()
             .Select(asset => new ReleaseAsset(asset.GetProperty("id").GetInt64(), asset.GetProperty("name").GetString() ?? string.Empty, asset.GetProperty("size").GetInt64()))
             .ToList();

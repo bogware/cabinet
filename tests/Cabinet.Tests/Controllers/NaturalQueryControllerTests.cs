@@ -162,4 +162,20 @@ public sealed class NaturalQueryControllerTests
         stored!.Query.Should().Be("find * | where severity >= error | stats count by host | sort by count desc");
         stored.Description.Should().Be("errors by host");
     }
+
+    [Fact]
+    public async Task FieldCatalog_LeavesOutFieldNamesTooLongToBeTyped()
+    {
+        const int MaxFieldName = 128;
+        var storage = new InMemoryStorage();
+        var logEvent = new LogEvent { RawLine = "padded", Host = "web-01", Timestamp = DateTime.UtcNow };
+        logEvent.SetField(new string('f', MaxFieldName + 1), "x");
+        logEvent.SetField(new string('g', MaxFieldName), "x");
+        await storage.StoreBatchAsync([logEvent]);
+
+        var catalog = await new FieldCatalogService(NullLogger<FieldCatalogService>.Instance).GetAsync(storage, "test");
+
+        catalog.Fields.Should().Contain(new string('g', MaxFieldName));
+        catalog.Fields.Should().NotContain(name => name.Length > MaxFieldName);
+    }
 }

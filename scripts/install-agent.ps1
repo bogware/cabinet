@@ -21,13 +21,15 @@
 
 .EXAMPLE
     .\install-agent.ps1 -ServerUrl https://cabinet.example.com -ApiKey "cab_yourkey"
-    .\install-agent.ps1 -ServerUrl http://localhost:8080 -ApiKey "dev-enterprise-key" -Paths "C:\logs\*.log"
+    .\install-agent.ps1 -ServerUrl https://cabinet.example.com:8443 -ApiKey "cab_yourkey" -Paths "C:\logs\*.log"
 #>
 
 param(
     [string]$ServerUrl = "",
     [string]$ApiKey = "",
     [string]$Paths = "",
+    # The server's certificate fingerprint (https-fingerprint.txt on the server), for a self-signed certificate
+    [string]$CertificateSha256 = "",
     [string]$InstallDir = "$env:ProgramFiles\Cabinet\agent",
     [string]$DataDir = "$env:ProgramData\Cabinet\agent"
 )
@@ -46,12 +48,27 @@ Write-Host ""
 
 # Prompt for required values if not provided
 if (-not $ServerUrl) {
-    $ServerUrl = Read-Host "  Enter Cabinet server URL (e.g., http://localhost:8080)"
-    if (-not $ServerUrl) { $ServerUrl = "http://localhost:8080" }
+    $ServerUrl = Read-Host "  Enter Cabinet server URL (e.g., https://cabinet.example.com:8443)"
+    if (-not $ServerUrl) { throw "A server URL is required." }
 }
 if (-not $ApiKey) {
-    $ApiKey = Read-Host "  Enter API key"
-    if (-not $ApiKey) { $ApiKey = "dev-enterprise-key" }
+    $ApiKey = Read-Host "  Enter the agent's API key (an Ingest key from the server)"
+    if (-not $ApiKey) { throw "An API key is required." }
+}
+if ($ServerUrl -like "http://*") {
+    Write-Host "  NOTE: over http the key and events cross the network in the clear, and the agent won't update itself." -ForegroundColor Yellow
+}
+
+# Administrators and SYSTEM only: the settings hold the key, and anything in the spool is sent as this agent
+function Protect-Path([string]$Path, [bool]$Folder) {
+    $acl = if ($Folder) { New-Object System.Security.AccessControl.DirectorySecurity } else { New-Object System.Security.AccessControl.FileSecurity }
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($who in @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM")) {
+        $rule = if ($Folder) { New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow") }
+                else { New-Object System.Security.AccessControl.FileSystemAccessRule($who, "FullControl", "Allow") }
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -Path $Path -AclObject $acl
 }
 if (-not $Paths) {
     $Paths = Read-Host "  Enter log paths to monitor (comma-separated, e.g., C:\logs\*.log)"
@@ -63,6 +80,7 @@ Write-Host "[1/4] Creating directories" -ForegroundColor Green
 @($InstallDir, "$DataDir\spool", "$DataDir\data") | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
 }
+Protect-Path $DataDir $true
 
 # ─── Check for binary ─────────────────────────────────────────────────
 Write-Host "[2/4] Checking for agent binary" -ForegroundColor Green
@@ -117,6 +135,7 @@ if (-not (Test-Path $configPath)) {
       "MaxRetries": 5,
       "TimeoutSeconds": 30,
       "VerifySsl": true,
+      "CertificateSha256": "$CertificateSha256",
       "MaxBufferSize": 10000,
       "SpillDirectory": "$($DataDir -replace '\\', '\\')\spool"
     },
@@ -135,6 +154,7 @@ if (-not (Test-Path $configPath)) {
 else {
     Write-Host "  Configuration already exists at $configPath"
 }
+Protect-Path $configPath $false
 
 # ─── Install Windows Service ──────────────────────────────────────────
 Write-Host "[4/4] Installing Windows Service" -ForegroundColor Green

@@ -63,11 +63,14 @@ public sealed class OutboundUrlGuard
 
     /// <summary>
     /// An HTTP handler that refuses connections to disallowed addresses and never follows
-    /// redirects, which could otherwise lead a permitted URL somewhere that isn't.
+    /// redirects, which could otherwise lead a permitted URL somewhere that isn't. It never uses a
+    /// proxy: through one, the check would see only the proxy's address and the proxy would reach
+    /// anything.
     /// </summary>
     public SocketsHttpHandler CreateHandler() => new()
     {
         AllowAutoRedirect = false,
+        UseProxy = false,
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         ConnectCallback = async (context, cancellationToken) =>
         {
@@ -118,6 +121,19 @@ public sealed class OutboundUrlGuard
 
         if (address.AddressFamily == AddressFamily.InterNetworkV6)
         {
+            var bytes = address.GetAddressBytes();
+
+            // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 address that may be private
+            if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xff && bytes[3] == 0x9b && bytes[4..12].All(b => b == 0))
+            {
+                return IsPrivate(new IPAddress(bytes[12..16]));
+            }
+
+            if (bytes[0] == 0x20 && bytes[1] == 0x02)
+            {
+                return IsPrivate(new IPAddress(bytes[2..6]));
+            }
+
             return address.IsIPv6LinkLocal || address.IsIPv6SiteLocal || address.IsIPv6Multicast
                 || (address.GetAddressBytes()[0] & 0xFE) == 0xFC; // fc00::/7 unique local
         }

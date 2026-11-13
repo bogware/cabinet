@@ -73,7 +73,8 @@ public sealed class DirectoryEventArchive : IEventArchive
     private string PathFor(string key)
     {
         var full = Path.GetFullPath(Path.Combine(_root, key));
-        if (!full.StartsWith(_root, StringComparison.Ordinal))
+        // With the separator, so a sibling such as "archive-other" isn't inside "archive"
+        if (!full.StartsWith(_root.EndsWith(Path.DirectorySeparatorChar) ? _root : _root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw new ArgumentException("An archive key can't leave the archive directory", nameof(key));
         }
@@ -146,9 +147,18 @@ public sealed class EventArchiver
         _logger = logger;
     }
 
-    /// <summary>An index name as a path segment.</summary>
-    public static string SafeIndex(string index) =>
-        new(index.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_').ToArray());
+    /// <summary>
+    /// Whether an index's name can be its folder in the archive as it is: letters, digits, '-',
+    /// '_' and '.', and not "." or "..". Changing a name could give two indexes one folder.
+    /// </summary>
+    public static bool CanArchive(string? index) =>
+        index is { Length: > 0 } and not ("." or "..")
+        && index.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.');
+
+    /// <summary>An index name as a path segment; a name that can't be one throws.</summary>
+    public static string SafeIndex(string index) => CanArchive(index)
+        ? index
+        : throw new ArgumentException($"The index name '{index}' can't be archived: use letters, digits, '-', '_' and '.'", nameof(index));
 
     /// <summary>A key's index and day, or null for a file that isn't a chunk.</summary>
     public static ArchiveChunk? Parse(string key, long size)
@@ -166,6 +176,7 @@ public sealed class EventArchiver
     /// </summary>
     public async Task<long> ArchiveAsync(ILogStorage storage, string index, DateTime before, CancellationToken cancellationToken)
     {
+        var folder = SafeIndex(index);
         var oldest = await storage.QueryAsync(new QueryContext { Index = index, EndTime = before.AddTicks(-1), SortDescending = false, Limit = 1 }, cancellationToken)
             .FirstOrDefaultAsync(cancellationToken);
         if (oldest == null)
@@ -184,7 +195,7 @@ public sealed class EventArchiver
                 var written = await WriteDayAsync(storage, index, day, end, file, cancellationToken);
                 if (written > 0)
                 {
-                    await _archive.PutAsync($"{SafeIndex(index)}/{day:yyyy-MM-dd}/{run}.ndjson.gz", file, cancellationToken);
+                    await _archive.PutAsync($"{folder}/{day:yyyy-MM-dd}/{run}.ndjson.gz", file, cancellationToken);
                     total += written;
                 }
             }
@@ -235,7 +246,8 @@ public sealed class EventArchiver
         {
             await foreach (var logEvent in ReadAsync(chunk.Key, cancellationToken))
             {
-                if (logEvent.Timestamp < from || logEvent.Timestamp > to)
+                // Only the index asked for, whatever else is in its folder
+                if (logEvent.Timestamp < from || logEvent.Timestamp > to || !string.Equals(logEvent.Index, index, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -273,7 +285,7 @@ public sealed class EventArchiver
         {
             await foreach (var logEvent in ReadAsync(chunk.Key, cancellationToken))
             {
-                if (logEvent.Timestamp < from || logEvent.Timestamp > to)
+                if (logEvent.Timestamp < from || logEvent.Timestamp > to || !string.Equals(logEvent.Index, index, StringComparison.Ordinal))
                 {
                     continue;
                 }

@@ -13,6 +13,7 @@ public sealed class ClickHouseLogStorageTests : IAsyncLifetime
 {
     private static readonly string? Url = Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_URL");
     private static readonly DateTime Start = new(2026, 3, 4, 5, 0, 0, DateTimeKind.Utc);
+    private readonly string _table = $"unit_{Guid.NewGuid():N}";
     private ClickHouseLogStorage _storage = null!;
 
     public Task InitializeAsync()
@@ -23,7 +24,7 @@ public sealed class ClickHouseLogStorageTests : IAsyncLifetime
                 Url,
                 NullLogger<ClickHouseLogStorage>.Instance,
                 database: "cabinet_tests",
-                table: $"unit_{Guid.NewGuid():N}",
+                table: _table,
                 username: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER"),
                 password: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS"));
         }
@@ -115,5 +116,62 @@ public sealed class ClickHouseLogStorageTests : IAsyncLifetime
         (await _storage.GetCountAsync(new QueryContext { AllowedIndexes = ["web_prod", "db"] })).Should().Be(20);
         (await _storage.GetCountAsync(new QueryContext { AllowedIndexes = ["webXprod"] })).Should().Be(0, "an underscore is a literal");
         (await _storage.GetCountAsync(new QueryContext { Host = "HOST-1" })).Should().Be(7);
+    }
+
+    [SkippableTheory]
+    [InlineData("user", "alice", 1)]
+    [InlineData("USER", "Alice", 1)]
+    [InlineData("city", "été", 1)]
+    [InlineData("City", "ÉTÉ", 1)]
+    [InlineData("query", "a<b>+c&d='e'", 1)]
+    [InlineData("query", "A<B>+C&D='E'", 1)]
+    [InlineData("quote", "say \"hi\"", 1)]
+    [InlineData("user", "bob", 0)]
+    [InlineData("missing", "alice", 0)]
+    public async Task FieldFilters_MatchNamesInAnyCase_AndValuesAsWritten(string name, string value, int expected)
+    {
+        Skip.If(string.IsNullOrEmpty(Url), "CABINET_TEST_CLICKHOUSE_URL is not set");
+        var e = Event(1);
+        e.SetField("User", "alice");
+        e.SetField("City", "Été");
+        e.SetField("Query", "a<b>+c&d='e'");
+        e.SetField("Quote", "say \"hi\"");
+        await _storage.StoreBatchAsync([e]);
+
+        (await _storage.GetCountAsync(new QueryContext { FieldFilters = new() { [name] = value } })).Should().Be(expected);
+        (await _storage.GetCountAsync(new QueryContext { FieldFilters = new() { [name] = new object?[] { "nothing", value } } })).Should().Be(expected);
+    }
+
+    [SkippableFact]
+    public async Task FieldFilters_MatchRowsStoredWithEscapedFields()
+    {
+        Skip.If(string.IsNullOrEmpty(Url), "CABINET_TEST_CLICKHOUSE_URL is not set");
+        await _storage.StoreBatchAsync([Event(1)]);
+
+        // A row as stored before fields kept their characters: É as É, < as <
+        var fields = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?> { ["City"] = "Été", ["Query"] = "a<b>", ["n"] = 5L });
+        fields.Should().Contain(@"\u00C9");
+        var row = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["id"] = "legacy-1", ["ts"] = Start.Ticks, ["index_time"] = Start.Ticks, ["index_name"] = "main", ["host"] = null,
+            ["source_type"] = "generic", ["severity"] = 2, ["raw"] = "legacy", ["source_file"] = null, ["line_number"] = 0L,
+            ["parser"] = null, ["tags"] = Array.Empty<string>(), ["fields"] = fields,
+        });
+        using var http = new HttpClient { BaseAddress = new Uri(Url!) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"?query={Uri.EscapeDataString($"INSERT INTO cabinet_tests.{_table} FORMAT JSONEachRow")}")
+        {
+            Content = new StringContent(row),
+        };
+        if (Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER") is { Length: > 0 } user)
+        {
+            request.Headers.Add("X-ClickHouse-User", user);
+            request.Headers.Add("X-ClickHouse-Key", Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS") ?? string.Empty);
+        }
+        (await http.SendAsync(request)).EnsureSuccessStatusCode();
+
+        (await _storage.GetCountAsync(new QueryContext { FieldFilters = new() { ["city"] = "été" } })).Should().Be(1);
+        (await _storage.GetCountAsync(new QueryContext { FieldFilters = new() { ["query"] = "A<B>" } })).Should().Be(1);
+        (await _storage.GetCountAsync(new QueryContext { FieldFilters = new() { ["N"] = 5L } })).Should().Be(1);
+        (await _storage.GetByIdAsync("legacy-1"))!.Fields["City"].Should().Be("Été");
     }
 }

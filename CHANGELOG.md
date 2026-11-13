@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Planned as 3.0.0. It has breaking changes to search semantics, listed under Changed.
+## [3.0.0] - 2026-11-13
+
+It has breaking changes to search semantics and single sign-on, listed under Changed.
 
 **License:** from 3.0, Cabinet is licensed under the AGPL-3.0, except the forwarding agent, which stays Apache-2.0. Running Cabinet for your own organization carries no obligations; offering a modified server to others over a network means offering them the modified source. Earlier releases remain Apache-2.0.
 
@@ -15,6 +17,10 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 - **Ask in plain words**: the search box, CLI and API read questions in any word order into BQL, offline: times (*since yesterday*, *between 2pm and 4pm*), levels, hosts (*on web servers*), fields compared every which way (*status is at least 500*, *over 1000 ms*, *404s*, *5xx*), counts and measures (*how many unique users per day*, *p95 latency per host*), grouping, charts over time, most and least common values, columns, sorting and limits. Field names come from your data, typos are fixed, and what ran is always shown in BQL and in words with one-click alternatives. A question it can't read isn't run; it comes back with choices and the AI assistant. Strict BQL and SPL run as written, and saved searches, alerts and rules never reinterpret.
 - **Search help in the dashboard**: a live preview of what will run, problems underlined where they are with one-click fixes, suggestions of values from your data, a Build panel to pick a search, and starter questions fitted to your hosts and fields. API: `POST /query/understand`, `GET /query/complete`, `GET /query/examples`, `GET /query/catalog`, and `exact` on `/query/execute`.
 - **`cabinet query`** reads plain words too, printing what it understood to stderr; `--exact` runs the query as typed.
+- **Move to the Cabinet engine from the dashboard**: Settings, Storage copies events, settings, rules, keys and history from SQLite or PostgreSQL into the engine while Cabinet keeps running, then switches, leaving the old database as it was to switch back to. The engine can be moved off the same way.
+- **Staged agent rollouts**: `Updates:AgentHosts` lists which agents take the server's agent version, such as a test machine first.
+- **`/metrics` can require a key** (`Metrics:RequireKey`, on for new installs): any key above Ingest, as `X-API-Key` or a bearer token, except from the server itself and `Metrics:AllowFrom`.
+- **Release candidates**: tags like `v3.0.0-rc.1` publish as pre-releases, which update checks never offer, and agents on one move to the final release.
 - **Search the archive where it is**: `POST /api/v1/archive/search` runs BQL, SPL or plain words over an index's archived days, reading only the days in range, with the caller's access and masking, and no rehydrating.
 - **ClickHouse storage** (`Storage:Type=ClickHouse`): events in a ClickHouse server over its HTTP interface, every value a typed parameter and every time exact to the tick, with counts, timecharts, `top` and `rare` computed in ClickHouse. It passes the same cross-backend suites as the others, and CI tests it against ClickHouse 24.8.
 - **The Cabinet engine** (`Storage:Type=Cabinet`): Cabinet's own storage for one server, with no database to run. Events go to a write-ahead log, synced before they're acknowledged, then into compressed column segments with per-block summaries and word and ID filters, merged in the background. On a million events it counts everything in 0.1 ms, counts by host in about 0.1 s and computes an average and 95th percentile by host in about 0.2 s, against 4.6 s and 14 s on SQLite, stores 120,000 events a second from one writer, and takes 50 MB where SQLite takes 838 MB. Every `stats` and `timechart` aggregate runs in the engine, percentiles exactly. See BENCHMARKS.md.
@@ -40,6 +46,15 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 
 ### Changed
 
+- API keys are compared with every stored key in constant time.
+- **Breaking: `SSO:AutoProvision` is off by default.** Someone no role mapping matches can't sign in, where before they got `SSO:DefaultRole`, which let every account the identity provider or directory knows search every index. Turn it on to keep the old behavior.
+- Dashboard sign-ins end after `SSO:MaxSessionHours` (24) however much they're used, so a role taken away at the identity provider takes effect. Everyone signs in again once after upgrading.
+- Reading cases needs Search on every index, since notes and searches can quote any of them, and adding to a case needs Alerts.
+- Ingest keys no longer have the system health view: the agent list with hosts and versions, and index retention.
+- Agents update themselves only over https with the server's certificate verified or pinned. Over http, or with `VerifySsl` off and no pin, they keep their version and log why.
+- A server running a release candidate is offered the newest release, candidates included.
+- `/api/health/version` gives the version as released, such as `3.0.0-rc.3`.
+- Installers: the Windows agent installer requires a key (it fell back to a development key), takes `-CertificateSha256`, and makes its settings and spool readable by administrators only; the Linux agent installer takes `--pin`; the systemd units set a umask, so spooled copies of logs aren't readable by other users; the Windows server installer locks down its database and backup folders.
 - **Breaking: `/query/translate` is gone**, with the rule-based translator. `/query/understand` replaces it. The query engine no longer guesses at English: interactive searches are read before they reach it, and saved searches, alerts and rules run exactly as written.
 - **Breaking: comparisons with a missing value are false**, for `!=` too, as in SPL: `where x != "a"` drops events without `x`. Use `isnull()` to find those.
 - **Breaking: `stats ... by` leaves out events missing a by-field**, as in SPL, both in the pipeline and when storage aggregates.
@@ -55,6 +70,23 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 
 ### Fixed
 
+- A query with a very long chain of operators (`eval x=1+1+...`) or search text nested thousands of parentheses deep overflowed the stack and stopped the server. Expressions deeper than 1,000 and search parentheses deeper than 100 are now a parse error; use `IN (...)` for long lists of values.
+- `LIKE`, search wildcards and phrases match without backtracking, so a padded log line can't make them slow. A slow regular expression in `match()`, `replace()` or `mvfind()` fails the query instead of quietly not matching; in a detection rule it's counted and logged, and the configured timeouts apply.
+- Plain-word questions compared every word with every field name letter by letter, so a huge field name from a log and a huge word took hundreds of megabytes. Long words aren't fuzzy-matched, and field names over 128 characters stay out of the field list.
+- Cabinet engine: index names differing only in case shared a folder on Windows and macOS; a retention purge under steady ingest never finished and blocked merges, and rewrote segments while holding up writes and searches; a damaged segment stopped the server starting instead of being set aside; a merge could close a segment under a slow search; and events without an index showed none until written to a segment.
+- With the gaming extension on, a log line of many unclosed brackets took the SourceMod parser seconds to minutes of CPU. Parser regular expressions on log text all have timeouts or don't backtrack, including multi-line merge patterns from settings.
+- A small Sigma file could take tens of gigabytes through YAML aliases, or stop the server through deep nesting. Aliases are refused, and nesting, size and the number of conditions are limited.
+- Archive folders: index names that a folder can't hold as they are (such as `.` or `a b`) were folded together, so one index's archive could hold another's, and rehydrate didn't check which index each event came from. Such names are refused, and rehydrate and archive search skip other indexes' events.
+- ClickHouse field filters matched field names only in their stored case, and missed values with accents or `< > +`, unlike the other backends.
+- Moving off the Cabinet engine opened a second engine on the running one's folder, which replayed and deleted its write-ahead log. The move now reads through the running engine.
+- A write to the engine's log cancelled or failed partway left half a record, and recovery dropped every batch after it. Records are written whole, and the log is cut back after a failed write.
+- A release candidate and its release were downloaded into the same folder, so updating to the release could reinstall the candidate, and agents could be offered it in a loop.
+- Outbound calls (webhook actions, connectors, the settings webhook) went through a configured proxy, which reached private addresses the guard would refuse, and NAT64 and 6to4 addresses weren't counted as private.
+- A sign-in return path with a tab or line break in it could send people to another site after signing in.
+- The HTTP Event Collector read one event per line, so events sent back to back (`{...}{...}`), as Splunk accepts and its logging libraries send, were refused.
+- The pre-authentication rate limit (300 requests a minute per address) counted requests with a valid key, so a busy forwarder on one address was throttled. Only requests that end unauthenticated count now; an address over the limit is still refused before its key is looked at.
+- Every downloaded update was kept, a few hundred megabytes each: 3.5 GB after nine updates on one server. Only the running version and the newest download stay.
+- Agent packages were downloaded again by every agent that asked at once, and after a failure on every request.
 - Whole numbers in fields read back from PostgreSQL and OpenSearch came back as decimals (4 as 4.0), since a conditional boxed them as `double`.
 - Webhook actions and connectors can't reach private, loopback or link-local addresses unless allowed, and never follow redirects. Actions see events masked as for a Viewer, and an action that writes an event needs ingest on that index. Rule changes are audited.
 - Data-model acceleration divided by zero for buckets under an hour, read at most 100,000 events silently, and instances that weren't the leader overwrote its summaries.
@@ -134,7 +166,7 @@ This release includes everything planned for 2.3.3, which was never published.
 ### Fixed
 
 - `min` and `max` of a time, such as `stats max(_time) by host`, compared times as text, so 9:59 PM came after 10:16 PM, and returned them as text. They now compare times and return a time.
-- Searching for a value with a hyphen without quotes, such as `find host=l4d2-dev`, found nothing, because the search was rebuilt as `host = l4d2 - dev`. Search text now keeps the spacing as typed.
+- Searching for a value with a hyphen without quotes, such as `find host=game-dev`, found nothing, because the search was rebuilt as `host = l4d2 - dev`. Search text now keeps the spacing as typed.
 - Running the Windows installer again without `-AllowFrom` removed the firewall rule, cutting off every agent. It now keeps the addresses already allowed.
 - The PostgreSQL user the Windows installer creates couldn't create databases, so "Create the database" in Settings, Storage failed on it.
 - After moving storage, the Windows installer now records the new database in its own settings too, so Cabinet can't fall back to the old one if the dashboard's settings file goes missing.

@@ -45,6 +45,8 @@ public sealed class UpdateService
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ConcurrentDictionary<string, AgentVersion> _agents = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, AgentPackage> _agentPackages = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _agentStageFailed = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _agentStageLock = new(1, 1);
 
     private ReleaseInfo? _latest;
     private DateTimeOffset? _lastChecked;
@@ -65,15 +67,19 @@ public sealed class UpdateService
     /// <summary>This program's platform, as release archives name it.</summary>
     public static string Platform => RuntimeInformation.RuntimeIdentifier;
 
+    /// <summary>Whether a release is newer than this build. A release of the same number as this pre-release is.</summary>
+    private static bool IsNewer(ReleaseInfo release) =>
+        ReleaseVersions.Compare((release.Version, ReleaseVersions.Parse(release.Tag)?.Pre), (ReleaseVersions.Current, ReleaseVersions.Parse(ReleaseVersions.CurrentFull)?.Pre)) > 0;
+
     public UpdateStatus GetStatus()
     {
         var latest = _latest;
         var (canApply, reason) = _applier.CanApply();
         return new UpdateStatus
         {
-            Current = ReleaseVersions.Current.ToString(),
+            Current = ReleaseVersions.CurrentFull,
             Latest = latest?.Version.ToString(),
-            Available = latest != null && latest.Version > ReleaseVersions.Current,
+            Available = latest != null && IsNewer(latest),
             Notes = latest?.Notes,
             LastChecked = _lastChecked,
             CheckError = _checkError,
@@ -124,9 +130,9 @@ public sealed class UpdateService
         {
             await CheckAsync(cancellationToken);
             var latest = _latest ?? throw new InvalidOperationException(_checkError ?? "No release found");
-            if (latest.Version <= ReleaseVersions.Current)
+            if (!IsNewer(latest))
             {
-                throw new InvalidOperationException($"Already on {ReleaseVersions.Current}, the newest release");
+                throw new InvalidOperationException($"Already on {ReleaseVersions.CurrentFull}, the newest release");
             }
 
             _state = "Downloading";
@@ -167,23 +173,44 @@ public sealed class UpdateService
             return cached;
         }
 
-        var release = await _source.GetByTagAsync($"v{ReleaseVersions.Current}", cancellationToken);
-        if (release == null)
+        // Any agent can ask, so one download at a time, and a failure isn't retried for a while
+        await _agentStageLock.WaitAsync(cancellationToken);
+        try
         {
-            return null;
-        }
+            if (_agentPackages.TryGetValue(platform, out cached) && File.Exists(cached.Path))
+            {
+                return cached;
+            }
 
-        var staged = await StageAsync(release, platform, cancellationToken);
-        var binary = Path.Combine(staged, "agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
-        if (!File.Exists(binary))
+            if (_agentStageFailed.TryGetValue(platform, out var failedAt) && DateTimeOffset.UtcNow - failedAt < TimeSpan.FromMinutes(15))
+            {
+                return null;
+            }
+
+            _agentStageFailed[platform] = DateTimeOffset.UtcNow;
+            var release = await _source.GetByTagAsync(ReleaseVersions.CurrentTag, cancellationToken);
+            if (release == null)
+            {
+                return null;
+            }
+
+            var staged = await StageAsync(release, platform, cancellationToken);
+            var binary = Path.Combine(staged, "agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
+            if (!File.Exists(binary))
+            {
+                return null;
+            }
+
+            await using var stream = File.OpenRead(binary);
+            var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, ReleaseVersions.CurrentFull);
+            _agentPackages[platform] = package;
+            _agentStageFailed.TryRemove(platform, out _);
+            return package;
+        }
+        finally
         {
-            return null;
+            _agentStageLock.Release();
         }
-
-        await using var stream = File.OpenRead(binary);
-        var package = new AgentPackage(binary, Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)), stream.Length, release.Version.ToString());
-        _agentPackages[platform] = package;
-        return package;
     }
 
     /// <summary>Remembers an agent's version for the dashboard. Bounded, since agents report it.</summary>
@@ -195,13 +222,45 @@ public sealed class UpdateService
         }
     }
 
+    /// <summary>A release's folder under the work directory: by tag, not version, since 3.0.0-rc.1 and 3.0.0 share a version number but not a build.</summary>
+    private static string FolderFor(string? tag, Version version) =>
+        string.IsNullOrWhiteSpace(tag) ? $"v{version}"
+            : new string(tag.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_').ToArray());
+
+    /// <summary>
+    /// Deletes downloads of releases other than this one and the running one, which agents are
+    /// offered. Each is a few hundred megabytes, and they used to pile up with every update.
+    /// </summary>
+    private void RemoveOtherReleases(string keep)
+    {
+        var running = FolderFor(ReleaseVersions.CurrentTag, ReleaseVersions.Current);
+        foreach (var directory in Directory.EnumerateDirectories(_workDirectory))
+        {
+            var name = Path.GetFileName(directory);
+            if (name.Equals(keep, StringComparison.OrdinalIgnoreCase) || name.Equals(running, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Couldn't remove the old update download {Folder}", directory);
+            }
+        }
+    }
+
     /// <summary>
     /// Downloads a release's archive for a platform, checks it against the release's SHA-256, and
     /// unpacks it. Reuses an earlier download.
     /// </summary>
     public async Task<string> StageAsync(ReleaseInfo release, string platform, CancellationToken cancellationToken = default)
     {
-        var directory = Path.Combine(_workDirectory, $"v{release.Version}", platform);
+        var folder = FolderFor(release.Tag, release.Version);
+        var directory = Path.Combine(_workDirectory, folder, platform);
         var complete = Path.Combine(directory, ".complete");
         if (File.Exists(complete))
         {
@@ -258,6 +317,7 @@ public sealed class UpdateService
 
             await File.WriteAllTextAsync(complete, actual, cancellationToken);
             _logger.LogInformation("Downloaded and verified {Archive} from {Tag}", archiveName, release.Tag);
+            RemoveOtherReleases(folder);
             return directory;
         }
         finally

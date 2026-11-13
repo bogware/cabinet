@@ -105,6 +105,12 @@ public sealed class RbacPrincipal
     public Capability AdditionalCapabilities { get; set; } = Capability.None;
 
     /// <summary>
+    /// Capabilities this principal never has, whatever its role grants: an ingest key keeps only
+    /// what sending needs, not the role's view of system health.
+    /// </summary>
+    public Capability WithheldCapabilities { get; set; } = Capability.None;
+
+    /// <summary>
     /// Get effective capabilities for a specific index, combining role defaults + index permissions + additional
     /// </summary>
     public Capability GetEffectiveCapabilities(string indexName)
@@ -114,7 +120,7 @@ public sealed class RbacPrincipal
 
         var granted = GetRoleCapabilities(Role) | AdditionalCapabilities;
         if (IndexPermissions.Count == 0)
-            return granted;
+            return granted & ~WithheldCapabilities;
 
         // Grants decide data access, so that granting one index really does limit the principal to it
         var effective = (GetRoleCapabilities(Role) & ~IndexScopedCapabilities) | AdditionalCapabilities;
@@ -126,7 +132,7 @@ public sealed class RbacPrincipal
             }
         }
 
-        return effective;
+        return effective & ~WithheldCapabilities;
     }
 
     /// <summary>
@@ -134,6 +140,9 @@ public sealed class RbacPrincipal
     /// </summary>
     public IReadOnlyList<string>? IndexesWith(Capability capability)
     {
+        if (Role != SystemRole.SuperAdmin && (WithheldCapabilities & capability) != 0)
+            return Array.Empty<string>();
+
         if (Role == SystemRole.SuperAdmin || (AdditionalCapabilities & capability) == capability)
             return null;
 

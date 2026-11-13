@@ -23,9 +23,9 @@ public sealed class TimeAndHyphenTests
         var storage = new InMemoryStorage();
         await storage.StoreBatchAsync(new[]
         {
-            new LogEvent { RawLine = "late", Host = "l4d2-dev", Timestamp = Late },
-            new LogEvent { RawLine = "early", Host = "l4d2-dev", Timestamp = Early },
-            new LogEvent { RawLine = "morning", Host = "l4d2-prod", Timestamp = Morning },
+            new LogEvent { RawLine = "late", Host = "game-dev", Timestamp = Late },
+            new LogEvent { RawLine = "early", Host = "game-dev", Timestamp = Early },
+            new LogEvent { RawLine = "morning", Host = "game-prod", Timestamp = Morning },
         });
         var engine = new BqlQueryEngine(storage, new BqlParser(), new BqlOptimizer(), NullLogger<BqlQueryEngine>.Instance);
         var result = await engine.ExecuteAsync(new QueryExecutionContext { Query = query });
@@ -46,18 +46,18 @@ public sealed class TimeAndHyphenTests
     {
         var rows = await RunAsync("find * | stats max(_time) as latest by host");
 
-        rows.Single(r => Equals(r["host"], "l4d2-dev"))["latest"].Should().Be(Late);
-        rows.Single(r => Equals(r["host"], "l4d2-prod"))["latest"].Should().Be(Morning);
+        rows.Single(r => Equals(r["host"], "game-dev"))["latest"].Should().Be(Late);
+        rows.Single(r => Equals(r["host"], "game-prod"))["latest"].Should().Be(Morning);
     }
 
     [Theory]
-    [InlineData("find host=l4d2-dev")]
-    [InlineData("find host=\"l4d2-dev\"")]
-    [InlineData("find * | where host = \"l4d2-dev\"")]
-    [InlineData("find * | search host=l4d2-dev")]
-    [InlineData("find * | subsearch [find host=l4d2-dev | fields host]")]
-    [InlineData("find * | join type=inner host [find host=l4d2-dev | stats count by host]")]
-    [InlineData("find * | append [find host=nothing] | where host = \"l4d2-dev\"")]
+    [InlineData("find host=game-dev")]
+    [InlineData("find host=\"game-dev\"")]
+    [InlineData("find * | where host = \"game-dev\"")]
+    [InlineData("find * | search host=game-dev")]
+    [InlineData("find * | subsearch [find host=game-dev | fields host]")]
+    [InlineData("find * | join type=inner host [find host=game-dev | stats count by host]")]
+    [InlineData("find * | append [find host=nothing] | where host = \"game-dev\"")]
     public async Task HostWithAHyphen_IsFound(string query)
     {
         (await RunAsync(query)).Should().HaveCount(2);
@@ -67,14 +67,14 @@ public sealed class TimeAndHyphenTests
 public sealed class ReplaceBackreferenceTests
 {
     [Theory]
-    [InlineData(@"^/home/([^/]+)/.*", @"\1", "campaign")]
-    [InlineData(@"^/home/([^/]+)/.*", "$1", "campaign")]
-    [InlineData(@"^/home/([^/]+)/(\w+).*", @"\2-\1", "Steam-campaign")]
-    [InlineData("home", @"\\", @"/\/campaign/Steam/x.log")]
-    [InlineData(@"x\.log", "costs $5", "/home/campaign/Steam/costs $5")]
+    [InlineData(@"^/home/([^/]+)/.*", @"\1", "gameserver")]
+    [InlineData(@"^/home/([^/]+)/.*", "$1", "gameserver")]
+    [InlineData(@"^/home/([^/]+)/(\w+).*", @"\2-\1", "Steam-gameserver")]
+    [InlineData("home", @"\\", @"/\/gameserver/Steam/x.log")]
+    [InlineData(@"x\.log", "costs $5", "/home/gameserver/Steam/costs $5")]
     public void Replace_SupportsSplunkStyleBackreferences(string pattern, string replacement, string expected)
     {
-        var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["path"] = "/home/campaign/Steam/x.log" };
+        var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["path"] = "/home/gameserver/Steam/x.log" };
         var expression = new FunctionExpression("replace",
         [
             new FieldExpression("path"),

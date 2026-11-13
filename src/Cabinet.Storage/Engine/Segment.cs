@@ -327,6 +327,9 @@ internal sealed class SegmentReader : IDisposable
 {
     private readonly SafeFileHandle _handle;
 
+    // The index's own reference, plus one per read that has the segment in hand
+    private int _references = 1;
+
     private SegmentReader(string path, SafeFileHandle handle)
     {
         Path = path;
@@ -376,8 +379,30 @@ internal sealed class SegmentReader : IDisposable
         }
 
         var footerLength = BitConverter.ToInt64(tail, 0);
+        if (footerLength < tail.Length || footerLength > length || footerLength - tail.Length > Array.MaxLength)
+        {
+            throw new InvalidDataException($"{Path} has a footer length of {footerLength}, which doesn't fit its {length} bytes");
+        }
+
         var footer = new byte[footerLength - tail.Length];
-        RandomAccess.Read(_handle, footer, length - footerLength);
+        if (RandomAccess.Read(_handle, footer, length - footerLength) != footer.Length)
+        {
+            throw new InvalidDataException($"{Path} ended before its footer did");
+        }
+
+        try
+        {
+            ParseFooter(footer);
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or ArgumentException or OverflowException or OutOfMemoryException or IndexOutOfRangeException or FormatException)
+        {
+            // Whatever a damaged footer makes the parse do, it's a damaged segment, which is set aside
+            throw new InvalidDataException($"{Path} has a damaged footer", ex);
+        }
+    }
+
+    private void ParseFooter(byte[] footer)
+    {
         using var reader = new BinaryReader(new MemoryStream(footer), Encoding.UTF8);
         Index = reader.ReadString();
         Rows = reader.ReadInt32();
@@ -476,6 +501,37 @@ internal sealed class SegmentReader : IDisposable
         return new BinaryReader(output, Encoding.UTF8);
     }
 
+    /// <summary>
+    /// Takes a reference for a read, so the file stays open until the read releases it. False if
+    /// the segment is already closed.
+    /// </summary>
+    public bool TryAcquire()
+    {
+        while (true)
+        {
+            var references = Volatile.Read(ref _references);
+            if (references <= 0)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref _references, references + 1, references) == references)
+            {
+                return true;
+            }
+        }
+    }
+
+    /// <summary>Drops a reference: a read's, or the index's when it retires the segment. The last closes it.</summary>
+    public void Release()
+    {
+        if (Interlocked.Decrement(ref _references) == 0)
+        {
+            _handle.Dispose();
+        }
+    }
+
+    /// <summary>Closes the file now, for a segment no read has been given.</summary>
     public void Dispose() => _handle.Dispose();
 }
 

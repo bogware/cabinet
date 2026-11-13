@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
@@ -56,10 +57,18 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
             Directory.CreateDirectory(_root);
             foreach (var directory in Directory.EnumerateDirectories(_root))
             {
-                if (IndexShard.IndexNameIn(directory) is { } index)
+                if (IndexShard.IndexNameIn(directory) is not { } index)
                 {
-                    _shards[index] = IndexShard.Open(directory, index, _options, _logger);
+                    continue;
                 }
+
+                if (_shards.ContainsKey(index))
+                {
+                    _logger.LogError("Folder {Folder} holds index {Index}, which another folder holds too; it was left unopened", directory, index);
+                    continue;
+                }
+
+                _shards[index] = IndexShard.Open(directory, index, _options, _logger);
             }
 
             var period = TimeSpan.FromSeconds(Math.Max(1, _options.FlushSeconds) / 2.0);
@@ -136,16 +145,50 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         }
     }
 
-    private static string FolderName(string index)
+    /// <summary>Longest folder name given to an index; well inside every file system's limit.</summary>
+    internal const int MaxFolderName = 96;
+
+    /// <summary>
+    /// The folder name an index is first offered: its name, with anything but ASCII letters,
+    /// digits, '-' and '_' escaped. Unchanged from earlier versions for names that fit, so their
+    /// folders keep their names. A name that escapes to more than <see cref="MaxFolderName"/>
+    /// characters becomes a prefix of it and a hash of the whole name.
+    /// </summary>
+    internal static string FolderName(string index)
     {
-        // Safe on every file system, and different indexes never share a folder
         var safe = new StringBuilder();
         foreach (var c in index)
         {
             safe.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : $"~{(int)c:x4}");
         }
 
-        return safe.ToString();
+        if (safe.Length <= MaxFolderName)
+        {
+            return safe.ToString();
+        }
+
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(index)))[..16];
+        return $"{safe.ToString(0, MaxFolderName - hash.Length - 1)}~{hash}";
+    }
+
+    /// <summary>
+    /// A folder for a new index: its <see cref="FolderName"/>, or that with a number after it when
+    /// the folder already holds another index. Names that differ only in case ("Security" and
+    /// "security") get the same folder name, which is one folder where the file system ignores
+    /// case, as on Windows and macOS. Any folder will do, since opening reads each folder's
+    /// <c>index.name</c>. Called under the shard lock.
+    /// </summary>
+    private string FolderFor(string index)
+    {
+        var name = FolderName(index);
+        for (var n = 1; ; n++)
+        {
+            var folder = Path.Combine(_root, n == 1 ? name : $"{name}~{n}");
+            if (!Directory.Exists(folder) || IndexShard.IndexNameIn(folder) is not { } existing || existing == index)
+            {
+                return folder;
+            }
+        }
     }
 
     private async Task<IndexShard> ShardAsync(string index, CancellationToken cancellationToken)
@@ -158,7 +201,7 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         await _shardLock.WaitAsync(cancellationToken);
         try
         {
-            return _shards.GetOrAdd(index, name => IndexShard.Open(Path.Combine(_root, FolderName(name)), name, _options, _logger));
+            return _shards.GetOrAdd(index, name => IndexShard.Open(FolderFor(name), name, _options, _logger));
         }
         finally
         {
@@ -194,13 +237,31 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         await InitializeAsync(cancellationToken);
         var filter = new RowFilter(context);
         var sources = new List<RowSource>();
-        foreach (var shard in ShardsFor(context))
+        var snapshots = new List<ShardSnapshot>();
+        try
         {
-            var (hot, segments) = shard.Snapshot();
-            sources.Add(RowSource.FromHot(hot, filter, context.SortDescending));
-            sources.AddRange(segments.Where(filter.MayMatch).Select(segment => RowSource.FromSegment(segment, filter, context.SortDescending)));
-        }
+            foreach (var shard in ShardsFor(context))
+            {
+                var snapshot = shard.Snapshot();
+                snapshots.Add(snapshot);
+                sources.Add(RowSource.FromHot(snapshot.Hot, filter, context.SortDescending));
+                sources.AddRange(snapshot.Segments.Where(filter.MayMatch).Select(segment => RowSource.FromSegment(segment, filter, context.SortDescending)));
+            }
 
+            foreach (var logEvent in Read(context, sources, cancellationToken))
+            {
+                yield return logEvent;
+            }
+        }
+        finally
+        {
+            snapshots.ForEach(snapshot => snapshot.Dispose());
+        }
+    }
+
+    /// <summary>The matches of a query's sources, in its order, after its skip and up to its limit.</summary>
+    private static IEnumerable<LogEvent> Read(QueryContext context, List<RowSource> sources, CancellationToken cancellationToken)
+    {
         if (!context.SortField.Equals("Timestamp", StringComparison.OrdinalIgnoreCase))
         {
             // Other sorts need every match first; only severity is asked for
@@ -246,7 +307,8 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         await InitializeAsync(cancellationToken);
         foreach (var shard in _shards.Values)
         {
-            var (hot, segments) = shard.Snapshot();
+            using var snapshot = shard.Snapshot();
+            var (hot, segments) = snapshot;
             if (hot.FirstOrDefault(e => e.Id == id) is { } found)
             {
                 return found;
@@ -278,8 +340,9 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         long count = 0;
         foreach (var shard in ShardsFor(context))
         {
-            var (hot, segments) = shard.Snapshot();
-            count += hot.Count(filter.Matches);
+            using var snapshot = shard.Snapshot();
+            var (hot, segments) = snapshot;
+            count +=hot.Count(filter.Matches);
             var blocks = segments.Where(filter.MayMatch).SelectMany(segment => segment.Blocks.Where(filter.MayMatch).Select(block => (segment, block))).ToList();
             long counted = 0;
             Parallel.ForEach(blocks, new ParallelOptions { CancellationToken = cancellationToken }, work =>
@@ -335,7 +398,8 @@ public sealed partial class EngineLogStorage : ILogStorage, IDisposable
         foreach (var shard in _shards.Values)
         {
             long total = 0;
-            var (hot, segments) = shard.Snapshot();
+            using var snapshot = shard.Snapshot();
+            var (hot, segments) = snapshot;
             foreach (var logEvent in hot)
             {
                 Add(stats.EventsBySourceType, logEvent.SourceType ?? string.Empty, 1);

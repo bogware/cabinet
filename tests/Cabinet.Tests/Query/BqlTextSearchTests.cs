@@ -62,6 +62,19 @@ public sealed class BqlTextSearchTests
     }
 
     [Theory]
+    [InlineData("a*a*a*a*b", true)]
+    [InlineData("*a*a*a*a*b", true)]
+    [InlineData("\"aaaab\" a*a*a*a*b", true)]
+    [InlineData("a*a*a*a*z", false)]
+    public void AWildcard_FindsItsWord_HoweverTheLineIsPadded(string text, bool expected)
+    {
+        // Backtracking ran out of time at the start of this line, which counted as no match
+        var row = new Dictionary<string, object?> { ["RawLine"] = new string('a', 3_000) + "c aaaab" };
+
+        BqlTextSearch.Parse(text).Matches(row).Should().Be(expected);
+    }
+
+    [Theory]
     [InlineData("error warn", "error warn", true)]
     [InlineData("error OR warn", null, false)]
     [InlineData("\"connection failed\" db", "connection failed db", false)]

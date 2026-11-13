@@ -167,7 +167,7 @@ Cabinet is honest about what it doesn't do yet. The main gaps today:
 - **One machine is the sweet spot.** Several instances need PostgreSQL. The Cabinet engine serves one instance and isn't clustered.
 - **Plain-English reading is English only.** Unusual phrasings come back as choices rather than a guess.
 - **Some backups aren't drill-tested yet.** SQLite and PostgreSQL backups are tested in CI; Cabinet engine and OpenSearch snapshots aren't yet.
-- **`/metrics` is unauthenticated**, and API keys aren't compared in constant time. Restrict the metrics endpoint at the network ([SECURITY.md](SECURITY.md)).
+- **`/metrics` is open on existing installs** until `Metrics:RequireKey` is turned on; new installs require a key ([SECURITY.md](SECURITY.md)).
 
 The full list is in [docs/FEATURES.md](docs/FEATURES.md#known-limitations).
 

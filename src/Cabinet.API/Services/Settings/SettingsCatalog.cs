@@ -326,6 +326,12 @@ public static class SettingsCatalog
             "Each backup is a full copy, so requests closer together than this are refused.", "minutes", 0, 1440),
 
         // Updates
+        S("Metrics:RequireKey", "Network & security", "Require a key for /metrics", SettingType.Bool, false,
+            "Prometheus metrics need an API key above Ingest (X-API-Key, or a bearer token in the scrape config), except from this machine and the addresses below. New installs turn it on."),
+        S("Metrics:AllowFrom", "Network & security", "Addresses that read /metrics without a key", SettingType.List, Array.Empty<string>(),
+            "Addresses or ranges, such as your Prometheus server or 10.0.0.0/8, allowed to read /metrics without a key when one is required."),
+        S("Updates:AgentHosts", "Updates", "Agents that update", SettingType.List, Array.Empty<string>(),
+            "Host names of agents that take this server's agent version, * as a wildcard, for a staged rollout: a test machine first, then the rest. Empty updates every agent. Takes effect on restart."),
         S("Updates:Repository", "Updates", "Release repository", SettingType.String, "bogware/cabinet", "The GitHub repository releases come from."),
         S("Updates:Token", "Updates", "GitHub token", SettingType.Secret, null,
             "A token that can read the repository's releases: fine-grained, this repository only, Contents read-only. Needed while the repository is private."),
@@ -348,8 +354,9 @@ public static class SettingsCatalog
         S("SSO:Provider", "Network & security", "Sign-on provider", SettingType.Enum, "Oidc", "Only OpenID Connect is implemented.", options: ["Oidc"]),
         S("SSO:Oidc:Authority", "Network & security", "OIDC authority", SettingType.String, null, "The identity provider's issuer URL, such as https://login.microsoftonline.com/<tenant>/v2.0."),
         S("SSO:Oidc:ClientId", "Network & security", "OIDC client ID", SettingType.String, null, "The application ID registered with the identity provider; tokens must be for it."),
-        S("SSO:AutoProvision", "Network & security", "Give unmatched users the default role", SettingType.Bool, true, "Users matching no role mapping get the default role. Off, they get none."),
+        S("SSO:AutoProvision", "Network & security", "Give unmatched users the default role", SettingType.Bool, false, "Users matching no role mapping get the default role. Off, the default, they get none and can't sign in: on, every account the identity provider or directory knows gets it."),
         S("SSO:SessionHours", "Network & security", "Dashboard sign-in length", SettingType.Int, 8, "Hours a dashboard sign-in through SSO lasts while it's used. Takes effect on restart."),
+        S("SSO:MaxSessionHours", "Network & security", "Longest dashboard sign-in", SettingType.Int, 24, "Hours after which a dashboard sign-in ends however much it's used, so a role taken away at the identity provider or directory takes effect. Takes effect on restart."),
         S("SSO:DefaultRole", "Network & security", "Default role", SettingType.Enum, "Viewer", "The role for signed-in users no mapping matches.", options: ["Viewer", "Analyst", "Admin", "SuperAdmin"]),
         S("SSO:RoleMappings", "Network & security", "Role mappings", SettingType.Json, null,
             "Claims to roles and index permissions: [{\"claimType\": \"groups\", \"claimValue\": \"ops\", \"role\": \"Analyst\", \"indexPermissions\": [{\"indexPattern\": \"ops-*\", \"capabilities\": \"Search\"}]}]."),

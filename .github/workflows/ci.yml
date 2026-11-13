@@ -299,7 +299,8 @@ jobs:
 
     - name: Build cabinet-api .deb
       run: |
-        VERSION=${{ steps.version.outputs.version }}
+        # Debian sorts "~" before everything, so 3.0.0~rc.1 comes before 3.0.0; "-" would be a revision
+        VERSION=$(echo "${{ steps.version.outputs.version }}" | tr - '~')
         DEB_ARCH=${{ matrix.deb_arch }}
         PKG_DIR=deb-api
 
@@ -375,6 +376,7 @@ jobs:
         RestartSec=10
         User=cabinet
         Group=cabinet
+        UMask=0027
         NoNewPrivileges=true
         ProtectSystem=strict
         ProtectHome=true
@@ -398,7 +400,8 @@ jobs:
 
     - name: Build cabinet-agent .deb
       run: |
-        VERSION=${{ steps.version.outputs.version }}
+        # Debian sorts "~" before everything, so 3.0.0~rc.1 comes before 3.0.0; "-" would be a revision
+        VERSION=$(echo "${{ steps.version.outputs.version }}" | tr - '~')
         DEB_ARCH=${{ matrix.deb_arch }}
         PKG_DIR=deb-agent
 
@@ -463,6 +466,7 @@ jobs:
         RestartSec=5
         User=cabinet-agent
         Group=cabinet-agent
+        UMask=0077
         NoNewPrivileges=true
         ProtectSystem=strict
         ProtectHome=true
@@ -521,7 +525,9 @@ jobs:
     - name: Release notes from CHANGELOG.md
       run: |
         version="${GITHUB_REF_NAME#v}"
-        awk -v heading="## [$version]" '
+        # A pre-release such as 3.0.0-rc.1 takes its notes from what isn't released yet
+        case "$version" in *-*) heading="## [Unreleased]" ;; *) heading="## [$version]" ;; esac
+        awk -v heading="$heading" '
           index($0, heading) == 1 { found = 1; next }
           found && /^## \[/ { exit }
           found { print }
@@ -536,6 +542,12 @@ jobs:
       with:
         body_path: release-notes.md
         generate_release_notes: true
+        # v3.0.0-rc.1 and the like are pre-releases: servers' update checks never offer them
+        prerelease: ${{ contains(github.ref_name, '-') }}
+        make_latest: ${{ !contains(github.ref_name, '-') }}
+        # Releases are immutable once published, and a pre-release publishes as it's created,
+        # before its assets: so upload to a draft, then publish it whole below
+        draft: true
         files: |
           artifacts/**/*.tar.gz
           artifacts/**/*.tar.gz.sha256
@@ -547,6 +559,14 @@ jobs:
           artifacts/install-server.ps1
           artifacts/install-agent.sh
           artifacts/install-agent.ps1
+
+    - name: Publish the release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        if [[ "$TAG" == *-* ]]; then latest=false; else latest=true; fi
+        gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
 
     - name: Remove job state
       if: always()

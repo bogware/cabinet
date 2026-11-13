@@ -4,7 +4,7 @@
 # Run as root from the folder you extracted cabinet-linux-x64.tar.gz into (it finds
 # agent/cabinet-agent there), or pass --binary.
 #
-#   ./install-agent.sh --server http://cabinet:8080 --api-key KEY --paths "/var/log/*.log"
+#   ./install-agent.sh --server https://cabinet:8443 --pin FINGERPRINT --api-key KEY --paths "/var/log/*.log"
 #   ./install-agent.sh --config my-agent.json --groups game1,game2
 #
 # --config installs a complete appsettings.json instead of generating one, for several inputs.
@@ -23,13 +23,14 @@ SOURCE_TYPE="generic"
 INDEX="main"
 CONFIG_FILE=""
 BINARY=""
+PIN=""
 GROUPS_CSV=""
 WRITABLE_CSV=""
 START=true
 
 usage() {
     sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
-    echo "Options: --server URL --api-key KEY --paths \"a,b\" --source-type T --index I"
+    echo "Options: --server URL --pin SHA256 --api-key KEY --paths \"a,b\" --source-type T --index I"
     echo "         --config FILE --binary PATH --groups g1,g2 --writable d1,d2 --install-dir DIR --no-start"
 }
 
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --server) SERVER_URL="$2"; shift 2 ;;
         --api-key) API_KEY="$2"; shift 2 ;;
+        --pin) PIN="$2"; shift 2 ;;
         --paths) LOG_PATHS="$2"; shift 2 ;;
         --source-type) SOURCE_TYPE="$2"; shift 2 ;;
         --index) INDEX="$2"; shift 2 ;;
@@ -127,6 +129,7 @@ elif [[ ! -f "$INSTALL_DIR/appsettings.json" ]]; then
     "Output": {
       "ServerUrl": "$SERVER_URL",
       "ApiKey": "$API_KEY",
+      "CertificateSha256": "$PIN",
       "SpillDirectory": "$INSTALL_DIR/spool"
     },
     "Registry": {
@@ -141,6 +144,8 @@ fi
 # It holds the API key
 chmod 600 "$INSTALL_DIR/appsettings.json"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+# Spooled events are copies of logs that may be root-only, such as auth.log
+chmod 700 "$INSTALL_DIR/spool" "$INSTALL_DIR/data"
 
 cat > /etc/systemd/system/cabinet-agent.service <<EOF
 [Unit]
@@ -159,6 +164,8 @@ TimeoutStopSec=30
 
 User=$SERVICE_USER
 Group=$SERVICE_USER
+# Spool and dead-letter files hold copies of logs: readable by the agent only
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 # Logs often live in home folders. Readable, never writable.

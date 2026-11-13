@@ -54,10 +54,65 @@ public sealed class AgentUpdater : BackgroundService
         ? new Version(v.Major, v.Minor, Math.Max(0, v.Build))
         : new Version(0, 0, 0);
 
+    /// <summary>This agent's full version, such as 3.0.0 or 3.0.0-rc.1, without build metadata.</summary>
+    public static string CurrentFull { get; } = Full(
+        typeof(AgentUpdater).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion);
+
+    private static string Full(string? informational)
+    {
+        var text = (informational ?? string.Empty).Split('+')[0];
+        return Parse(text) is { } parsed && parsed.Core == CurrentVersion ? text : CurrentVersion.ToString();
+    }
+
+    /// <summary>A version and its pre-release label, from text like 3.0.0-rc.1.</summary>
+    public static (Version Core, string? Pre)? Parse(string? text)
+    {
+        var parts = (text ?? string.Empty).Split('+')[0].Split('-', 2);
+        return Version.TryParse(parts[0], out var core) && core.Build >= 0
+            ? (new Version(core.Major, core.Minor, core.Build), parts.Length > 1 && parts[1].Length > 0 ? parts[1] : null)
+            : null;
+    }
+
+    /// <summary>Semantic-versioning order: number, then a pre-release below its release, then labels.</summary>
+    public static int Compare((Version Core, string? Pre) a, (Version Core, string? Pre) b)
+    {
+        var byCore = a.Core.CompareTo(b.Core);
+        if (byCore != 0)
+        {
+            return byCore;
+        }
+
+        if (a.Pre == null || b.Pre == null)
+        {
+            return a.Pre == null ? (b.Pre == null ? 0 : 1) : -1;
+        }
+
+        var left = a.Pre.Split('.');
+        var right = b.Pre.Split('.');
+        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
+        {
+            var numbers = long.TryParse(left[i], out var x) & long.TryParse(right[i], out var y);
+            var order = numbers ? x.CompareTo(y) : string.CompareOrdinal(left[i], right[i]);
+            if (order != 0)
+            {
+                return order;
+            }
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!_config.Update.Enabled || string.IsNullOrEmpty(_programPath))
         {
+            return;
+        }
+
+        if (!AuthenticatesServer(_config.Output))
+        {
+            _logger.LogWarning("Not updating from the server: updates need an https server URL with its certificate verified or pinned (Output:CertificateSha256), so nobody in between can hand this agent a program");
             return;
         }
 
@@ -88,13 +143,18 @@ public sealed class AgentUpdater : BackgroundService
     /// </summary>
     public async Task<bool> CheckOnceAsync(CancellationToken cancellationToken = default)
     {
+        if (!AuthenticatesServer(_config.Output))
+        {
+            return false;
+        }
+
         var server = new Uri(_config.Output.ServerUrl.TrimEnd('/') + "/");
         var platform = RuntimeInformation.RuntimeIdentifier;
         var host = string.IsNullOrEmpty(_config.Hostname) ? Environment.MachineName : _config.Hostname;
         try
         {
             using var response = await _http.SendAsync(
-                Request(new Uri(server, $"api/v1/updates/agent?platform={Uri.EscapeDataString(platform)}&version={CurrentVersion}&host={Uri.EscapeDataString(host)}")),
+                Request(new Uri(server, $"api/v1/updates/agent?platform={Uri.EscapeDataString(platform)}&version={Uri.EscapeDataString(CurrentFull)}&host={Uri.EscapeDataString(host)}")),
                 cancellationToken);
             if (response.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound)
             {
@@ -103,7 +163,7 @@ public sealed class AgentUpdater : BackgroundService
 
             response.EnsureSuccessStatusCode();
             var offer = await response.Content.ReadFromJsonAsync<UpdateOffer>(cancellationToken);
-            if (offer == null || !Version.TryParse(offer.Version, out var offered) || offered <= CurrentVersion)
+            if (offer == null || Parse(offer.Version) is not { } offered || Compare(offered, Parse(CurrentFull)!.Value) <= 0)
             {
                 return false;
             }
@@ -142,6 +202,16 @@ public sealed class AgentUpdater : BackgroundService
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether the connection proves it's the server: https, with the certificate checked normally
+    /// or pinned. The program arrives over it with its checksum, so anything less would let
+    /// whoever sits on the network path choose what the agent runs.
+    /// </summary>
+    public static bool AuthenticatesServer(OutputConfiguration output) =>
+        Uri.TryCreate(output.ServerUrl, UriKind.Absolute, out var uri)
+        && uri.Scheme == Uri.UriSchemeHttps
+        && (output.VerifySsl || !string.IsNullOrWhiteSpace(output.CertificateSha256));
 
     /// <summary>A request with the agent's key, unless the forwarder already set it for every request.</summary>
     private HttpRequestMessage Request(Uri uri)

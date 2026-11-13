@@ -25,23 +25,87 @@ public static class SigmaConverter
     private static readonly Regex Technique = new(@"^attack\.(t\d{4}(?:\.\d{3})?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
     private static readonly Regex CountCondition = new(@"^(?<expr>.+?)\s*\|\s*count\(\s*\)\s*(?:by\s+(?<by>[A-Za-z_][\w.]*)\s*)?(?<op>>=|>)\s*(?<n>\d+)\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
 
+    /// <summary>The most YAML text converted at once.</summary>
+    public const int MaxInputLength = 2_000_000;
+
+    /// <summary>How deeply maps and lists may nest; real Sigma rules use four or five levels.</summary>
+    public const int MaxDepth = 50;
+
+    /// <summary>The most value tests one rule's condition may hold.</summary>
+    public const int MaxConditions = 5_000;
+
     /// <summary>Converts every rule in a YAML text; documents are separated by ---.</summary>
     public static List<SigmaConversion> Convert(string yaml)
     {
+        if (yaml.Length > MaxInputLength)
+        {
+            return [Unreadable($"It's longer than {MaxInputLength} characters")];
+        }
+
         var stream = new YamlStream();
         try
         {
+            // Checked before loading, which expands aliases and builds nodes recursively
+            if (Shape(yaml) is { } problem)
+            {
+                return [Unreadable(problem)];
+            }
+
             stream.Load(new StringReader(yaml));
         }
         catch (YamlDotNet.Core.YamlException ex)
         {
-            return [new SigmaConversion("(unreadable)", null, $"Not valid YAML: {ex.Message}")];
+            return [Unreadable($"Not valid YAML: {ex.Message}")];
         }
 
         return stream.Documents
             .Where(document => document.RootNode is YamlMappingNode)
             .Select(document => ConvertOne((YamlMappingNode)document.RootNode))
             .ToList();
+    }
+
+    private static SigmaConversion Unreadable(string problem) => new("(unreadable)", null, problem);
+
+    /// <summary>
+    /// Why the YAML can't be loaded safely, or null. Sigma rules don't use aliases, which can
+    /// expand a few hundred bytes into gigabytes, and nesting is limited so nothing recurses deeply.
+    /// The parser reads one event at a time, so it stops at the first level too deep.
+    /// </summary>
+    private static string? Shape(string yaml)
+    {
+        var parser = new YamlDotNet.Core.Parser(new StringReader(yaml));
+        var depth = 0;
+        while (parser.MoveNext())
+        {
+            switch (parser.Current)
+            {
+                case YamlDotNet.Core.Events.AnchorAlias:
+                    return "It uses a YAML alias (*name), which Sigma rules don't need";
+                case YamlDotNet.Core.Events.MappingStart or YamlDotNet.Core.Events.SequenceStart:
+                    if (++depth > MaxDepth) return $"It nests more than {MaxDepth} levels deep";
+                    break;
+                case YamlDotNet.Core.Events.MappingEnd or YamlDotNet.Core.Events.SequenceEnd:
+                    depth--;
+                    break;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Counts the value tests in one rule, so a small rule can't make a huge condition.</summary>
+    private sealed class Budget
+    {
+        public int Used { get; private set; }
+
+        public void Spend(int tests)
+        {
+            Used += tests;
+            if (Used > MaxConditions)
+            {
+                throw new NotSupportedException($"It makes more than {MaxConditions} conditions");
+            }
+        }
     }
 
     private static SigmaConversion ConvertOne(YamlMappingNode root)
@@ -72,8 +136,8 @@ public static class SigmaConverter
 
             var selections = detection.Children
                 .Where(pair => pair.Key is YamlScalarNode { Value: not ("condition" or "timeframe") })
-                .ToDictionary(pair => ((YamlScalarNode)pair.Key).Value!, pair => Selection(pair.Value), StringComparer.Ordinal);
-            var condition = new ConditionParser(conditionText, selections).Parse();
+                .ToDictionary(pair => ((YamlScalarNode)pair.Key).Value!, pair => Counted(pair.Value), StringComparer.Ordinal);
+            var condition = new ConditionParser(conditionText, selections, new Budget()).Parse();
 
             var level = Scalar(root, "level")?.ToLowerInvariant();
             var technique = Sequence(root, "tags")
@@ -116,18 +180,37 @@ public static class SigmaConverter
         }
     }
 
-    /// <summary>A selection as a BQL condition: a map is AND of its fields, a list is OR of its items.</summary>
-    private static string Selection(YamlNode node) => node switch
-    {
-        YamlMappingNode map => Join(map.Children.Select(pair => FieldCondition(((YamlScalarNode)pair.Key).Value!, pair.Value)), " AND "),
-        YamlSequenceNode list when list.Children.All(item => item is YamlScalarNode) =>
-            Join(list.Children.Select(item => Match("RawLine", ((YamlScalarNode)item).Value ?? string.Empty, "contains")), " OR "),
-        YamlSequenceNode list => Join(list.Children.Select(Selection), " OR "),
-        YamlScalarNode scalar => Match("RawLine", scalar.Value ?? string.Empty, "contains"),
-        _ => throw new NotSupportedException("A selection is neither a map nor a list"),
-    };
+    /// <summary>A selection's condition, and how many value tests it holds.</summary>
+    private sealed record CountedSelection(string Condition, int Tests);
 
-    private static string FieldCondition(string key, YamlNode value)
+    private static CountedSelection Counted(YamlNode node)
+    {
+        var budget = new Budget();
+        var condition = Selection(node, budget);
+        return new CountedSelection(condition, budget.Used);
+    }
+
+    /// <summary>A selection as a BQL condition: a map is AND of its fields, a list is OR of its items.</summary>
+    private static string Selection(YamlNode node, Budget budget)
+    {
+        switch (node)
+        {
+            case YamlMappingNode map:
+                return Join(map.Children.Select(pair => FieldCondition(((YamlScalarNode)pair.Key).Value!, pair.Value, budget)), " AND ");
+            case YamlSequenceNode list when list.Children.All(item => item is YamlScalarNode):
+                budget.Spend(list.Children.Count);
+                return Join(list.Children.Select(item => Match("RawLine", ((YamlScalarNode)item).Value ?? string.Empty, "contains")), " OR ");
+            case YamlSequenceNode list:
+                return Join(list.Children.Select(item => Selection(item, budget)), " OR ");
+            case YamlScalarNode scalar:
+                budget.Spend(1);
+                return Match("RawLine", scalar.Value ?? string.Empty, "contains");
+            default:
+                throw new NotSupportedException("A selection is neither a map nor a list");
+        }
+    }
+
+    private static string FieldCondition(string key, YamlNode value, Budget budget)
     {
         var parts = key.Split('|');
         var field = parts[0];
@@ -152,6 +235,7 @@ public static class SigmaConverter
             YamlScalarNode scalar => [scalar.Value],
             _ => throw new NotSupportedException($"The value for {field} isn't a value or a list"),
         };
+        budget.Spend(windash ? values.Count * 4 : values.Count);
 
         // windash: a Windows option can start with - or / (or a dash look-alike), wherever it is
         var conditions = values.SelectMany(v => windash && v != null && v.Contains('-')
@@ -251,10 +335,11 @@ public static class SigmaConverter
         Child(node, key) is YamlSequenceNode list ? list.Children.OfType<YamlScalarNode>().Select(s => s.Value ?? string.Empty) : [];
 
     /// <summary>Sigma's condition: names, and, or, not, parentheses, "1 of x*", "all of them".</summary>
-    private sealed class ConditionParser(string text, Dictionary<string, string> selections)
+    private sealed class ConditionParser(string text, Dictionary<string, CountedSelection> selections, Budget budget)
     {
         private readonly List<string> _tokens = Regex.Matches(text, @"\(|\)|[^\s()]+", RegexOptions.None, RegexTimeout).Select(m => m.Value).ToList();
         private int _position;
+        private int _depth;
 
         public string Parse()
         {
@@ -284,7 +369,7 @@ public static class SigmaConverter
             if (Peek?.Equals("not", StringComparison.OrdinalIgnoreCase) == true)
             {
                 _position++;
-                return $"NOT {Not()}";
+                return $"NOT {Nested(Not)}";
             }
 
             return Primary();
@@ -296,7 +381,7 @@ public static class SigmaConverter
             _position++;
             if (token == "(")
             {
-                var inner = Or();
+                var inner = Nested(Or);
                 if (Peek != ")") throw new NotSupportedException("The condition is missing a ')'");
                 _position++;
                 return inner;
@@ -311,12 +396,29 @@ public static class SigmaConverter
                     ? selections.Keys.Where(k => !k.StartsWith('_')).ToList()
                     : selections.Keys.Where(k => Regex.IsMatch(k, "^" + Regex.Escape(target).Replace(@"\*", ".*") + "$", RegexOptions.None, RegexTimeout)).ToList();
                 if (names.Count == 0) throw new NotSupportedException($"No selection matches '{target}'");
-                return names.Count == 1 ? selections[names[0]] : $"({string.Join(token == "all" ? " AND " : " OR ", names.Select(n => selections[n]))})";
+                return names.Count == 1 ? Use(names[0]) : $"({string.Join(token == "all" ? " AND " : " OR ", names.Select(Use))})";
             }
 
-            return selections.TryGetValue(token, out var selection)
-                ? selection
+            return selections.ContainsKey(token)
+                ? Use(token)
                 : throw new NotSupportedException($"The condition names '{token}', which isn't a selection");
+        }
+
+        // "not" and "(" recurse, so a condition can't nest without limit
+        private string Nested(Func<string> parse)
+        {
+            if (++_depth > MaxDepth) throw new NotSupportedException($"The condition nests more than {MaxDepth} levels deep");
+            var result = parse();
+            _depth--;
+            return result;
+        }
+
+        // A selection named again is written out again, so its tests count every time
+        private string Use(string name)
+        {
+            var selection = selections[name];
+            budget.Spend(selection.Tests);
+            return selection.Condition;
         }
     }
 }

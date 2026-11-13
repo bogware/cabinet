@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Cabinet.API.Authentication;
 using Cabinet.API.Controllers;
+using Cabinet.API.Middleware;
 using Cabinet.API.Services;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
@@ -45,6 +46,24 @@ public sealed class CasesControllerTests
         timeline.Should().NotContain(t => t.Text.Contains("classified"));
         timeline[^1].Text.Should().Be("Changed status from Open to Resolved");
         controller.Response.Headers["X-Hidden-Events"].ToString().Should().Be("1");
+    }
+
+    [Theory]
+    [InlineData(nameof(CasesController.List))]
+    [InlineData(nameof(CasesController.Get))]
+    [InlineData(nameof(CasesController.Timeline))]
+    public void ReadingCases_NeedsSearchOnEveryIndex(string action)
+    {
+        // A case's notes and searches can quote any index, so someone limited to some can't read them
+        typeof(CasesController).GetMethod(action)!.GetCustomAttributes(typeof(RequireEveryIndexAttribute), false).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void AddingToACase_NeedsAlerts_NotJustSearch()
+    {
+        var attribute = (RequireCapabilityAttribute)typeof(CasesController).GetMethod(nameof(CasesController.Add))!
+            .GetCustomAttributes(typeof(RequireCapabilityAttribute), false).Single();
+        attribute.Capability.Should().Be(Capability.Alerts);
     }
 
     [Fact]

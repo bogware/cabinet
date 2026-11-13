@@ -108,6 +108,43 @@ public sealed class UpdateTests : IDisposable
         ReleaseVersions.FromTag(tag)?.ToString().Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData("3.0.0-rc.1", "3.0.0", -1)]
+    [InlineData("3.0.0-rc.2", "3.0.0-rc.1", 1)]
+    [InlineData("3.0.0-rc.10", "3.0.0-rc.2", 1)]
+    [InlineData("2.5.4", "3.0.0-rc.1", -1)]
+    [InlineData("v3.0.0", "3.0.0", 0)]
+    [InlineData("3.0.1-beta", "3.0.0", 1)]
+    public void PreReleases_OrderBelowTheirRelease_OnServerAndAgent(string a, string b, int expected)
+    {
+        Math.Sign(ReleaseVersions.Compare(ReleaseVersions.Parse(a)!.Value, ReleaseVersions.Parse(b)!.Value)).Should().Be(expected);
+        Math.Sign(Cabinet.Agent.Updating.AgentUpdater.Compare(Cabinet.Agent.Updating.AgentUpdater.Parse(a.TrimStart('v'))!.Value, Cabinet.Agent.Updating.AgentUpdater.Parse(b.TrimStart('v'))!.Value))
+            .Should().Be(expected, "the agent orders versions as the server does");
+    }
+
+    [Theory]
+    [InlineData("3.0.0-rc.1+0123abcd", "3.0.0", "3.0.0-rc.1")]
+    [InlineData("3.0.0+0123abcd", "3.0.0", "3.0.0")]
+    [InlineData("1.0.0", "3.0.0", "3.0.0")]
+    [InlineData(null, "3.0.0", "3.0.0")]
+    public void TheFullVersion_ComesFromTheBuild_WhenItMatches(string? informational, string core, string expected)
+    {
+        ReleaseVersions.FullVersion(informational, Version.Parse(core)).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(new string[0], "anything", true)]
+    [InlineData(new[] { "game-dev" }, "game-dev", true)]
+    [InlineData(new[] { "game-dev" }, "GAME-DEV", true)]
+    [InlineData(new[] { "game-dev" }, "game-prod", false)]
+    [InlineData(new[] { "web-*", "db-1" }, "web-07", true)]
+    [InlineData(new[] { "web-*" }, "xweb-07", false)]
+    [InlineData(new[] { "a.b" }, "axb", false)]
+    public void AgentRollout_OffersTheBuildToListedHosts(string[] hosts, string host, bool offered)
+    {
+        new UpdateOptions { AgentHosts = [.. hosts] }.OffersAgentTo(host).Should().Be(offered);
+    }
+
     [Fact]
     public void FourPartVersions_CompareAsThree()
     {
@@ -152,6 +189,56 @@ public sealed class UpdateTests : IDisposable
 
         File.ReadAllText(Path.Combine(staged, "api", "Cabinet.API.exe")).Should().Be("new program");
         releases.Downloads.Should().Be(2, "the archive and its checksum, once");
+    }
+
+    [Fact]
+    public void AServerOnACandidate_IsOfferedTheNewestRelease_CandidatesIncluded()
+    {
+        // GitHub's "latest" skips pre-releases, so rc.1 would never hear of rc.2
+        var asset = new List<ReleaseAsset> { new(1, "cabinet-win-x64.zip", 1) };
+        ReleaseInfo Release(string tag, bool withAssets = true) =>
+            new(tag, ReleaseVersions.Parse(tag)!.Value.Core, null, null, withAssets ? asset : []);
+
+        GitHubReleaseSource.Newest([Release("v2.5.4"), Release("v3.0.0-rc.2"), Release("v3.0.0-rc.10"), Release("v3.0.0-rc.11", withAssets: false)])!
+            .Tag.Should().Be("v3.0.0-rc.10", "numbered labels order by number, and a release without files is skipped");
+        GitHubReleaseSource.Newest([Release("v3.0.0-rc.3"), Release("v3.0.0")])!.Tag.Should().Be("v3.0.0");
+    }
+
+    [Fact]
+    public async Task AReleaseCandidate_AndItsRelease_AreStagedApart()
+    {
+        // Both are version 3.0.0; reusing the candidate's files would reinstall it on every update
+        var releases = new FakeReleases();
+        releases.Add("cabinet-win-x64.zip", Zip(("api/Cabinet.API.exe", "candidate")));
+        var service = Service(releases);
+        var assets = (await releases.GetLatestAsync()).Assets;
+        var candidate = new ReleaseInfo("v3.0.0-rc.1", new Version(3, 0, 0), "notes", DateTimeOffset.UtcNow, assets);
+        var final = new ReleaseInfo("v3.0.0", new Version(3, 0, 0), "notes", DateTimeOffset.UtcNow, assets);
+
+        var first = await service.StageAsync(candidate, "win-x64");
+        var second = await service.StageAsync(final, "win-x64");
+
+        second.Should().NotBe(first);
+        releases.Downloads.Should().Be(4, "each release is downloaded with its checksum");
+    }
+
+    [Fact]
+    public async Task OlderDownloads_AreRemoved_WhenANewReleaseIsStaged()
+    {
+        // Each is a few hundred megabytes; a server that updated nine times kept 3.5 GB of them
+        var releases = new FakeReleases();
+        releases.Add("cabinet-win-x64.zip", Zip(("api/Cabinet.API.exe", "x")));
+        var service = Service(releases);
+        var assets = (await releases.GetLatestAsync()).Assets;
+        var work = Path.Combine(_directory, "work");
+        var running = Path.Combine(work, ReleaseVersions.CurrentTag, "win-x64");
+        Directory.CreateDirectory(running);
+
+        await service.StageAsync(new ReleaseInfo("v8.0.0", new Version(8, 0, 0), null, null, assets), "win-x64");
+        await service.StageAsync(new ReleaseInfo("v9.0.0", new Version(9, 0, 0), null, null, assets), "win-x64");
+
+        Directory.GetDirectories(work).Select(Path.GetFileName).Should().BeEquivalentTo([ReleaseVersions.CurrentTag, "v9.0.0"],
+            "the running version's download stays for agents, and the newest for the update");
     }
 
     [Fact]
@@ -200,11 +287,11 @@ public sealed class UpdateTests : IDisposable
         }
     }
 
-    private (AgentUpdater Updater, string Program) Agent(HttpMessageHandler server)
+    private (AgentUpdater Updater, string Program) Agent(HttpMessageHandler server, OutputConfiguration? output = null)
     {
         var program = Path.Combine(_directory, "cabinet-agent");
         File.WriteAllText(program, "old agent");
-        var config = new AgentConfiguration { Output = new OutputConfiguration { ServerUrl = "https://cabinet.example:8443", ApiKey = "agent-key" } };
+        var config = new AgentConfiguration { Output = output ?? new OutputConfiguration { ServerUrl = "https://cabinet.example:8443", ApiKey = "agent-key" } };
         return (new AgentUpdater(new HttpClient(server), config, Mock.Of<IHostApplicationLifetime>(), NullLogger<AgentUpdater>.Instance, program), program);
     }
 
@@ -218,6 +305,29 @@ public sealed class UpdateTests : IDisposable
 
         File.ReadAllText(program).Should().Be("new agent");
         File.ReadAllText(program + ".old").Should().Be("old agent");
+    }
+
+    [Theory]
+    [InlineData("http://cabinet.example:8080", true, null)]
+    [InlineData("https://cabinet.example:8443", false, null)]
+    public async Task Agent_WontUpdate_OverAConnectionThatDoesntProveItsTheServer(string url, bool verify, string? pin)
+    {
+        // Whoever sits between the agent and an unauthenticated server could offer any program
+        var binary = Encoding.UTF8.GetBytes("new agent");
+        var (updater, program) = Agent(
+            new FakeServer("9.9.9", binary, Convert.ToHexString(SHA256.HashData(binary))),
+            new OutputConfiguration { ServerUrl = url, VerifySsl = verify, CertificateSha256 = pin, ApiKey = "agent-key" });
+
+        (await updater.CheckOnceAsync()).Should().BeFalse();
+
+        File.ReadAllText(program).Should().Be("old agent");
+    }
+
+    [Fact]
+    public void Agent_UpdatesOverHttps_VerifiedOrPinned()
+    {
+        AgentUpdater.AuthenticatesServer(new OutputConfiguration { ServerUrl = "https://a:8443", VerifySsl = true }).Should().BeTrue();
+        AgentUpdater.AuthenticatesServer(new OutputConfiguration { ServerUrl = "https://a:8443", VerifySsl = false, CertificateSha256 = new string('A', 64) }).Should().BeTrue();
     }
 
     [Fact]

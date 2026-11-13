@@ -176,6 +176,9 @@ if [[ ! -f "$CONFIG_DIR/appsettings.json" ]]; then
     "ArchivePath": "$DATA_DIR/backups",
     "RetentionDays": 30,
     "AutoBackupEnabled": false
+  },
+  "Metrics": {
+    "RequireKey": true
   }
 }
 CFGEOF
@@ -236,6 +239,8 @@ TimeoutStopSec=30
 
 User=$SERVICE_USER
 Group=$SERVICE_USER
+# Events, backups and exports: not readable by other users
+UMask=0027
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
