@@ -46,7 +46,6 @@ internal sealed class IndexShard : IDisposable
 
     /// <summary>Segments merged at once, and how many of a size there must be before they are.</summary>
     private const int MergeWidth = 10;
-    private readonly List<(SegmentReader Segment, DateTime RetiredAt)> _retired = [];
 
     private List<LogEvent> _hot = [];
     private HashSet<string> _hotIds = new(StringComparer.Ordinal);
@@ -244,12 +243,18 @@ internal sealed class IndexShard : IDisposable
     /// The in-memory events and the segments, taken together, so a flush between reading one and
     /// the other can't show an event twice or not at all.
     /// </summary>
-    public (LogEvent[] Hot, SegmentReader[] Segments) Snapshot()
+    /// <remarks>
+    /// The lock is held only to copy references; nothing slow (a segment write or rewrite) runs
+    /// under it, so waiting for it synchronously is brief. Dispose the snapshot when done reading:
+    /// it holds the segments open, so one retired meanwhile closes once the last read lets go.
+    /// </remarks>
+    public ShardSnapshot Snapshot()
     {
         _writeLock.Wait();
         try
         {
-            return (_frozen.Count == 0 ? _hot.ToArray() : [.. _frozen, .. _hot], _segments);
+            var segments = _segments.Where(s => s.TryAcquire()).ToArray();
+            return new ShardSnapshot(_frozen.Count == 0 ? _hot.ToArray() : [.. _frozen, .. _hot], segments);
         }
         finally
         {
@@ -279,6 +284,12 @@ internal sealed class IndexShard : IDisposable
             if (kept.Count == 0)
             {
                 return 0;
+            }
+
+            foreach (var logEvent in kept)
+            {
+                // An event stored with no index is in this one, in memory as in a segment
+                logEvent.Index = Index;
             }
 
             // One record for the batch: it's in the log whole, or not at all
@@ -383,7 +394,8 @@ internal sealed class IndexShard : IDisposable
 
     /// <summary>
     /// Starts writing in-memory events older than the flush interval to a segment. With
-    /// <paramref name="force"/>, writes all of them and waits until they're in a segment.
+    /// <paramref name="force"/>, writes all that are in memory when it starts, and waits until
+    /// they're in a segment; events written meanwhile may still be in memory when it returns.
     /// </summary>
     public async Task FlushAsync(bool force, CancellationToken cancellationToken)
     {
@@ -410,31 +422,28 @@ internal sealed class IndexShard : IDisposable
             return;
         }
 
-        // Until nothing is left in memory: a write can start a flush of its own in between
-        while (true)
+        // Everything in memory now, once. Waiting until memory is empty would never end under
+        // steady writes, and a purge waiting on this holds off merges all that time.
+        await LockWithoutFlushAsync(cancellationToken);
+        Task<bool> flushing;
+        try
         {
-            await _flushing.WaitAsync(cancellationToken);
-            await _writeLock.WaitAsync(cancellationToken);
-            Task<bool> flushing;
-            try
+            if (_disposed || _hot.Count == 0)
             {
-                if (_disposed || (_hot.Count == 0 && _flushing.IsCompleted))
-                {
-                    return;
-                }
-
-                StartFlushLocked();
-                flushing = _flushing;
-            }
-            finally
-            {
-                _writeLock.Release();
+                return;
             }
 
-            if (!await flushing.WaitAsync(cancellationToken))
-            {
-                throw new IOException($"Writing index {Index} to a segment failed; its events are still in the log");
-            }
+            StartFlushLocked();
+            flushing = _flushing;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+
+        if (!await flushing.WaitAsync(cancellationToken))
+        {
+            throw new IOException($"Writing index {Index} to a segment failed; its events are still in the log");
         }
     }
 
@@ -445,7 +454,6 @@ internal sealed class IndexShard : IDisposable
     /// </summary>
     private void StartFlushLocked()
     {
-        DisposeRetired(TimeSpan.FromMinutes(10));
         if (_hot.Count == 0 || !_flushing.IsCompleted)
         {
             return;
@@ -561,17 +569,23 @@ internal sealed class IndexShard : IDisposable
         await _maintenanceLock.WaitAsync(cancellationToken);
         try
         {
+            // What's in memory as the purge starts goes to segments, so the purge can see it
             await FlushAsync(force: true, cancellationToken);
-            await LockWithoutFlushAsync(cancellationToken);
+
+            // Segments are only replaced under the maintenance lock, so these stay as they are
+            // while straddling ones are rewritten, outside the write lock: reads and writes carry
+            // on, and only swapping the results in waits for them, as with a merge.
+            var deleted = 0;
+            var retiring = new List<SegmentReader>();
+            var rewritten = new List<SegmentReader>();
             try
             {
-                var deleted = 0;
                 foreach (var segment in _segments.Where(s => s.MinTicks < before.Ticks).ToList())
                 {
                     if (segment.MaxTicks < before.Ticks)
                     {
                         deleted += segment.Rows;
-                        Retire(segment);
+                        retiring.Add(segment);
                         continue;
                     }
 
@@ -580,10 +594,41 @@ internal sealed class IndexShard : IDisposable
                     deleted += segment.Rows - kept;
                     if (kept > 0)
                     {
-                        var rows = RowSource.Merge([RowSource.FromSegment(segment, new RowFilter(new QueryContext { StartTime = before }), descending: false)], descending: false, cancellationToken);
-                        AddSegment(WriteSorted(rows.Select(r => r.Materialize()), kept, [segment.Name], cancellationToken));
+                        rewritten.Add(await Task.Run(
+                            () =>
+                            {
+                                var rows = RowSource.Merge([RowSource.FromSegment(segment, new RowFilter(new QueryContext { StartTime = before }), descending: false)], descending: false, cancellationToken);
+                                return WriteSorted(rows.Select(r => r.Materialize()), kept, [segment.Name], cancellationToken);
+                            },
+                            cancellationToken));
                     }
 
+                    retiring.Add(segment);
+                }
+
+                await _writeLock.WaitAsync(cancellationToken);
+            }
+            catch
+            {
+                DiscardRewritten(rewritten);
+                throw;
+            }
+
+            try
+            {
+                if (_disposed)
+                {
+                    DiscardRewritten(rewritten);
+                    return 0;
+                }
+
+                foreach (var segment in rewritten)
+                {
+                    AddSegment(segment);
+                }
+
+                foreach (var segment in retiring)
+                {
                     Retire(segment);
                 }
 
@@ -699,21 +744,35 @@ internal sealed class IndexShard : IDisposable
     private void AddSegment(SegmentReader reader) =>
         _segments = _segments.Append(reader).OrderBy(s => s.MinTicks).ToArray();
 
-    /// <summary>Removes a segment from reads and deletes its file; queries that have it open finish first.</summary>
+    /// <summary>
+    /// Removes a segment from reads and deletes its file. Reads that have it in a snapshot keep
+    /// reading it; it closes when the last of them is done.
+    /// </summary>
     private void Retire(SegmentReader segment)
     {
         _segments = _segments.Where(s => s != segment).ToArray();
-        _retired.Add((segment, DateTime.UtcNow));
         File.Delete(segment.Path);
+        segment.Release();
     }
 
-    private void DisposeRetired(TimeSpan after)
+    /// <summary>Closes and deletes segments written for a replacement that won't happen.</summary>
+    private void DiscardRewritten(List<SegmentReader> rewritten)
     {
-        foreach (var retired in _retired.Where(r => DateTime.UtcNow - r.RetiredAt > after).ToList())
+        foreach (var segment in rewritten)
         {
-            retired.Segment.Dispose();
-            _retired.Remove(retired);
+            segment.Dispose();
+            try
+            {
+                File.Delete(segment.Path);
+            }
+            catch (IOException ex)
+            {
+                // Left behind, it replaces what it was rewritten from at the next start: the purge, applied then
+                _logger.LogWarning(ex, "Deleting {File} after a purge stopped failed", segment.Path);
+            }
         }
+
+        rewritten.Clear();
     }
 
     /// <summary>Deletes the whole index. Returns how many events it held.</summary>
@@ -752,10 +811,9 @@ internal sealed class IndexShard : IDisposable
         _wal?.Dispose();
         foreach (var segment in _segments)
         {
-            segment.Dispose();
+            segment.Release();
         }
 
-        DisposeRetired(TimeSpan.Zero);
         _segments = [];
     }
 
@@ -773,6 +831,36 @@ internal sealed class IndexShard : IDisposable
         finally
         {
             _writeLock.Release();
+        }
+    }
+}
+
+/// <summary>
+/// An index's in-memory events and segments at one moment. Holds the segments open until disposed,
+/// so a merge or purge that retires one meanwhile can't close it under the read.
+/// </summary>
+internal sealed class ShardSnapshot(LogEvent[] hot, SegmentReader[] segments) : IDisposable
+{
+    private int _disposed;
+
+    public LogEvent[] Hot { get; } = hot;
+
+    public SegmentReader[] Segments { get; } = segments;
+
+    public void Deconstruct(out LogEvent[] hot, out SegmentReader[] segments)
+    {
+        hot = Hot;
+        segments = Segments;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            foreach (var segment in Segments)
+            {
+                segment.Release();
+            }
         }
     }
 }
