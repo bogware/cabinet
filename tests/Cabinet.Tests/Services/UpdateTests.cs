@@ -223,6 +223,25 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task OlderDownloads_AreRemoved_WhenANewReleaseIsStaged()
+    {
+        // Each is a few hundred megabytes; a server that updated nine times kept 3.5 GB of them
+        var releases = new FakeReleases();
+        releases.Add("cabinet-win-x64.zip", Zip(("api/Cabinet.API.exe", "x")));
+        var service = Service(releases);
+        var assets = (await releases.GetLatestAsync()).Assets;
+        var work = Path.Combine(_directory, "work");
+        var running = Path.Combine(work, ReleaseVersions.CurrentTag, "win-x64");
+        Directory.CreateDirectory(running);
+
+        await service.StageAsync(new ReleaseInfo("v8.0.0", new Version(8, 0, 0), null, null, assets), "win-x64");
+        await service.StageAsync(new ReleaseInfo("v9.0.0", new Version(9, 0, 0), null, null, assets), "win-x64");
+
+        Directory.GetDirectories(work).Select(Path.GetFileName).Should().BeEquivalentTo([ReleaseVersions.CurrentTag, "v9.0.0"],
+            "the running version's download stays for agents, and the newest for the update");
+    }
+
+    [Fact]
     public async Task Agents_GetTheBuildMatchingThisServer()
     {
         var releases = new FakeReleases();

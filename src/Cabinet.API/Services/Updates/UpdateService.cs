@@ -222,15 +222,44 @@ public sealed class UpdateService
         }
     }
 
+    /// <summary>A release's folder under the work directory: by tag, not version, since 3.0.0-rc.1 and 3.0.0 share a version number but not a build.</summary>
+    private static string FolderFor(string? tag, Version version) =>
+        string.IsNullOrWhiteSpace(tag) ? $"v{version}"
+            : new string(tag.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_').ToArray());
+
+    /// <summary>
+    /// Deletes downloads of releases other than this one and the running one, which agents are
+    /// offered. Each is a few hundred megabytes, and they used to pile up with every update.
+    /// </summary>
+    private void RemoveOtherReleases(string keep)
+    {
+        var running = FolderFor(ReleaseVersions.CurrentTag, ReleaseVersions.Current);
+        foreach (var directory in Directory.EnumerateDirectories(_workDirectory))
+        {
+            var name = Path.GetFileName(directory);
+            if (name.Equals(keep, StringComparison.OrdinalIgnoreCase) || name.Equals(running, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Couldn't remove the old update download {Folder}", directory);
+            }
+        }
+    }
+
     /// <summary>
     /// Downloads a release's archive for a platform, checks it against the release's SHA-256, and
     /// unpacks it. Reuses an earlier download.
     /// </summary>
     public async Task<string> StageAsync(ReleaseInfo release, string platform, CancellationToken cancellationToken = default)
     {
-        // By tag, not version: 3.0.0-rc.1 and 3.0.0 share a version number but not a build
-        var folder = string.IsNullOrWhiteSpace(release.Tag) ? $"v{release.Version}"
-            : new string(release.Tag.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_').ToArray());
+        var folder = FolderFor(release.Tag, release.Version);
         var directory = Path.Combine(_workDirectory, folder, platform);
         var complete = Path.Combine(directory, ".complete");
         if (File.Exists(complete))
@@ -288,6 +317,7 @@ public sealed class UpdateService
 
             await File.WriteAllTextAsync(complete, actual, cancellationToken);
             _logger.LogInformation("Downloaded and verified {Archive} from {Tag}", archiveName, release.Tag);
+            RemoveOtherReleases(folder);
             return directory;
         }
         finally

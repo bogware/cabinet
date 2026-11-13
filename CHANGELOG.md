@@ -81,6 +81,7 @@ Planned as 3.0.0. It has breaking changes to search semantics, listed under Chan
 - A release candidate and its release were downloaded into the same folder, so updating to the release could reinstall the candidate, and agents could be offered it in a loop.
 - Outbound calls (webhook actions, connectors, the settings webhook) went through a configured proxy, which reached private addresses the guard would refuse, and NAT64 and 6to4 addresses weren't counted as private.
 - A sign-in return path with a tab or line break in it could send people to another site after signing in.
+- Every downloaded update was kept, a few hundred megabytes each: 3.5 GB after nine updates on one server. Only the running version and the newest download stay.
 - Agent packages were downloaded again by every agent that asked at once, and after a failure on every request.
 - Whole numbers in fields read back from PostgreSQL and OpenSearch came back as decimals (4 as 4.0), since a conditional boxed them as `double`.
 - Webhook actions and connectors can't reach private, loopback or link-local addresses unless allowed, and never follow redirects. Actions see events masked as for a Viewer, and an action that writes an event needs ingest on that index. Rule changes are audited.
