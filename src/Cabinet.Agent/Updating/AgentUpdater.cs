@@ -16,6 +16,13 @@ public sealed class UpdateConfiguration
 
     /// <summary>How often to ask.</summary>
     public int CheckIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// For development builds only: installs a build the server offers without the publisher's
+    /// signature. Off by default, and logged as a warning when it's used. A signature that is
+    /// present but wrong is refused whatever this says.
+    /// </summary>
+    public bool AllowUnsigned { get; set; }
 }
 
 /// <summary>What the server offers.</summary>
@@ -24,13 +31,17 @@ public sealed class UpdateOffer
     public string Version { get; set; } = string.Empty;
     public string Sha256 { get; set; } = string.Empty;
     public long Size { get; set; }
+
+    /// <summary>The publisher's signature over the program, base64 DER. Servers before 3.0.1 don't send it.</summary>
+    public string? Signature { get; set; }
 }
 
 /// <summary>
 /// Keeps the agent at the server's version. When the server offers a newer build, it's
 /// downloaded over the same connection as events (so the same key and pinned certificate),
-/// checked against its SHA-256, swapped in for the running program, and the agent stops so its
-/// service manager starts the new one. Reading resumes from the checkpoints.
+/// checked against its SHA-256 and against the publisher's signature with the key built into
+/// this agent, swapped in for the running program, and the agent stops so its service manager
+/// starts the new one. Reading resumes from the checkpoints.
 /// </summary>
 public sealed class AgentUpdater : BackgroundService
 {
@@ -39,14 +50,17 @@ public sealed class AgentUpdater : BackgroundService
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<AgentUpdater> _logger;
     private readonly string _programPath;
+    private readonly ECDsa _releaseKey;
 
-    public AgentUpdater(HttpClient http, AgentConfiguration config, IHostApplicationLifetime lifetime, ILogger<AgentUpdater> logger, string? programPath = null)
+    /// <param name="releaseKey">The publisher's public key. Null, as in production, uses the one built in.</param>
+    public AgentUpdater(HttpClient http, AgentConfiguration config, IHostApplicationLifetime lifetime, ILogger<AgentUpdater> logger, string? programPath = null, ECDsa? releaseKey = null)
     {
         _http = http;
         _config = config;
         _lifetime = lifetime;
         _logger = logger;
         _programPath = programPath ?? Environment.ProcessPath ?? string.Empty;
+        _releaseKey = releaseKey ?? ReleaseSignature.LoadEmbeddedKey();
     }
 
     /// <summary>This agent's version.</summary>
@@ -168,6 +182,13 @@ public sealed class AgentUpdater : BackgroundService
                 return false;
             }
 
+            var signed = !string.IsNullOrWhiteSpace(offer.Signature);
+            if (!signed && !_config.Update.AllowUnsigned)
+            {
+                _logger.LogWarning("Server offers agent {Version} without the publisher's signature (servers before 3.0.1 don't send one); keeping this version", offer.Version);
+                return false;
+            }
+
             _logger.LogInformation("Server offers agent {Version}; downloading", offer.Version);
             var staged = _programPath + ".new";
             using (var binary = await _http.SendAsync(Request(new Uri(server, $"api/v1/updates/agent/{Uri.EscapeDataString(platform)}")), HttpCompletionOption.ResponseHeadersRead, cancellationToken))
@@ -189,6 +210,18 @@ public sealed class AgentUpdater : BackgroundService
                 File.Delete(staged);
                 _logger.LogWarning("Downloaded agent {Version} doesn't match its checksum; keeping this version", offer.Version);
                 return false;
+            }
+
+            if (signed && !ReleaseSignature.VerifyFile(staged, offer.Signature, _releaseKey))
+            {
+                File.Delete(staged);
+                _logger.LogError("Downloaded agent {Version} isn't signed by the Cabinet release key; keeping this version", offer.Version);
+                return false;
+            }
+
+            if (!signed)
+            {
+                _logger.LogWarning("Installing agent {Version} without a publisher signature because Agent:Update:AllowUnsigned is on", offer.Version);
             }
 
             Install(staged);

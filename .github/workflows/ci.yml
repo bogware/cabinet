@@ -1,34 +1,35 @@
-name: Cabinet CI/CD
+name: CI
 
+# Manual only: run it from the Actions tab or `gh workflow run ci.yml --ref <branch>`. Nothing
+# runs on push, pull request, tag or schedule (docs/CI.md). The Release workflow calls it too,
+# with the commit it is about to release, so a release is always the commit that was tested.
 on:
-  push:
-    branches: [main, develop, 'release/*']
-    tags: ['v*']
-  pull_request:
-    branches: [main, develop]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (a full SHA, from the Release workflow)
+        type: string
+        required: true
 
 env:
   DOTNET_VERSION: '10.0.x'
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}
 
-# Runner policy, see docs/CI.md: everything runs on self-hosted runners while this repository
-# is private. Pull requests must move to GitHub-hosted runners before it goes public.
+# Runner policy, see docs/CI.md. Read-only token; no job here needs more.
 permissions:
   contents: read
 
-# A newer push to a branch supersedes older runs. Tag builds always finish.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   build-and-test:
     name: Build & Test
-    # A pull request from a fork runs code anyone wrote, and self-hosted runners keep state
-    # between jobs and can reach Docker. Those wait for GitHub-hosted runners (docs/CI.md).
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    permissions:
+      contents: read
+    timeout-minutes: 120
     services:
       postgres:
         image: postgres:16-alpine
@@ -72,8 +73,19 @@ jobs:
           --health-timeout 5s
           --health-retries 24
     steps:
+    - name: Check the commit to test
+      if: inputs.ref != ''
+      env:
+        REF: ${{ inputs.ref }}
+      run: |
+        if [[ ! "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::ref must be a full commit SHA"
+          exit 1
+        fi
+
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
+        ref: ${{ inputs.ref }}
         persist-credentials: false
 
     - uses: ./.github/actions/isolate-job
@@ -86,7 +98,7 @@ jobs:
     - name: Check packaging tools
       if: runner.environment == 'self-hosted'
       run: |
-        for tool in docker python3 dpkg-deb sha256sum; do
+        for tool in docker python3 dpkg-deb sha256sum openssl; do
           command -v "$tool" >/dev/null || echo "::warning::$tool is missing; release jobs need it"
         done
 
@@ -134,526 +146,6 @@ jobs:
         name: test-results
         path: '**/TestResults/**'
         retention-days: 30
-
-    - name: Remove job state
-      if: always()
-      run: rm -rf "$CABINET_JOB_DIR"
-
-  release:
-    name: Build ${{ matrix.artifact_name }}
-    needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: win-x64
-            artifact_name: cabinet-win-x64
-          - rid: linux-x64
-            artifact_name: cabinet-linux-x64
-          - rid: linux-arm64
-            artifact_name: cabinet-linux-arm64
-          - rid: osx-x64
-            artifact_name: cabinet-osx-x64
-          - rid: osx-arm64
-            artifact_name: cabinet-osx-arm64
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        persist-credentials: false
-
-    - uses: ./.github/actions/isolate-job
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-
-    - name: Version from tag
-      id: version
-      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-    - name: Publish API
-      run: |
-        dotnet publish src/Cabinet.API/Cabinet.API.csproj \
-          --configuration Release \
-          --runtime ${{ matrix.rid }} \
-          --self-contained true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -p:PublishSingleFile=true \
-          -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          --output ./publish/api
-
-    - name: Publish CLI
-      run: |
-        dotnet publish src/Cabinet.CLI/Cabinet.CLI.csproj \
-          --configuration Release \
-          --runtime ${{ matrix.rid }} \
-          --self-contained true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -p:PublishSingleFile=true \
-          -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          --output ./publish/cli
-
-    - name: Publish Agent
-      run: |
-        dotnet publish src/Cabinet.Agent/Cabinet.Agent.csproj \
-          --configuration Release \
-          --runtime ${{ matrix.rid }} \
-          --self-contained true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -p:PublishSingleFile=true \
-          -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          --output ./publish/agent
-
-    - name: Package (tar.gz)
-      if: matrix.rid != 'win-x64'
-      run: |
-        cd publish
-        tar czf ../${{ matrix.artifact_name }}.tar.gz api/ cli/ agent/
-        cd ..
-        sha256sum ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
-
-    - name: Package (zip)
-      if: matrix.rid == 'win-x64'
-      run: |
-        cd publish
-        python3 -m zipfile -c ../${{ matrix.artifact_name }}.zip api/ cli/ agent/
-        cd ..
-        sha256sum ${{ matrix.artifact_name }}.zip > ${{ matrix.artifact_name }}.zip.sha256
-
-    - name: Upload release artifact
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ${{ matrix.artifact_name }}
-        path: |
-          ${{ matrix.artifact_name }}.tar.gz
-          ${{ matrix.artifact_name }}.tar.gz.sha256
-          ${{ matrix.artifact_name }}.zip
-          ${{ matrix.artifact_name }}.zip.sha256
-        if-no-files-found: ignore
-
-    - name: Remove job state
-      if: always()
-      run: rm -rf "$CABINET_JOB_DIR"
-
-  build-deb:
-    name: Build .deb packages
-    needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: linux-x64
-            deb_arch: amd64
-          - rid: linux-arm64
-            deb_arch: arm64
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        persist-credentials: false
-
-    - uses: ./.github/actions/isolate-job
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-
-    - name: Extract version from tag
-      id: version
-      run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-    - name: Publish API
-      run: |
-        dotnet publish src/Cabinet.API/Cabinet.API.csproj \
-          -c Release -r ${{ matrix.rid }} --self-contained true \
-          -p:PublishSingleFile=true -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -o ./publish/api
-
-    - name: Publish Agent
-      run: |
-        dotnet publish src/Cabinet.Agent/Cabinet.Agent.csproj \
-          -c Release -r ${{ matrix.rid }} --self-contained true \
-          -p:PublishSingleFile=true -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -o ./publish/agent
-
-    - name: Publish CLI
-      run: |
-        dotnet publish src/Cabinet.CLI/Cabinet.CLI.csproj \
-          -c Release -r ${{ matrix.rid }} --self-contained true \
-          -p:PublishSingleFile=true -p:PublishTrimmed=false \
-          -p:IncludeNativeLibrariesForSelfExtract=true \
-          -p:Version=${{ steps.version.outputs.version }} \
-          -o ./publish/cli
-
-    - name: Build cabinet-api .deb
-      run: |
-        # Debian sorts "~" before everything, so 3.0.0~rc.1 comes before 3.0.0; "-" would be a revision
-        VERSION=$(echo "${{ steps.version.outputs.version }}" | tr - '~')
-        DEB_ARCH=${{ matrix.deb_arch }}
-        PKG_DIR=deb-api
-
-        mkdir -p $PKG_DIR/DEBIAN
-        mkdir -p $PKG_DIR/opt/cabinet/api
-        mkdir -p $PKG_DIR/opt/cabinet/cli
-        mkdir -p $PKG_DIR/etc/cabinet
-        mkdir -p $PKG_DIR/var/lib/cabinet
-        mkdir -p $PKG_DIR/lib/systemd/system
-
-        cp -r publish/api/* $PKG_DIR/opt/cabinet/api/
-        cp -r publish/cli/* $PKG_DIR/opt/cabinet/cli/
-
-        cat > $PKG_DIR/DEBIAN/control <<EOF
-        Package: cabinet-api
-        Version: $VERSION
-        Section: admin
-        Priority: optional
-        Architecture: $DEB_ARCH
-        Maintainer: Cabinet Team <cabinet@example.com>
-        Description: Cabinet Log Intelligence System - API Server
-         Cabinet is a log management and intelligence system designed as a
-         Splunk replacement. This package contains the API server and CLI.
-        Homepage: https://github.com/bogware/cabinet
-        EOF
-        # Remove leading whitespace from control file
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/control
-
-        cat > $PKG_DIR/DEBIAN/postinst <<'POSTINST'
-        #!/bin/bash
-        set -e
-        if ! id cabinet &>/dev/null; then
-            useradd --system --no-create-home --shell /sbin/nologin cabinet
-        fi
-        chown -R cabinet:cabinet /var/lib/cabinet
-        chown -R cabinet:cabinet /opt/cabinet/api
-        chmod +x /opt/cabinet/api/Cabinet.API
-        if [ -f /opt/cabinet/cli/cabinet ]; then
-            ln -sf /opt/cabinet/cli/cabinet /usr/local/bin/cabinet
-            chmod +x /opt/cabinet/cli/cabinet
-        fi
-        systemctl daemon-reload
-        systemctl enable cabinet-api.service || true
-        echo ""
-        echo "Cabinet API installed. To start:"
-        echo "  sudo systemctl start cabinet-api"
-        echo "  Dashboard: http://localhost:8080/"
-        POSTINST
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/postinst
-        chmod 755 $PKG_DIR/DEBIAN/postinst
-
-        cat > $PKG_DIR/DEBIAN/prerm <<'PRERM'
-        #!/bin/bash
-        set -e
-        systemctl stop cabinet-api.service 2>/dev/null || true
-        systemctl disable cabinet-api.service 2>/dev/null || true
-        PRERM
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/prerm
-        chmod 755 $PKG_DIR/DEBIAN/prerm
-
-        cat > $PKG_DIR/lib/systemd/system/cabinet-api.service <<SVCEOF
-        [Unit]
-        Description=Cabinet API Server - Log Intelligence System
-        Documentation=https://github.com/bogware/cabinet
-        After=network-online.target
-        Wants=network-online.target
-
-        [Service]
-        Type=notify
-        ExecStart=/opt/cabinet/api/Cabinet.API --urls http://0.0.0.0:8080
-        WorkingDirectory=/opt/cabinet/api
-        Restart=on-failure
-        RestartSec=10
-        User=cabinet
-        Group=cabinet
-        UMask=0027
-        NoNewPrivileges=true
-        ProtectSystem=strict
-        ProtectHome=true
-        PrivateTmp=true
-        PrivateDevices=true
-        ReadWritePaths=/var/lib/cabinet /opt/cabinet/api
-        Environment=ASPNETCORE_ENVIRONMENT=Production
-        EnvironmentFile=-/etc/cabinet/cabinet.env
-        StandardOutput=journal
-        StandardError=journal
-        SyslogIdentifier=cabinet-api
-        LimitNOFILE=65535
-
-        [Install]
-        WantedBy=multi-user.target
-        SVCEOF
-        sed -i 's/^        //' $PKG_DIR/lib/systemd/system/cabinet-api.service
-
-        dpkg-deb --build $PKG_DIR cabinet-api_${VERSION}_${DEB_ARCH}.deb
-        sha256sum cabinet-api_${VERSION}_${DEB_ARCH}.deb > cabinet-api_${VERSION}_${DEB_ARCH}.deb.sha256
-
-    - name: Build cabinet-agent .deb
-      run: |
-        # Debian sorts "~" before everything, so 3.0.0~rc.1 comes before 3.0.0; "-" would be a revision
-        VERSION=$(echo "${{ steps.version.outputs.version }}" | tr - '~')
-        DEB_ARCH=${{ matrix.deb_arch }}
-        PKG_DIR=deb-agent
-
-        mkdir -p $PKG_DIR/DEBIAN
-        mkdir -p $PKG_DIR/opt/cabinet/agent
-        mkdir -p $PKG_DIR/lib/systemd/system
-
-        cp -r publish/agent/* $PKG_DIR/opt/cabinet/agent/
-
-        cat > $PKG_DIR/DEBIAN/control <<EOF
-        Package: cabinet-agent
-        Version: $VERSION
-        Section: admin
-        Priority: optional
-        Architecture: $DEB_ARCH
-        Maintainer: Cabinet Team <cabinet@example.com>
-        Description: Cabinet Log Forwarding Agent
-         Cabinet Agent is a lightweight log forwarder that monitors log files
-         and sends events to a Cabinet API server for indexing and search.
-        Homepage: https://github.com/bogware/cabinet
-        EOF
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/control
-
-        cat > $PKG_DIR/DEBIAN/postinst <<'POSTINST'
-        #!/bin/bash
-        set -e
-        if ! id cabinet-agent &>/dev/null; then
-            useradd --system --no-create-home --shell /sbin/nologin cabinet-agent
-        fi
-        chown -R cabinet-agent:cabinet-agent /opt/cabinet/agent
-        chmod +x /opt/cabinet/agent/cabinet-agent
-        systemctl daemon-reload
-        systemctl enable cabinet-agent.service || true
-        echo ""
-        echo "Cabinet Agent installed. Configure /opt/cabinet/agent/appsettings.json then:"
-        echo "  sudo systemctl start cabinet-agent"
-        POSTINST
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/postinst
-        chmod 755 $PKG_DIR/DEBIAN/postinst
-
-        cat > $PKG_DIR/DEBIAN/prerm <<'PRERM'
-        #!/bin/bash
-        set -e
-        systemctl stop cabinet-agent.service 2>/dev/null || true
-        systemctl disable cabinet-agent.service 2>/dev/null || true
-        PRERM
-        sed -i 's/^        //' $PKG_DIR/DEBIAN/prerm
-        chmod 755 $PKG_DIR/DEBIAN/prerm
-
-        cat > $PKG_DIR/lib/systemd/system/cabinet-agent.service <<SVCEOF
-        [Unit]
-        Description=Cabinet Log Forwarding Agent
-        Documentation=https://github.com/bogware/cabinet
-        After=network-online.target
-        Wants=network-online.target
-
-        [Service]
-        Type=notify
-        ExecStart=/opt/cabinet/agent/cabinet-agent
-        WorkingDirectory=/opt/cabinet/agent
-        Restart=always
-        RestartSec=5
-        User=cabinet-agent
-        Group=cabinet-agent
-        UMask=0077
-        NoNewPrivileges=true
-        ProtectSystem=strict
-        ProtectHome=true
-        PrivateTmp=true
-        PrivateDevices=true
-        ReadWritePaths=/opt/cabinet/agent /var/log
-        StandardOutput=journal
-        StandardError=journal
-        SyslogIdentifier=cabinet-agent
-
-        [Install]
-        WantedBy=multi-user.target
-        SVCEOF
-        sed -i 's/^        //' $PKG_DIR/lib/systemd/system/cabinet-agent.service
-
-        dpkg-deb --build $PKG_DIR cabinet-agent_${VERSION}_${DEB_ARCH}.deb
-        sha256sum cabinet-agent_${VERSION}_${DEB_ARCH}.deb > cabinet-agent_${VERSION}_${DEB_ARCH}.deb.sha256
-
-    - name: Upload .deb artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: deb-packages-${{ matrix.deb_arch }}
-        path: |
-          *.deb
-          *.deb.sha256
-
-    - name: Remove job state
-      if: always()
-      run: rm -rf "$CABINET_JOB_DIR"
-
-  create-release:
-    name: Create GitHub Release
-    needs: [release, build-deb]
-    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
-    permissions:
-      contents: write
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        persist-credentials: false
-
-    - uses: ./.github/actions/isolate-job
-
-    - name: Download all artifacts
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-      with:
-        path: artifacts
-
-    - name: Copy install scripts
-      run: |
-        cp scripts/install-server.sh artifacts/
-        cp scripts/install-server.ps1 artifacts/
-        cp scripts/install-agent.sh artifacts/
-        cp scripts/install-agent.ps1 artifacts/
-
-    - name: Release notes from CHANGELOG.md
-      run: |
-        version="${GITHUB_REF_NAME#v}"
-        # A pre-release such as 3.0.0-rc.1 takes its notes from what isn't released yet
-        case "$version" in *-*) heading="## [Unreleased]" ;; *) heading="## [$version]" ;; esac
-        awk -v heading="$heading" '
-          index($0, heading) == 1 { found = 1; next }
-          found && /^## \[/ { exit }
-          found { print }
-        ' CHANGELOG.md > release-notes.md
-        if [ ! -s release-notes.md ]; then
-          echo "::error::CHANGELOG.md has no section for $version"
-          exit 1
-        fi
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-      with:
-        body_path: release-notes.md
-        generate_release_notes: true
-        # v3.0.0-rc.1 and the like are pre-releases: servers' update checks never offer them
-        prerelease: ${{ contains(github.ref_name, '-') }}
-        make_latest: ${{ !contains(github.ref_name, '-') }}
-        # Releases are immutable once published, and a pre-release publishes as it's created,
-        # before its assets: so upload to a draft, then publish it whole below
-        draft: true
-        files: |
-          artifacts/**/*.tar.gz
-          artifacts/**/*.tar.gz.sha256
-          artifacts/**/*.zip
-          artifacts/**/*.zip.sha256
-          artifacts/**/*.deb
-          artifacts/**/*.deb.sha256
-          artifacts/install-server.sh
-          artifacts/install-server.ps1
-          artifacts/install-agent.sh
-          artifacts/install-agent.ps1
-
-    - name: Publish the release
-      env:
-        GH_TOKEN: ${{ github.token }}
-        TAG: ${{ github.ref_name }}
-      run: |
-        if [[ "$TAG" == *-* ]]; then latest=false; else latest=true; fi
-        gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
-
-    - name: Remove job state
-      if: always()
-      run: rm -rf "$CABINET_JOB_DIR"
-
-  docker:
-    name: Docker Build & Push
-    needs: build-and-test
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ vars.CABINET_RUNNER == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        persist-credentials: false
-
-    - uses: ./.github/actions/isolate-job
-
-    - name: Set up QEMU (for multi-platform builds)
-      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-    - name: Log in to GHCR
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Docker metadata
-      id: meta
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-      with:
-        images: ${{ env.DOCKER_IMAGE }}
-        tags: |
-          type=sha
-          type=ref,event=branch
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=raw,value=latest,enable={{is_default_branch}}
-
-    - name: Build image for scanning (amd64 only, load into Docker daemon)
-      uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
-      with:
-        context: .
-        file: Dockerfile.api
-        load: true
-        tags: cabinet-scan:${{ github.run_id }}-${{ github.run_attempt }}
-        cache-from: type=gha
-
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-      with:
-        image-ref: cabinet-scan:${{ github.run_id }}-${{ github.run_attempt }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        exit-code: '1'
-        ignore-unfixed: true
-        severity: 'CRITICAL,HIGH'
-
-    - name: Upload Trivy scan results
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      if: always()
-      with:
-        name: trivy-results
-        path: trivy-results.sarif
-        retention-days: 30
-
-    - name: Remove scan image
-      if: always()
-      run: docker image rm "cabinet-scan:${{ github.run_id }}-${{ github.run_attempt }}" || true
-
-    - name: Build and push multi-platform
-      uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
-      with:
-        context: .
-        file: Dockerfile.api
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
 
     - name: Remove job state
       if: always()

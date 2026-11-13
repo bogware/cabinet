@@ -5,6 +5,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The key releases are signed with, verified before an update is installed. One file,
+         shared with the agent, so the two can't disagree. -->
+    <EmbeddedResource Include="..\..\build\release-signing.pub.pem" LogicalName="Cabinet.ReleaseSigning.pub.pem" Link="release-signing.pub.pem" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="System.DirectoryServices.Protocols" />

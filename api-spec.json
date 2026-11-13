@@ -9095,6 +9095,10 @@
           "size": {
             "type": "integer",
             "format": "int64"
+          },
+          "signature": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false

@@ -32,6 +32,15 @@ public sealed class UpdateOptions
     /// </summary>
     public List<string> AgentHosts { get; set; } = [];
 
+    /// <summary>
+    /// For development builds only: installs a release, and serves agents a build, that has no
+    /// publisher signature (releases before 3.0.1, or archives you built yourself). A signature
+    /// that is present but wrong is refused whatever this says. Off by default, and logged as a
+    /// warning whenever it's on, since it lets whoever controls the release source choose what
+    /// this server runs.
+    /// </summary>
+    public bool AllowUnsigned { get; set; }
+
     /// <summary>Whether an agent reporting this host name takes this server's agent build.</summary>
     public bool OffersAgentTo(string host) =>
         AgentHosts.Count == 0 || AgentHosts.Any(pattern => System.Text.RegularExpressions.Regex.IsMatch(
@@ -160,6 +169,13 @@ public static partial class ReleaseVersions
     /// <summary>The release archive for a platform.</summary>
     public static string ArchiveName(string platform) =>
         platform.StartsWith("win", StringComparison.Ordinal) ? $"cabinet-{platform}.zip" : $"cabinet-{platform}.tar.gz";
+
+    /// <summary>The release asset holding the signature of the agent program inside a platform's archive.</summary>
+    public static string AgentSignatureName(string platform) => $"cabinet-agent-{platform}.sig";
+
+    /// <summary>The agent program's path inside an unpacked release archive.</summary>
+    public static string AgentBinaryPath(string platform) =>
+        Path.Combine("agent", platform.StartsWith("win", StringComparison.Ordinal) ? "cabinet-agent.exe" : "cabinet-agent");
 }
 
 /// <summary>Releases from the GitHub API, with a token for private repositories.</summary>
