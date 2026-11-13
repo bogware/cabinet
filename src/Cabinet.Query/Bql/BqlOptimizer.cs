@@ -261,7 +261,33 @@ public sealed class BqlOptimizer
             ctx.SearchText = ctx.SearchText == null ? parsed.RequiredWords : $"{ctx.SearchText} {parsed.RequiredWords}";
         }
 
+        foreach (var (field, value) in parsed.RequiredFieldValues)
+        {
+            if (field.Equals("index", StringComparison.OrdinalIgnoreCase))
+            {
+                NarrowToIndex(ctx, value);
+            }
+        }
+
         return parsed.IsPlainWords;
+    }
+
+    /// <summary>
+    /// Narrows what storage reads to one index, ignoring case as every backend's index patterns do.
+    /// What storage returns is then a superset of the answer, and the stage that asked stays to
+    /// decide exactly; on the Cabinet engine only that index's files are read. Two different
+    /// indexes leave nothing, which is also the pipeline's answer.
+    /// </summary>
+    internal static void NarrowToIndex(QueryContext ctx, string index)
+    {
+        if (string.IsNullOrEmpty(index) || index.Contains('*', StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ctx.AllowedIndexes = ctx.AllowedIndexes is { } already
+            ? already.Where(existing => existing.Equals(index, StringComparison.OrdinalIgnoreCase)).ToList()
+            : [index];
     }
 
     /// <summary>
@@ -316,6 +342,13 @@ public sealed class BqlOptimizer
         {
             ctx.Host = text;
             return true;
+        }
+
+        // Storage narrows; the where stage still compares exactly
+        if (field is "index")
+        {
+            NarrowToIndex(ctx, text);
+            return false;
         }
 
         return false;

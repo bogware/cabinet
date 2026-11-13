@@ -93,6 +93,33 @@ public sealed class EndpointCapabilityTests
     }
 
     [Fact]
+    public async Task ANarrowedQuery_StaysWithinWhatTheCallerMayRead()
+    {
+        // A query narrowed to an index the caller can't read gets nothing, not that index
+        var inner = new InMemoryStorage();
+        await inner.StoreBatchAsync([
+            new LogEvent { RawLine = "secret", Index = "secret", Timestamp = DateTime.UtcNow },
+            new LogEvent { RawLine = "mine", Index = "team-a", Timestamp = DateTime.UtcNow },
+        ]);
+        var storage = new IndexRestrictedLogStorage(inner, new IndexAccessScope { ReadableIndexes = ["team-*"] });
+
+        async Task<List<string>> Read(params string[] indexes)
+        {
+            var lines = new List<string>();
+            await foreach (var e in storage.QueryAsync(new QueryContext { AllowedIndexes = indexes }))
+            {
+                lines.Add(e.RawLine);
+            }
+
+            return lines;
+        }
+
+        (await Read("secret")).Should().BeEmpty();
+        (await Read("TEAM-A")).Should().Equal("mine");
+        (await Read("secret", "team-a")).Should().Equal("mine");
+    }
+
+    [Fact]
     public async Task RestrictedStorage_FiltersEveryRead()
     {
         var inner = new InMemoryStorage();

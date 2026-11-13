@@ -277,8 +277,12 @@ public sealed class IndexRestrictedLogStorage : ILogStorage, IAggregatingLogStor
             return null;
         }
 
+        // What the query narrowed itself to, within what this caller may read. Patterns from
+        // elsewhere can't be intersected exactly, so the caller's indexes are used alone.
         var restricted = context.Clone();
-        restricted.AllowedIndexes = readable;
+        restricted.AllowedIndexes = context.AllowedIndexes is { } requested && requested.All(name => !name.Contains('*', StringComparison.Ordinal))
+            ? requested.Where(name => readable.Any(pattern => IndexPermission.Matches(pattern, name))).ToList()
+            : readable;
         return restricted;
     }
 }

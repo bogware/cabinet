@@ -23,6 +23,35 @@ public class BqlOptimizerTests
         optimized.RemainingStages.Should().NotContain(s => s is SearchStage);
     }
 
+    [Theory]
+    [InlineData("find index=web error", "web")]
+    [InlineData("find error index=Web", "Web")]
+    [InlineData("find * | where index=\"web\"", "web")]
+    public void IndexTerms_NarrowStorage_AndTheStageStaysToDecideExactly(string text, string index)
+    {
+        // Every backend matches index names ignoring case, so storage reads a superset
+        var optimized = _optimizer.Optimize(_parser.ParseBql(text));
+
+        optimized.StorageContext.AllowedIndexes.Should().Equal(index);
+        optimized.RemainingStages.Should().Contain(s => s is SearchStage || s is WhereStage);
+    }
+
+    [Theory]
+    [InlineData("find index=web OR index=db")]
+    [InlineData("find NOT index=web")]
+    [InlineData("find index=we*")]
+    [InlineData("find index!=web")]
+    public void IndexTerms_ThatArentAllRequired_DontNarrow(string text)
+    {
+        _optimizer.Optimize(_parser.ParseBql(text)).StorageContext.AllowedIndexes.Should().BeNull();
+    }
+
+    [Fact]
+    public void TwoDifferentIndexes_NarrowToNothing()
+    {
+        _optimizer.Optimize(_parser.ParseBql("find index=web index=db")).StorageContext.AllowedIndexes.Should().BeEmpty();
+    }
+
     [Fact]
     public void Optimize_WildcardSearch_NoPredicate()
     {

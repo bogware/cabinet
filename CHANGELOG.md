@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Entra ID and Cognito presets** for single sign-on (`Sso:Oidc:Provider`): from the tenant, or the region and user pool, Cabinet works out the authority, accepts Entra's v1 and v2 tokens for that tenant only (never `common` or `organizations`), knows users by their Entra object ID (the one SCIM uses, where `sub` differs per app), maps app roles (`roles`) and groups, warns when Entra leaves groups out of a token, accepts Cognito access tokens by their `client_id`, and reads groups from `cognito:groups`. Tested against a real Entra tenant and Cognito user pool.
+
+### Changed
+
+- `index=` in search text, or `where index=`, narrows what storage reads to that index, ignoring case as the search does; on the Cabinet engine only that index's files are read. A search of all time for one index used to read every event.
+- OIDC bearer tokens keep their claims' own names (`sub`, `roles`, `groups`), as the dashboard's sign-in already did. Role mappings on the long Microsoft claim URIs need the short names.
+
 ## [3.0.0] - 2026-11-13
 
 It has breaking changes to search semantics and single sign-on, listed under Changed.
