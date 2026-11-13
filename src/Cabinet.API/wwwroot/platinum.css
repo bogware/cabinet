@@ -137,9 +137,12 @@
     --sidebar-w: 232px;
     --toolbar-h: 52px;
 
-    /* Chart series: moss first; the rest were checked for contrast and colour-blind separation */
-    --series-1: #5A7848; --series-2: #d95926; --series-3: #2a78d6; --series-4: #c98500;
-    --series-5: #d55181; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+    /* Chart series: moss first. Order and steps validated (dataviz validate_palette.js) for
+       lightness band, adjacent colour-blind separation (CVD dE >= 8), normal-vision separation
+       and 3:1 contrast on the card surface, in both themes. Moss itself is the brand accent and
+       sits under the chroma floor in Light, so a series never relies on it alone: legends name it. */
+    --series-1: #5A7848; --series-2: #d55181; --series-3: #2a78d6; --series-4: #d95926;
+    --series-5: #6250d6; --series-6: #c98500; --series-7: #00949c; --series-8: #e34948;
     --chart-surface: var(--surface); --chart-grid: #E6E4DF; --chart-crosshair: #6B6862;
 
     /* Legacy names, kept so older inline styles follow the theme */
@@ -216,8 +219,8 @@
 
     --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23A9A69F'/%3E%3C/svg%3E");
 
-    --series-1: #A4BF8D; --series-2: #eb6834; --series-3: #3987e5; --series-4: #eda100;
-    --series-5: #e87ba4; --series-6: #1baf7a; --series-7: #9085e9; --series-8: #e66767;
+    --series-1: #79A35C; --series-2: #c9608c; --series-3: #3987e5; --series-4: #e0622e;
+    --series-5: #9085e9; --series-6: #bb870c; --series-7: #0fa3a0; --series-8: #e2615c;
     --chart-grid: #3A3936; --chart-crosshair: #A9A69F;
 }
 

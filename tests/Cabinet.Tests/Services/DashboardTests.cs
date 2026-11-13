@@ -42,7 +42,7 @@ public sealed class DashboardTests
     public void EveryHandlerInThePage_ExistsInTheScript()
     {
         // Named in the page, and in the HTML the scripts build
-        var scripts = App + Asset("search-page.js") + Asset("settings-page.js") + Asset("v3.js");
+        var scripts = App + Asset("search-page.js") + Asset("settings-page.js") + Asset("v3.js") + Asset("dashboard.js") + Asset("respond.js");
         var names = Regex.Matches(Html + scripts, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
 
         names.Should().NotBeEmpty();
@@ -224,6 +224,90 @@ public sealed class DashboardTests
         }.Select(script => engine.Evaluate(script).AsString());
 
         drawn.Should().AllSatisfy(svg => svg.Should().NotContain("<img"));
+    }
+
+    [Fact]
+    public void StackedBar_GivesEachGroupItsShare_AndFoldsTheRest()
+    {
+        var shares = Evaluate("""
+            CabinetCharts.shape([{ status: '200', count: 82 }, { status: '304', count: 9 }, { status: '404', count: 6 }, { status: '500', count: 3 }], 'stacked').parts.map(p => p.label + ':' + Math.round(p.share * 100))
+            """);
+        shares.Should().Be("""["200:82","304:9","404:6","500:3"]""");
+
+        Evaluate("CabinetCharts.shape(Array.from({ length: 12 }, (_, i) => ({ host: 'h' + i, count: 12 - i })), 'stacked').parts.length").Should().Be("8");
+    }
+
+    [Fact]
+    public void StackedBar_EscapesLogContent_AndNamesEveryShare()
+    {
+        var engine = Charts();
+        engine.SetValue("payload", "<img src=x onerror=alert(1)>");
+
+        var html = engine.Evaluate("CabinetCharts.stackedHtml(CabinetCharts.shape([{ host: payload, count: 3 }, { host: 'b', count: 1 }], 'stacked'))").AsString();
+
+        html.Should().NotContain("<img").And.Contain("75%").And.Contain("25%").And.Contain("role=\"img\"");
+    }
+
+    [Theory]
+    [InlineData("find * | timechart span=1h count", "Number of events per hour")]
+    [InlineData("find status>=500 | stats count", "Number of events, matching status>=500")]
+    [InlineData("find * | stats perc95(duration_ms) as p95 by path | sort p95 desc", "95th percentile of duration_ms by path")]
+    [InlineData("find * | top host limit=5", "Most common host, top 5")]
+    [InlineData("error | timechart span=5m count by host", "Number of events per 5 minutes, by host, matching error")]
+    [InlineData("find * | where action = \"deny\" | stats dc(src_ip)", "Distinct src_ip, where action = \"deny\"")]
+    public void APanelWithoutADescription_SaysWhatItsQueryMeasures(string query, string expected)
+    {
+        var engine = Charts();
+        engine.SetValue("query", query);
+
+        engine.Evaluate("CabinetCharts.describeQuery(query)").AsString().Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(1284, 1146, true, "Up 12% on yesterday", "bad")]
+    [InlineData(316, 330, true, "Down 4% on yesterday", "good")]
+    [InlineData(500, 400, null, "Up 25% on yesterday", "neutral")]
+    [InlineData(5, 5, true, "Same as yesterday", "neutral")]
+    [InlineData(3, 0, true, "Up from none in yesterday", "bad")]
+    public void ABigNumber_ComparesWithThePreviousPeriod(double current, double previous, bool? lowerIsBetter, string text, string tone)
+    {
+        var engine = Charts();
+        engine.SetValue("current", current);
+        engine.SetValue("previous", previous);
+        engine.SetValue("lower", lowerIsBetter.HasValue ? lowerIsBetter.Value : Jint.Native.JsValue.Null);
+
+        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'yesterday').text").AsString().Should().Be(text);
+        engine.Evaluate("CabinetCharts.compare(current, previous, lower, 'yesterday').tone").AsString().Should().Be(tone);
+    }
+
+    [Theory]
+    [InlineData("Server errors", true)]
+    [InlineData("find status>=500 | stats count", true)]
+    [InlineData("Blocked connections", true)]
+    [InlineData("Requests per hour", false)]
+    public void ErrorsAndDenials_AreBetterLower(string text, bool expected)
+    {
+        var engine = Charts();
+        engine.SetValue("text", text);
+
+        engine.Evaluate("CabinetCharts.lowerIsBetter(text)").AsBoolean().Should().Be(expected);
+    }
+
+    [Fact]
+    public void ShowEvents_DropsTheAggregation()
+    {
+        Charts().Evaluate("CabinetCharts.eventsQuery('find status>=500 | where host = \"web-02\" | stats count by path')").AsString()
+            .Should().Be("find status>=500 | where host = \"web-02\"");
+    }
+
+    [Fact]
+    public void OneMeasureOverTime_IsALineOverASoftWash()
+    {
+        var svg = Charts().Evaluate("""
+            CabinetCharts.timeSvg(CabinetCharts.shape([{ _time: "2026-03-04T01:00:00Z", count: 1 }, { _time: "2026-03-04T02:00:00Z", count: 3 }], 'area'), 600, 200, "Requests")
+            """).AsString();
+
+        svg.Should().Contain("linearGradient").And.Contain("stroke=\"var(--series-1)\"");
     }
 
     private static Engine Tail()

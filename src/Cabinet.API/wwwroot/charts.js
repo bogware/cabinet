@@ -7,6 +7,8 @@ const CabinetCharts = (() => {
     const MAX_SERIES = 8; // More can't be told apart. The rest fold into "Other".
     const MAX_BARS = 20;
 
+    let washCount = 0; // gradient ids, unique on the page
+
     const isNumber = value => typeof value === 'number' && Number.isFinite(value);
 
     function escapeText(value) {
@@ -85,6 +87,15 @@ const CabinetCharts = (() => {
         const sorted = rows
             .map(r => ({ label: r[labelKey] === null || r[labelKey] === undefined || r[labelKey] === '' ? '(empty)' : String(r[labelKey]), value: Number(r[valueKey]) || 0 }))
             .sort((a, b) => b.value - a.value);
+        if (viz === 'stacked') {
+            // Each group's share of the whole; past what can be told apart folds into Other
+            const positive = sorted.filter(s => s.value > 0);
+            const kept = positive.slice(0, MAX_SERIES - 1);
+            const rest = positive.slice(MAX_SERIES - 1).reduce((sum, s) => sum + s.value, 0);
+            if (rest > 0) kept.push({ label: 'Other', value: rest });
+            const total = kept.reduce((sum, s) => sum + s.value, 0);
+            return kept.length ? { kind: 'stacked', labelKey, valueKey, total, parts: kept.map(p => ({ ...p, share: p.value / total })), rows } : table;
+        }
         if (viz === 'pie') {
             // A pie of negative parts means nothing; slices past what can be told apart fold into Other
             const positive = sorted.filter(s => s.value > 0);
@@ -205,7 +216,16 @@ const CabinetCharts = (() => {
             parts.push(`<text x="${x(i)}" y="${height - 8}" text-anchor="${anchor}" class="chart-axis">${escapeText(formatTime(data.times[i], span))}</text>`);
         }
 
-        if (data.kind === 'area') {
+        if (data.kind === 'area' && data.series.length === 1) {
+            // One measure: a line with a soft wash under it
+            const values = data.series[0].values.map(v => v || 0);
+            const line = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+            const floor = y(0).toFixed(1);
+            const id = `chart-wash-${++washCount}`;
+            parts.push(`<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--series-1);stop-opacity:.28"/><stop offset="1" style="stop-color:var(--series-1);stop-opacity:0"/></linearGradient></defs>`);
+            parts.push(`<path d="${line} L${x(values.length - 1).toFixed(1)},${floor} L${x(0).toFixed(1)},${floor} Z" fill="url(#${id})"/>`);
+            parts.push(`<path d="${line}" fill="none" stroke="var(--series-1)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`);
+        } else if (data.kind === 'area') {
             const base = new Array(data.times.length).fill(0);
             data.series.forEach((s, n) => {
                 const lower = base.slice();
@@ -329,7 +349,7 @@ const CabinetCharts = (() => {
         return `<ul class="chart-legend">${series.map((s, n) => `<li><span class="chart-swatch" style="background:var(--series-${n + 1})"></span>${escapeText(s.name)}</li>`).join('')}</ul>`;
     }
 
-    function barsHtml(data) {
+    function barsHtml(data, options = {}) {
         const max = Math.max(...data.bars.map(b => b.value), 1);
         const rows = data.bars.map(bar => {
             const percent = Math.max((bar.value / max) * 100, bar.value > 0 ? 0.5 : 0);
@@ -338,7 +358,8 @@ const CabinetCharts = (() => {
                 `<span class="chart-bar-value">${escapeText(formatNumber(bar.value))}</span></li>`;
         }).join('');
         const more = data.hidden > 0 ? `<p class="chart-note">Showing the top ${data.bars.length} of ${data.bars.length + data.hidden}.</p>` : '';
-        return `<p class="chart-note">${escapeText(data.valueKey)} by ${escapeText(data.labelKey)}</p><ul class="chart-bars" aria-label="${escapeText(data.valueKey)} by ${escapeText(data.labelKey)}">${rows}</ul>${more}`;
+        const note = options.note === false ? '' : `<p class="chart-note">${escapeText(data.valueKey)} by ${escapeText(data.labelKey)}</p>`;
+        return `${note}<ul class="chart-bars" aria-label="${escapeText(data.valueKey)} by ${escapeText(data.labelKey)}">${rows}</ul>${more}`;
     }
 
     function tableHtml(columns, rows, limit) {
@@ -347,6 +368,127 @@ const CabinetCharts = (() => {
         const body = shown.map(r => `<tr>${columns.map(c => `<td>${escapeText(r[c] === null || r[c] === undefined ? '' : typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])}</td>`).join('')}</tr>`).join('');
         const more = rows.length > shown.length ? `<p class="chart-note">Showing ${shown.length} of ${rows.length} rows.</p>` : '';
         return `<div class="chart-table"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}`;
+    }
+
+    /** One bar split into each group's share, and a legend with the shares. */
+    function stackedHtml(data) {
+        const percent = share => `${(share * 100).toFixed(share < 0.1 && share > 0 ? 1 : 0)}%`;
+        const segments = data.parts.map((p, n) =>
+            `<span class="chart-stack-part" style="width:${(p.share * 100).toFixed(2)}%;background:var(--series-${n + 1})" title="${escapeText(`${p.label}: ${formatNumber(p.value)} (${percent(p.share)})`)}"></span>`).join('');
+        const legend = data.parts.map((p, n) =>
+            `<li><span class="chart-swatch" style="background:var(--series-${n + 1})"></span><span class="chart-stack-label">${escapeText(p.label)}</span><strong>${escapeText(percent(p.share))}</strong></li>`).join('');
+        const summary = `${data.valueKey} by ${data.labelKey}: ${data.parts.map(p => `${p.label} ${percent(p.share)}`).join(', ')}`;
+        return `<div class="chart-stack" role="img" aria-label="${escapeText(summary)}">${segments}</div><ul class="chart-stack-legend">${legend}</ul>`;
+    }
+
+    /**
+     * "Up 12% on the previous period", and whether that's good, bad or neither. lowerIsBetter
+     * true makes a rise bad; null or undefined leaves every change neutral.
+     */
+    function compare(current, previous, lowerIsBetter, period = 'the previous period') {
+        if (!isNumber(current) || !isNumber(previous)) return null;
+        if (previous === 0) {
+            return current === 0
+                ? { text: `Same as ${period}`, direction: 'same', tone: 'neutral' }
+                : { text: `Up from none in ${period}`, direction: 'up', tone: lowerIsBetter ? 'bad' : 'neutral' };
+        }
+        const change = (current - previous) / Math.abs(previous);
+        const rounded = Math.round(Math.abs(change) * 100);
+        if (rounded === 0) return { text: `Same as ${period}`, direction: 'same', tone: 'neutral' };
+        const direction = change > 0 ? 'up' : 'down';
+        const tone = lowerIsBetter === undefined || lowerIsBetter === null ? 'neutral'
+            : (direction === 'up') === Boolean(lowerIsBetter) ? 'bad' : 'good';
+        return { text: `${direction === 'up' ? 'Up' : 'Down'} ${rounded.toLocaleString('en-US')}% on ${period}`, direction, tone };
+    }
+
+    /** Whether a count is better smaller: errors, failures, denials, 5xx. */
+    function lowerIsBetter(text) {
+        return /\b(errors?|fail(ed|ures?|s)?|denied|denies|blocked|blocks?|critical|exceptions?|timeouts?|5\d\d|5xx|attacks?|alerts?)\b/i.test(String(text || ''));
+    }
+
+    const AGGREGATES = { dc: 'Distinct', distinct_count: 'Distinct', avg: 'Average', mean: 'Average', sum: 'Total', min: 'Lowest', max: 'Highest', median: 'Median' };
+    const SPANS = { s: 'second', m: 'minute', h: 'hour', d: 'day', w: 'week' };
+
+    function ordinal(n) {
+        const last = n % 10;
+        const teen = n % 100 >= 11 && n % 100 <= 13;
+        return `${n}${teen ? 'th' : last === 1 ? 'st' : last === 2 ? 'nd' : last === 3 ? 'rd' : 'th'}`;
+    }
+
+    function describeAggregate(expr) {
+        const fn = /^\s*(\w+)\s*(?:\(\s*([^)]*)\))?/.exec(expr || '');
+        if (!fn) return 'Number of events';
+        const name = fn[1].toLowerCase();
+        const field = (fn[2] || '').trim();
+        const pct = /^(?:perc|p)(\d{1,2})$/.exec(name);
+        if (pct) return `${ordinal(Number(pct[1]))} percentile of ${field || 'the value'}`;
+        if (name === 'count') return field ? `Events with ${field}` : 'Number of events';
+        const word = AGGREGATES[name];
+        return word ? `${word} ${field}`.trim() : `${name}(${field})`;
+    }
+
+    /**
+     * What a panel's query measures, in a sentence, for a panel nobody described: "Number of
+     * events per hour, matching error". Anything it doesn't recognise stays as written.
+     */
+    function describeQuery(query) {
+        const text = String(query || '').trim();
+        if (!text) return '';
+        const stages = text.split(/\s*\|\s*/).filter(Boolean);
+        let filter = stages.shift() || '';
+        filter = filter.replace(/^(find|search)\s+/i, '').replace(/\bfrom\s+last\s+\S+/i, '').replace(/\b(earliest|latest)=\S+/gi, '').trim();
+        const filters = [];
+        if (filter && filter !== '*') filters.push(`matching ${filter}`);
+        let measure = '';
+        let first = '';
+        stages.forEach(stage => {
+            const [verb, ...words] = stage.split(/\s+/);
+            const rest = words.join(' ');
+            switch (verb.toLowerCase()) {
+                case 'where':
+                case 'search':
+                    filters.push(`where ${rest}`);
+                    break;
+                case 'timechart': {
+                    const span = /span=(\d+)([smhdw])/i.exec(rest);
+                    const by = /\bby\s+([\w.]+)/i.exec(rest);
+                    const agg = rest.replace(/span=\S+/i, '').replace(/\bby\s+[\w.]+/i, '').trim() || 'count';
+                    const one = span && span[1] === '1';
+                    const unit = span ? `${one ? '' : span[1] + ' '}${SPANS[span[2].toLowerCase()]}${one ? '' : 's'}` : 'period';
+                    measure = `${describeAggregate(agg.split(/\s+as\s+/i)[0])} per ${unit}${by ? `, by ${by[1]}` : ''}`;
+                    break;
+                }
+                case 'stats':
+                case 'chart': {
+                    const by = /\bby\s+(.+)$/i.exec(rest);
+                    const aggs = rest.replace(/\bby\s+.+$/i, '').split(',').map(a => a.split(/\s+as\s+/i)[0].trim()).filter(Boolean);
+                    measure = `${aggs.length ? aggs.map(describeAggregate).join(' and ') : 'Number of events'}${by ? ` by ${by[1].trim()}` : ''}`;
+                    break;
+                }
+                case 'top':
+                case 'rare': {
+                    const limit = /limit=(\d+)/i.exec(rest);
+                    const field = rest.replace(/limit=\S+/i, '').trim();
+                    measure = `${verb.toLowerCase() === 'top' ? 'Most' : 'Least'} common ${field}${limit ? `, top ${limit[1]}` : ''}`;
+                    break;
+                }
+                case 'head':
+                case 'limit':
+                    if (/^\d+$/.test(rest)) first = `, first ${rest}`;
+                    break;
+                default:
+                    break;
+            }
+        });
+        const sentence = [(measure || 'Events') + first].concat(filters).join(', ');
+        return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+    }
+
+    /** The query without its aggregation, to show the events behind a number. */
+    function eventsQuery(query) {
+        const stages = String(query || '').split('|');
+        const at = stages.findIndex((s, i) => i > 0 && /^\s*(stats|timechart|chart|top|rare|eventstats|streamstats|sort|head|tail|limit|fields|table)\b/i.test(s));
+        return (at < 0 ? stages : stages.slice(0, at)).join('|').trim();
     }
 
     function addHover(container, data, height) {
@@ -407,7 +549,7 @@ const CabinetCharts = (() => {
         void span;
     }
 
-    /** Draws a result into an element. viz can be line, area, bar, pie, stat, gauge, heatmap, map or table, or left out to choose. */
+    /** Draws a result into an element. viz can be line, area, bar, stacked, pie, stat, gauge, heatmap, map or table, or left out to choose. */
     function render(container, rows, options = {}) {
         const data = shape(rows, options.viz);
         const height = options.height || 240;
@@ -435,7 +577,12 @@ const CabinetCharts = (() => {
             : '';
 
         if (data.kind === 'bar') {
-            container.innerHTML = barsHtml(data) + dataTable;
+            container.innerHTML = barsHtml(data, { note: options.barNote }) + dataTable;
+            return data;
+        }
+
+        if (data.kind === 'stacked') {
+            container.innerHTML = stackedHtml(data) + dataTable;
             return data;
         }
 
@@ -466,5 +613,5 @@ const CabinetCharts = (() => {
         return data;
     }
 
-    return { shape, render, timeSvg, pieSvg, gaugeSvg, heatmapSvg, mapSvg, niceTicks, formatNumber, escapeText, tableHtml, barsHtml, legendHtml };
+    return { shape, render, timeSvg, pieSvg, gaugeSvg, heatmapSvg, mapSvg, niceTicks, formatNumber, escapeText, tableHtml, barsHtml, legendHtml, stackedHtml, compare, lowerIsBetter, describeQuery, eventsQuery };
 })();

@@ -1,6 +1,6 @@
 /* The Settings page. Colours come from the Platinum tokens in platinum.css, so both themes work. */
 
-#page-settings { padding-bottom: 72px; }
+#page-settings { padding-bottom: 0; }
 .st-layout { display: flex; gap: 0; align-items: stretch; flex: 1; }
 .st-nav {
     flex: 0 0 210px; position: sticky; top: var(--toolbar-h); align-self: flex-start; max-height: calc(100vh - var(--toolbar-h)); min-height: calc(100vh - var(--toolbar-h)); overflow-y: auto;
@@ -15,7 +15,7 @@
 .st-nav-item:hover { background: var(--group); }
 .st-nav-item[aria-current="page"] { background: var(--selected-bg); color: var(--selected-ink); font-weight: 700; }
 .st-nav-dot { min-width: 18px; padding: 0 5px; border-radius: var(--r-chip); background: var(--warn-bg); color: var(--warn); font-size: 11px; font-weight: 700; text-align: center; }
-.st-main { flex: 1; min-width: 0; max-width: 1020px; padding: 22px 28px 28px; }
+.st-main { flex: 1; min-width: 0; max-width: 1020px; padding: 22px 28px 0; display: flex; flex-direction: column; min-height: calc(100vh - var(--toolbar-h)); }
 .st-top { margin-bottom: 12px; }
 .st-top input { width: 100%; padding: 9px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); font-size: 14px; }
 .st-top input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--moss-wash); }
@@ -108,12 +108,7 @@
 .st-table tr:last-child td { border-bottom: none; }
 .st-grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 16px; }
 
-.st-savebar {
-    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50;
-    display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 10px;
-    background: var(--surface); border: none; box-shadow: var(--shadow-menu); font-size: 13px;
-}
-.st-savebar[hidden] { display: none; }
+
 
 @media (max-width: 900px) {
     .st-layout { flex-direction: column; }
@@ -121,7 +116,7 @@
     .st-nav-item { width: auto; }
     .st-nav-heading { width: 100%; padding: 8px 4px 2px; }
     .st-row { grid-template-columns: 1fr; }
-    .st-savebar { left: 16px; right: 16px; transform: none; justify-content: flex-end; }
+    .st-engine-grid { grid-template-columns: 1fr; }
 }
 
 /* Storage */
@@ -150,3 +145,58 @@
 .st-migration[hidden] { display: none; }
 .st-meter-big { height: 10px; border-radius: 5px; }
 .st-log { font-size: 12px; max-height: 220px; overflow: auto; background: var(--well); padding: 8px; border-radius: var(--r-field); white-space: pre-wrap; font-family: var(--font-mono); }
+
+/* ===== Platinum settings: sections, provenance, Apply ===== */
+.st-nav-item > span:first-child { flex: 1; min-width: 0; }
+.st-nav-meta { font-size: 11.5px; opacity: .75; white-space: nowrap; }
+.st-head { margin-bottom: 22px; }
+.st-head h2 { margin-bottom: 4px; }
+.st-head .st-intro { margin: 0; }
+.st-section + .st-section { margin-top: 0; }
+.st-group { margin-bottom: 22px; }
+.st-group-title { font-size: var(--fs-15); font-weight: 700; margin: 0 0 2px; }
+.st-group-intro { font-size: var(--fs-13); color: var(--ink-2); margin: 0 0 10px; }
+.st-provenance { font-size: 12px; color: var(--ink-2); margin-top: 6px; line-height: 1.5; }
+.st-provenance code { font-size: 11.5px; color: var(--ink); }
+.st-reset { font-size: 12.5px; padding: 4px 0; }
+#page-settings.st-searching .st-group, #page-settings.st-searching .st-storage { margin-bottom: 16px; }
+
+/* Storage pane */
+.st-storage { display: flex; flex-direction: column; gap: 22px; margin-bottom: 22px; }
+.st-storage .st-card, .st-storage .st-actions { margin: 0; }
+.st-disk { display: flex; flex-direction: column; gap: 10px; padding: 42px 18px 16px; }
+.st-disk-title { left: 18px; }
+.st-disk-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.st-disk-path { font-family: var(--font-mono); font-size: 13px; flex: 1; min-width: 200px; word-break: break-all; }
+.st-disk-facts { font-size: 13px; }
+.st-disk .st-meter { display: block; margin: 0; }
+.st-disk-note { font-size: 12.5px; color: var(--ink-2); }
+.st-disk .group-panel-title, .st-engine .group-panel-title { left: 18px; }
+.st-engine { padding: 42px 18px 14px; }
+.st-engine-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; }
+.st-radio { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.st-radio input { margin-top: 2px; }
+.st-radio > span { display: flex; flex-direction: column; }
+.st-radio-name { font-size: 14px; }
+.st-radio input:checked + span .st-radio-name { font-weight: 700; }
+.st-radio-desc { font-size: 12.5px; color: var(--ink-2); }
+.st-engine .st-provenance { border-top: 1px solid var(--hairline); padding-top: 8px; margin-top: 12px; }
+.st-engine-warn { font-size: 12.5px; background: var(--warn-bg); color: var(--ink); border-radius: var(--r-field); padding: 8px 10px; margin: 12px 0 0; }
+.st-keep { display: grid; grid-template-columns: 1fr auto; gap: 4px 20px; align-items: center; padding: 0 4px; }
+.st-keep-label { font-size: 14px; font-weight: 700; }
+.st-keep-control { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.st-keep-control input { width: 90px; font-weight: 700; font-size: 13.5px; }
+.st-keep-desc, .st-keep .st-provenance { grid-column: 1; font-size: 12.5px; color: var(--ink-2); margin: 0; }
+.st-keep .st-provenance { font-size: 12px; }
+.st-actions-intro { grid-column: 1 / -1; margin: 0; }
+
+/* Apply footer: the change count, Revert and the default Apply */
+.st-footer {
+    position: sticky; bottom: 0; z-index: 5; margin-top: auto;
+    display: flex; align-items: center; gap: 12px; padding: 14px 0 18px;
+    background: var(--page); border-top: 1px solid var(--divider);
+}
+.st-footer[hidden] { display: none; }
+.st-footer #settingsSaveText { flex: 1; font-size: 13px; color: var(--ink-2); }
+.st-footer .btn { height: 32px; padding: 0 18px; font-size: 14px; }
+.st-footer .btn-primary { padding: 0 22px; }
