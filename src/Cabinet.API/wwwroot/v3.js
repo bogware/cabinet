@@ -29,61 +29,6 @@ function highlightHtml(text, terms) {
     return { html: html + escapeHtml(line.slice(last)), matched };
 }
 
-let tailPaused = false;
-let tailBuffer = [];
-const TAIL_BUFFER_LIMIT = 5000;
-const TAIL_SHOWN_LIMIT = 2000;
-
-function setTailPaused(paused) {
-    tailPaused = paused;
-    const button = document.getElementById('tailPauseBtn');
-    if (button) button.textContent = paused ? 'Resume' : 'Pause';
-    if (!paused) {
-        const waiting = tailBuffer;
-        tailBuffer = [];
-        waiting.forEach(evt => showTailEvent(evt, false));
-    }
-    updateTailCount();
-}
-
-function toggleTailPause() {
-    setTailPaused(!tailPaused);
-}
-
-function updateTailCount() {
-    const label = document.getElementById('tailCount');
-    if (label) label.textContent = `${tailCount} events` + (tailPaused ? `, ${tailBuffer.length} waiting` : '');
-}
-
-/** Each event as it arrives: shown, or kept while paused. A match can pause the tail. */
-function receiveTailEvent(evt) {
-    tailCount++;
-    if (tailPaused) {
-        // Past the limit, the oldest waiting events go, as the page would drop them anyway
-        tailBuffer.push(evt);
-        if (tailBuffer.length > TAIL_BUFFER_LIMIT) tailBuffer.shift();
-        updateTailCount();
-        return;
-    }
-    showTailEvent(evt, document.getElementById('tailPauseOnMatch')?.checked);
-}
-
-function showTailEvent(evt, pauseOnMatch) {
-    const output = document.getElementById('tailOutput');
-    const div = document.createElement('div');
-    div.style.cssText = 'padding:2px 0;border-bottom:1px solid var(--row-line)';
-    const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
-    const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'CRIT', 'FATAL'][Math.min(parseInt(evt.severity) || 0, 6)]}</span>` : '';
-    const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
-    const { html, matched } = highlightHtml(raw, highlightTerms(document.getElementById('tailHighlight')?.value));
-    div.innerHTML = `<span style="color:var(--text-muted);margin-right:8px">${esc(ts)}</span>${sev}<span>${html}</span>`;
-    if (matched) div.style.background = 'var(--warning-bg, rgba(210,153,34,0.15))';
-    output.appendChild(div);
-    output.scrollTop = output.scrollHeight;
-    while (output.children.length > TAIL_SHOWN_LIMIT) output.removeChild(output.firstChild);
-    updateTailCount();
-    if (matched && pauseOnMatch) setTailPaused(true);
-}
 
 /* ===== Investigate ===== */
 window.EXTRA_PAGES.investigate = { title: 'Investigate', load: () => loadInvestigatorStatus() };

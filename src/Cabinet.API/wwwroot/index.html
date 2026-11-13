@@ -10,6 +10,8 @@
     <script src="theme.js"></script>
     <link rel="stylesheet" href="platinum.css">
     <link rel="stylesheet" href="search.css">
+    <link rel="stylesheet" href="livetail.css">
+    <link rel="stylesheet" href="setup.css">
     <link rel="stylesheet" href="settings.css">
 </head>
 <body>
@@ -95,135 +97,164 @@
             <div class="page active" id="page-search">
                 <header class="toolbar">
                     <div class="toolbar-title"><h1>Search</h1><p class="toolbar-purpose">Ask in plain words, or write BQL</p></div>
+                    <div class="toolbar-actions">
+                        <div class="sx-pop">
+                            <button type="button" class="popup" id="indexPickerButton" data-click="toggleIndexPicker" aria-haspopup="menu" aria-expanded="false" aria-controls="indexPicker"><span class="popup-label">Indexes</span> <span id="indexPickerValue">All</span></button>
+                            <div class="menu sx-pop-menu" id="indexPicker" role="menu" aria-label="Indexes" hidden></div>
+                        </div>
+                        <div class="sx-time">
+                            <button type="button" class="popup" id="timePickerButton" data-click="toggleTimePicker" aria-haspopup="dialog" aria-expanded="false" aria-controls="timePicker"><span class="popup-label">Time</span> <span id="timePickerValue">Last 24 hours</span></button>
+                            <div class="sx-time-panel" id="timePicker" role="dialog" aria-label="Time range" hidden>
+                                <div class="sx-time-presets" id="timePresets"></div>
+                                <div class="sx-time-section">
+                                    <label for="timeLastAmount">Last</label>
+                                    <input type="number" id="timeLastAmount" min="1" value="2" aria-label="Amount">
+                                    <select id="timeLastUnit" aria-label="Unit">
+                                        <option value="m">minutes</option><option value="h" selected>hours</option><option value="d">days</option><option value="w">weeks</option>
+                                    </select>
+                                    <button type="button" class="btn btn-sm" data-click="applyRelativeTime">Apply</button>
+                                </div>
+                                <div class="sx-time-section">
+                                    <label for="timeFrom">Between</label>
+                                    <input type="datetime-local" id="timeFrom" aria-label="From">
+                                    <input type="datetime-local" id="timeTo" aria-label="To">
+                                    <button type="button" class="btn btn-sm" data-click="applyAbsoluteTime">Apply</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="sx-more">
+                            <button type="button" class="btn" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="searchMenu">Share or export&hellip;</button>
+                            <div class="menu sx-menu" id="searchMenu" role="menu" aria-label="Share or export" hidden>
+                                <button type="button" class="menu-item" role="menuitem" data-click="copySearchLink">Copy link to this search</button>
+                                <button type="button" class="menu-item" role="menuitem" data-click="exportResults" data-args='["csv"]'>Export as CSV</button>
+                                <button type="button" class="menu-item" role="menuitem" data-click="exportResults" data-args='["json"]'>Export as JSON</button>
+                                <div class="menu-sep"></div>
+                                <button type="button" class="menu-item" role="menuitem" data-click="showJsonView">Show the rows as JSON</button>
+                                <button type="button" class="menu-item" role="menuitem" data-click="toggleWrap">Wrap long lines</button>
+                                <button type="button" class="menu-item" role="menuitem" data-click="clearSearchHistory">Clear search history</button>
+                            </div>
+                        </div>
+                    </div>
                 </header>
-                <div class="page-body">
-                <div class="sx-bar">
-                    <select id="searchIndex" class="sx-index" aria-label="Index">
-                        <option value="">All indexes</option>
-                    </select>
-                    <div class="sx-editor">
-                        <pre class="sx-highlight" id="queryHighlight" aria-hidden="true"></pre>
-                        <pre class="sx-highlight sx-problems" id="queryProblems" aria-hidden="true"></pre>
-                        <textarea id="queryInput" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off"
-                            aria-label="Query" aria-autocomplete="list" aria-controls="querySuggestions" aria-expanded="false" aria-describedby="searchUnderstood"
-                            placeholder="Ask in plain words or write BQL: errors by host since yesterday, find * | stats count by host  (press / to focus, Enter to run)"></textarea>
-                        <div class="sx-suggest" id="querySuggestions" role="listbox" aria-label="Suggestions"></div>
-                    </div>
-                    <div class="sx-time">
-                        <button type="button" class="btn btn-secondary" id="timePickerButton" data-click="toggleTimePicker" aria-haspopup="dialog" aria-expanded="false" aria-controls="timePicker">Last 24 hours &#9662;</button>
-                        <div class="sx-time-panel" id="timePicker" role="dialog" aria-label="Time range" hidden>
-                            <div class="sx-time-presets" id="timePresets"></div>
-                            <div class="sx-time-section">
-                                <label for="timeLastAmount">Last</label>
-                                <input type="number" id="timeLastAmount" min="1" value="2" aria-label="Amount">
-                                <select id="timeLastUnit" aria-label="Unit">
-                                    <option value="m">minutes</option><option value="h" selected>hours</option><option value="d">days</option><option value="w">weeks</option>
+                <div class="page-body sx-page">
+                    <div class="sx-main">
+                        <div class="sx-ask-row">
+                            <div class="ask-field sx-ask">
+                                <label class="ask-label" for="queryInput">Ask</label>
+                                <div class="sx-editor">
+                                    <pre class="sx-highlight" id="queryHighlight" aria-hidden="true"></pre>
+                                    <pre class="sx-highlight sx-problems" id="queryProblems" aria-hidden="true"></pre>
+                                    <textarea id="queryInput" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off"
+                                        aria-autocomplete="list" aria-controls="querySuggestions" aria-expanded="false" aria-describedby="searchUnderstood"
+                                        placeholder="errors by host since yesterday, or find * | stats count by host"></textarea>
+                                    <div class="sx-suggest" id="querySuggestions" role="listbox" aria-label="Suggestions"></div>
+                                </div>
+                                <span class="ask-hint" aria-hidden="true">Return &#8629;</span>
+                            </div>
+                            <button type="button" class="btn btn-primary btn-lg" id="searchBtn" data-click="executeQuery">Search</button>
+                        </div>
+                        <div class="sx-under-ask">
+                            <div class="sx-recent" id="queryHistory" aria-label="Recent searches"></div>
+                            <button type="button" class="btn-link sx-build-link" id="builderButton" data-click="toggleBuilder" aria-expanded="false" aria-controls="queryBuilder">Build a search by picking fields&hellip;</button>
+                        </div>
+                        <section class="group-panel sx-builder" id="queryBuilder" aria-label="Build a search" hidden>
+                            <h2 class="group-panel-title">Build a search</h2>
+                            <div class="sx-builder-grid">
+                                <label for="builderWords">Containing the words</label>
+                                <input type="text" id="builderWords" placeholder="Any words, or leave empty for every event">
+                                <label for="builderTime">When</label>
+                                <select id="builderTime">
+                                    <option value="">Whatever the time picker says</option><option value="15m">Last 15 minutes</option><option value="1h">Last hour</option>
+                                    <option value="4h">Last 4 hours</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+                                    <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option>
                                 </select>
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="applyRelativeTime">Apply</button>
+                                <span class="sx-builder-label">Where</span>
+                                <div><div id="builderConditions"></div><button type="button" class="btn btn-sm" data-click="addBuilderCondition">Add condition</button></div>
+                                <label for="builderShow">Show</label>
+                                <div class="sx-builder-row">
+                                    <select id="builderShow">
+                                        <option value="events">The events</option><option value="count">How many</option><option value="measure">A measure</option>
+                                        <option value="top">Most common values</option><option value="rare">Least common values</option><option value="overtime">A chart over time</option>
+                                        <option value="table">Chosen columns</option>
+                                    </select>
+                                    <select id="builderFn" aria-label="Measure">
+                                        <option value="avg">average</option><option value="sum">total</option><option value="max">highest</option><option value="min">lowest</option>
+                                        <option value="median">median</option><option value="perc95">95th percentile</option><option value="perc99">99th percentile</option><option value="dc">distinct count</option>
+                                    </select>
+                                    <select id="builderField" aria-label="Field"></select>
+                                    <select id="builderColumns" aria-label="Columns" multiple size="3"></select>
+                                </div>
+                                <label for="builderBy">For each</label>
+                                <select id="builderBy" aria-label="Group by"><option value="">(nothing)</option></select>
+                                <label for="builderLimit">At most</label>
+                                <input type="number" id="builderLimit" min="1" placeholder="All">
                             </div>
-                            <div class="sx-time-section">
-                                <label for="timeFrom">Between</label>
-                                <input type="datetime-local" id="timeFrom" aria-label="From">
-                                <input type="datetime-local" id="timeTo" aria-label="To">
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="applyAbsoluteTime">Apply</button>
+                            <div class="sx-builder-out">
+                                <code id="builderQuery"></code>
+                                <button type="button" class="btn btn-sm" data-click="useBuilderQuery">Search with this</button>
                             </div>
-                        </div>
-                    </div>
-                    <button type="button" class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
-                    <button type="button" class="btn btn-secondary" id="builderButton" data-click="toggleBuilder" aria-expanded="false" aria-controls="queryBuilder" title="Build a search by picking fields">Build</button>
-                    <div class="sx-more">
-                        <button type="button" class="btn btn-secondary" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false">More &#9662;</button>
-                        <div class="sx-menu" id="searchMenu" role="menu" hidden>
-                            <button type="button" role="menuitem" data-click="saveCurrentQuery">Save search <kbd>Ctrl+S</kbd></button>
-                            <button type="button" role="menuitem" data-click="copySearchLink">Copy link to this search</button>
-                            <button type="button" role="menuitem" data-click="exportResults" data-args='["csv"]'>Export CSV</button>
-                            <button type="button" role="menuitem" data-click="exportResults" data-args='["json"]'>Export JSON</button>
-                            <button type="button" role="menuitem" data-click="toggleWrap">Wrap long lines</button>
-                            <button type="button" role="menuitem" data-click="clearSearchHistory">Clear search history</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="sx-understood" id="searchUnderstood" aria-live="polite" hidden></div>
-                <section class="panel sx-builder" id="queryBuilder" aria-label="Build a search" hidden>
-                    <div class="sx-builder-grid">
-                        <label for="builderWords">Containing the words</label>
-                        <input type="text" id="builderWords" placeholder="Any words, or leave empty for every event">
-                        <label for="builderTime">When</label>
-                        <select id="builderTime">
-                            <option value="">Whatever the time picker says</option><option value="15m">Last 15 minutes</option><option value="1h">Last hour</option>
-                            <option value="4h">Last 4 hours</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
-                            <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option>
-                        </select>
-                        <span class="sx-builder-label">Where</span>
-                        <div><div id="builderConditions"></div><button type="button" class="btn btn-secondary btn-sm" data-click="addBuilderCondition">Add condition</button></div>
-                        <label for="builderShow">Show</label>
-                        <div class="sx-builder-row">
-                            <select id="builderShow">
-                                <option value="events">The events</option><option value="count">How many</option><option value="measure">A measure</option>
-                                <option value="top">Most common values</option><option value="rare">Least common values</option><option value="overtime">A chart over time</option>
-                                <option value="table">Chosen columns</option>
-                            </select>
-                            <select id="builderFn" aria-label="Measure">
-                                <option value="avg">average</option><option value="sum">total</option><option value="max">highest</option><option value="min">lowest</option>
-                                <option value="median">median</option><option value="perc95">95th percentile</option><option value="perc99">99th percentile</option><option value="dc">distinct count</option>
-                            </select>
-                            <select id="builderField" aria-label="Field"></select>
-                            <select id="builderColumns" aria-label="Columns" multiple size="3"></select>
-                        </div>
-                        <label for="builderBy">For each</label>
-                        <select id="builderBy" aria-label="Group by"><option value="">(nothing)</option></select>
-                        <label for="builderLimit">At most</label>
-                        <input type="number" id="builderLimit" min="1" placeholder="All">
-                    </div>
-                    <div class="sx-builder-out">
-                        <code id="builderQuery"></code>
-                        <button type="button" class="btn btn-secondary btn-sm" data-click="useBuilderQuery">Search with this</button>
-                    </div>
-                </section>
-                <div class="sx-recent" id="queryHistory" aria-label="Recent searches"></div>
-                <div class="alert alert-error" id="searchError" role="alert"></div>
-                <div class="sx-status" id="searchStatus" aria-live="polite"></div>
-                <div class="panel sx-timeline" id="timelinePanel" hidden>
-                    <div class="sx-timeline-head">
-                        <span id="timelineTitle">Events over time</span>
-                        <span>Drag across bars, or click one, to zoom in</span>
-                        <button type="button" class="btn btn-secondary btn-sm" id="timelineZoomOut" data-click="zoomOut" hidden>Zoom out</button>
-                    </div>
-                    <div class="chart-plot" id="timelinePlot"><div class="chart-tooltip" hidden></div></div>
-                </div>
-                <div class="sx-body">
-                    <aside class="sx-fields" id="fieldSidebar" aria-label="Fields" hidden>
-                        <div class="sx-fields-head">
-                            <span id="fieldCount">Fields</span>
-                            <input type="search" id="fieldFilter" placeholder="Filter fields" aria-label="Filter fields">
-                        </div>
-                        <div id="fieldSidebarBody"></div>
-                    </aside>
-                    <section class="panel sx-results" aria-label="Results">
-                        <div class="sx-results-bar">
-                            <div class="tabs" id="resultTabs" role="tablist">
-                                <div class="tab active" role="tab" data-click="switchResultTab" data-args='["events", "$this"]'>Events</div>
-                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["table", "$this"]'>Table</div>
-                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["chart", "$this"]'>Chart</div>
-                                <div class="tab" role="tab" data-click="switchResultTab" data-args='["json", "$this"]'>JSON</div>
+                        </section>
+                        <section class="group-panel sx-understood" id="searchUnderstood" aria-live="polite" aria-label="Understood as" hidden></section>
+                        <div class="alert alert-error" id="searchError" role="alert"></div>
+                        <section class="panel sx-results" id="resultsCard" aria-label="Results">
+                            <div class="panel-header sx-results-bar" id="resultsBar">
+                                <div class="segmented" id="viewSwitch" role="group" aria-label="Show the result as">
+                                    <button type="button" data-view="ranked" data-click="chooseResultView" data-args='["ranked"]' aria-pressed="false">Ranked</button>
+                                    <button type="button" data-view="timeseries" data-click="chooseResultView" data-args='["timeseries"]' aria-pressed="false">Over time</button>
+                                    <button type="button" data-view="table" data-click="chooseResultView" data-args='["table"]' aria-pressed="false">Table</button>
+                                    <button type="button" data-view="events" data-click="chooseResultView" data-args='["events"]' aria-pressed="true">Events</button>
+                                </div>
+                                <span class="sx-reason" id="viewReason"></span>
+                                <span class="sx-count" id="resultCount"></span>
                             </div>
-                            <button type="button" class="btn btn-secondary btn-sm" data-click="toggleFieldSidebar" aria-controls="fieldSidebar">Fields</button>
-                            <div class="sx-pager">
+                            <div class="sx-status" id="searchStatus" aria-live="polite"></div>
+                            <div class="sx-timeline" id="timelinePanel" hidden>
+                                <div class="chart-plot" id="timelinePlot"><div class="chart-tooltip" hidden></div></div>
+                                <div class="sx-timeline-foot">
+                                    <span id="timelineTitle">Events over time</span>
+                                    <span>Drag across the bars, or click one, to zoom in</span>
+                                    <button type="button" class="btn btn-sm" id="timelineZoomOut" data-click="zoomOut" hidden>Zoom out</button>
+                                </div>
+                            </div>
+                            <div id="resultView-events"><div class="sx-empty" id="searchEmpty"></div><div class="sx-events" id="eventList" role="listbox" aria-label="Events"></div></div>
+                            <div id="resultView-table" class="sx-table-wrap hide"><table class="sx-table"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table></div>
+                            <div id="resultView-chart" class="sx-chart hide"><div id="chartContainer"></div></div>
+                            <pre id="resultView-json" class="code-block sx-json hide"></pre>
+                            <div class="sx-pager" id="resultPager" hidden>
                                 <label for="resultPageSize">Per page</label>
-                                <select id="resultPageSize" aria-label="Results per page">
+                                <select id="resultPageSize">
                                     <option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
                                 </select>
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="prevPage" aria-label="Previous page">Previous</button>
-                                <span id="pageInfo"></span>
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="nextPage" aria-label="Next page">Next</button>
+                                <span class="sx-pager-info" id="pageInfo"></span>
+                                <button type="button" class="btn btn-sm" data-click="prevPage">Previous page</button>
+                                <button type="button" class="btn btn-sm" data-click="nextPage">Next page</button>
                             </div>
+                        </section>
+                    </div>
+                    <aside class="sx-side" id="searchSide" aria-label="About this search">
+                        <section class="group-panel sx-inspector" id="eventInspector" aria-label="Selected event" hidden>
+                            <h2 class="group-panel-title">Selected event</h2>
+                            <div id="inspectorBody"></div>
+                        </section>
+                        <section class="group-panel sx-fieldsum" id="fieldSidebar" aria-label="Fields in these results" hidden>
+                            <h2 class="group-panel-title" id="fieldCount">Fields in these results</h2>
+                            <input type="search" id="fieldFilter" placeholder="Find a field" aria-label="Find a field">
+                            <div id="fieldSidebarBody"></div>
+                        </section>
+                        <section class="group-panel sx-next" id="askNext" aria-label="Ask next">
+                            <h2 class="group-panel-title">Ask next</h2>
+                            <div id="askNextBody"></div>
+                        </section>
+                        <section class="group-panel sx-about" id="aboutResult" aria-label="About this result" hidden>
+                            <h2 class="group-panel-title">About this result</h2>
+                            <dl id="aboutResultBody"></dl>
+                        </section>
+                        <div class="sx-side-actions">
+                            <button type="button" class="btn" data-click="saveCurrentQuery">Save question&hellip;</button>
+                            <button type="button" class="btn" data-click="showAddToDashboard">Add to dashboard&hellip;</button>
+                            <button type="button" class="btn" data-click="showAlertWhen">Alert me when&hellip;</button>
                         </div>
-                        <div id="resultView-events"><div class="sx-empty" id="searchEmpty"></div><ul class="sx-events" id="eventList"></ul></div>
-                        <div id="resultView-table" class="sx-table-wrap hide"><table class="sx-table"><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table></div>
-                        <div id="resultView-chart" class="hide" style="padding:16px"><div id="chartContainer"></div></div>
-                        <pre id="resultView-json" class="code-block hide" style="margin:12px;max-height:70vh"></pre>
-                    </section>
-                </div>
+                    </aside>
                 </div>
             </div>
 
@@ -287,6 +318,7 @@
             <div class="page" id="page-ingest">
                 <header class="toolbar">
                     <div class="toolbar-title"><h1>Sources</h1><p class="toolbar-purpose">Send logs to Cabinet, or paste some to try it</p></div>
+                    <div class="toolbar-actions"><button type="button" class="btn" data-click="openSetupAssistant">Set up a source&hellip;</button></div>
                 </header>
                 <div class="page-body">
                 <div class="alert alert-success" id="ingestSuccess"></div>
@@ -313,26 +345,36 @@
             <!-- ===== LIVE TAIL PAGE ===== -->
             <div class="page" id="page-livetail">
                 <header class="toolbar">
-                    <div class="toolbar-title"><h1><span class="live-dot" id="tailDot" style="display:none"></span> Live Tail</h1><p class="toolbar-purpose">Events as they arrive, newest at the bottom</p></div>
+                    <div class="toolbar-title"><h1>Live Tail</h1><p class="toolbar-purpose">Events as they arrive, newest at the bottom</p></div>
                     <div class="toolbar-actions">
-                        <span id="tailCount" class="toolbar-count">0 events</span>
-                        <button class="btn btn-secondary" data-click="clearTail">Clear</button>
+                        <select id="tailIndex" aria-label="Index"><option value="main">main</option></select>
+                        <button type="button" class="btn" data-click="clearTail">Clear</button>
+                        <button type="button" class="btn" id="tailStartBtn" data-click="toggleTail">Stop</button>
+                        <button type="button" class="btn" data-click="saveTailAsSearch">Save as search</button>
                     </div>
                 </header>
-                <div class="page-body">
-                <div class="tail-row">
-                    <button class="btn btn-primary" id="tailStartBtn" data-click="toggleTail">Start</button>
-                    <button class="btn btn-secondary" id="tailPauseBtn" data-click="toggleTailPause" disabled>Pause</button>
-                    <input type="text" id="tailFilter" placeholder="Only show (optional)" aria-label="Only show events matching">
-                    <select id="tailIndex" aria-label="Index">
-                        <option value="main">main</option>
-                    </select>
-                    <input type="text" id="tailHighlight" placeholder="Highlight words" aria-label="Words to highlight">
-                    <label class="check-label"><input type="checkbox" id="tailPauseOnMatch"> Pause on match</label>
-                </div>
-                <div class="panel" style="height:calc(100vh - 190px);min-height:240px;overflow:hidden">
-                    <div id="tailOutput" class="tail-output"></div>
-                </div>
+                <div class="page-body lt-page">
+                    <div class="lt-controls">
+                        <button type="button" class="btn btn-primary lt-pause" id="tailPauseBtn" data-click="toggleTailPause" aria-pressed="false"><span class="lt-pause-icon" aria-hidden="true"></span><span id="tailPauseLabel">Pause</span></button>
+                        <div class="ask-field lt-filter">
+                            <label class="ask-label" for="tailFilter">Only show</label>
+                            <input type="text" id="tailFilter" placeholder="everything; or say what, such as: web servers, warnings and worse" autocomplete="off" spellcheck="false">
+                            <button type="button" class="btn btn-sm" data-click="applyTailFilter">Apply</button>
+                        </div>
+                        <div class="lt-rate" aria-live="off">
+                            <div class="lt-spark" id="tailSpark" aria-hidden="true"></div>
+                            <span id="tailRate"><b>0</b> events/s</span>
+                        </div>
+                    </div>
+                    <div class="lt-understood" id="tailUnderstood" aria-live="polite">Showing every event as it arrives.</div>
+                    <div class="lt-stream" id="tailOutput" role="log" aria-label="Live events" tabindex="0"></div>
+                    <div class="lt-foot">
+                        <span id="tailHints">Space to pause &middot; Click a line to inspect &middot; Ctrl+F to find in stream</span>
+                        <label class="lt-hl" for="tailHighlight">Highlight</label><input type="text" id="tailHighlight" placeholder="words" aria-label="Words to highlight">
+                        <label class="check-label"><input type="checkbox" id="tailPauseOnMatch"> Pause on a highlighted word</label>
+                        <span class="sx-flex"></span>
+                        <span id="tailCount">Keeping last 5,000 lines</span>
+                    </div>
                 </div>
             </div>
 
@@ -1007,6 +1049,72 @@
         </div>
     </div>
 
+    <!-- Search: add the result to a dashboard -->
+    <div class="modal-bg" id="addPanelModal">
+        <div class="modal enter-scope">
+            <h3>Add to dashboard</h3>
+            <div class="form-group"><label for="dashPanelTarget">Dashboard</label><select id="dashPanelTarget" data-change="dashPanelTargetChanged"></select></div>
+            <div class="form-group" id="dashPanelNewGroup" hidden><label for="dashPanelNewTitle">New dashboard's title</label><input type="text" id="dashPanelNewTitle" placeholder="Web traffic"></div>
+            <div class="form-group"><label for="dashPanelTitle">Panel title</label><input type="text" id="dashPanelTitle"></div>
+            <div class="form-row">
+                <div class="form-group"><label for="dashPanelType">Shown as</label><select id="dashPanelType">
+                    <option value="BarChart">Ranked bars</option><option value="LineChart">A line over time</option><option value="AreaChart">Stacked area over time</option>
+                    <option value="SingleValue">A single number</option><option value="PieChart">Pie</option><option value="Table">Table</option>
+                </select></div>
+                <div class="form-group"><label for="dashPanelWidth">Width</label><select id="dashPanelWidth">
+                    <option value="12">Full</option><option value="6" selected>Half</option><option value="4">Third</option><option value="3">Quarter</option>
+                </select></div>
+            </div>
+            <div class="form-group"><label for="dashPanelQuery">Query it runs</label><textarea id="dashPanelQuery" rows="2" spellcheck="false"></textarea></div>
+            <div id="dashPanelResult"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn" data-click="closeModal" data-args='["addPanelModal"]'>Cancel</button>
+                <button type="button" class="btn btn-primary" data-click="confirmAddToDashboard">Add panel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search: alert when the question's answer changes -->
+    <div class="modal-bg" id="alertWhenModal">
+        <div class="modal enter-scope">
+            <h3>Alert me when&hellip;</h3>
+            <p class="page-note">Runs this search on a schedule and alerts through your configured channels when the condition is met.</p>
+            <div class="form-group"><label for="alertWhenName">Name</label><input type="text" id="alertWhenName"></div>
+            <div class="form-row">
+                <div class="form-group"><label for="alertWhenCondition">Alert when</label><select id="alertWhenCondition" data-change="alertWhenConditionChanged">
+                    <option value="when_count_gt">More results than</option><option value="when_count_lt">Fewer results than</option><option value="no_results">Nothing at all is found</option>
+                </select></div>
+                <div class="form-group" id="alertWhenThresholdGroup"><label for="alertWhenThreshold">This many</label><input type="number" id="alertWhenThreshold" min="0" value="0"></div>
+            </div>
+            <div class="form-group"><label for="alertWhenEvery">Check</label><select id="alertWhenEvery">
+                <option value="5">Every 5 minutes, looking at the last 5 minutes</option><option value="15">Every 15 minutes, looking at the last 15 minutes</option>
+                <option value="60">Every hour, looking at the last hour</option><option value="1440">Every day, looking at the last day</option>
+            </select></div>
+            <div class="form-group"><label for="alertWhenQuery">Query it runs</label><textarea id="alertWhenQuery" rows="2" spellcheck="false"></textarea></div>
+            <div id="alertWhenResult"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn" data-click="closeModal" data-args='["alertWhenModal"]'>Cancel</button>
+                <button type="button" class="btn btn-primary" data-click="confirmAlertWhen">Set up alert</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search: add the selected event to a case -->
+    <div class="modal-bg" id="addToCaseModal">
+        <div class="modal enter-scope">
+            <h3>Add to case</h3>
+            <div class="form-group"><label for="caseTarget">Case</label><select id="caseTarget" data-change="caseTargetChanged"></select></div>
+            <div class="form-group" id="caseNewGroup" hidden><label for="caseNewTitle">New case's title</label><input type="text" id="caseNewTitle"></div>
+            <div class="form-group"><label for="caseNoteText">Note (optional)</label><textarea id="caseNoteText" rows="2" placeholder="Why this event matters"></textarea></div>
+            <p class="page-note">The event and the search that found it are added to the case's timeline.</p>
+            <div id="caseAddResult"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn" data-click="closeModal" data-args='["addToCaseModal"]'>Cancel</button>
+                <button type="button" class="btn btn-primary" data-click="confirmAddToCase">Add to case</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Event Detail Drawer -->
     <div class="drawer-bg" id="drawerBg" data-click="closeDrawer"></div>
     <div class="drawer" id="eventDrawer">
@@ -1331,6 +1439,8 @@
     <script src="search-page.js"></script>
     <script src="settings-page.js"></script>
     <script src="v3.js"></script>
+    <script src="livetail.js"></script>
+    <script src="setup.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

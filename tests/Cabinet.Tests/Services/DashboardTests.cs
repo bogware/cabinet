@@ -16,6 +16,9 @@ public sealed class DashboardTests
         File.ReadAllText(Path.GetFullPath(Path.Combine(
             Path.GetDirectoryName(testFile)!, "..", "..", "..", "src", "Cabinet.API", "wwwroot", name)));
 
+    private static string WwwrootFile(string name, [CallerFilePath] string testFile = "") =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testFile)!, "..", "..", "..", "src", "Cabinet.API", "wwwroot", name));
+
     private static string Html => Asset("index.html");
 
     private static string App => Asset("app.js");
@@ -42,7 +45,7 @@ public sealed class DashboardTests
     public void EveryHandlerInThePage_ExistsInTheScript()
     {
         // Named in the page, and in the HTML the scripts build
-        var scripts = App + Asset("search-page.js") + Asset("settings-page.js") + Asset("v3.js");
+        var scripts = string.Concat(Directory.GetFiles(Path.GetDirectoryName(WwwrootFile("app.js"))!, "*.js").Order().Select(File.ReadAllText));
         var names = Regex.Matches(Html + scripts, @"data-(?:click|change)=""(\w+)""").Select(match => match.Groups[1].Value).Distinct().ToList();
 
         names.Should().NotBeEmpty();

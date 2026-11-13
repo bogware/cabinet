@@ -265,8 +265,8 @@ function navigate(page) {
     const onSearch = window.location.hash.startsWith('#search');
     const url = page === 'search' ? (onSearch ? window.location.pathname + window.location.hash : '/') : '/#' + page;
     if (!(page === 'search' ? (onSearch || window.location.hash === '') : window.location.hash === '#' + page)) history.pushState({ page }, titles[page], url);
-    // Stop live tail if leaving that page
-    if (page !== 'livetail' && tailEventSource) { tailEventSource.close(); tailEventSource = null; document.getElementById('tailDot').style.display = 'none'; document.getElementById('tailStartBtn').textContent = 'Start'; }
+    // Pages that hold something open (Live Tail's stream) let go of it when left
+    Object.entries(window.EXTRA_PAGES).forEach(([name, other]) => { if (name !== page && typeof other.leave === 'function') other.leave(); });
     // Load data for page
     if (page === 'saved') loadSavedQueries();
     if (page === 'dashboards') loadDashboards();
@@ -278,7 +278,6 @@ function navigate(page) {
     if (page === 'extractions') loadExtractions();
     if (page === 'knowledge') loadKnowledgeCurrent();
     if (elementPage === 'settings') loadSettings();
-    if (page === 'livetail') loadTailIndexes();
     if (page === 'jobs') loadJobs();
     if (extra && typeof extra.load === 'function') extra.load();
 }
@@ -1453,104 +1452,7 @@ function closeDrawer() {
     document.getElementById('eventDrawer').classList.remove('show');
 }
 
-/* ===== Live Tail ===== */
-let tailEventSource = null;
-let tailCount = 0;
-
-async function loadTailIndexes() {
-    try {
-        const data = await api('GET', '/api/v1/indexes');
-        const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
-        const sel = document.getElementById('tailIndex');
-        sel.innerHTML = '';
-        if (indexes.length === 0) {
-            sel.innerHTML = '<option value="main">main</option>';
-        } else {
-            indexes.forEach(idx => {
-                const name = typeof idx === 'string' ? idx : (idx.name || idx.index || 'main');
-                const opt = document.createElement('option');
-                opt.value = name; opt.textContent = name;
-                sel.appendChild(opt);
-            });
-        }
-    } catch { /* keep default */ }
-}
-
-function toggleTail() {
-    if (tailEventSource) {
-        tailEventSource.close();
-        tailEventSource = null;
-        document.getElementById('tailDot').style.display = 'none';
-        document.getElementById('tailStartBtn').textContent = 'Start';
-        document.getElementById('tailStartBtn').classList.remove('btn-danger');
-        document.getElementById('tailStartBtn').classList.add('btn-primary');
-        return;
-    }
-    const index = document.getElementById('tailIndex').value || 'main';
-    const filter = document.getElementById('tailFilter').value.trim();
-    let url = `/api/v1/logs/stream/live?index=${encodeURIComponent(index)}&pollIntervalMs=1000`;
-    if (filter) url += `&filter=${encodeURIComponent(filter)}`;
-
-    const output = document.getElementById('tailOutput');
-    document.getElementById('tailDot').style.display = 'inline-block';
-    document.getElementById('tailStartBtn').textContent = 'Stop';
-    document.getElementById('tailStartBtn').classList.remove('btn-primary');
-    document.getElementById('tailStartBtn').classList.add('btn-danger');
-    document.getElementById('tailPauseBtn').disabled = false;
-    setTailPaused(false);
-
-    // SSE connection with API key via query param not supported; use fetch streaming instead
-    const controller = new AbortController();
-    tailEventSource = { close: () => controller.abort() };
-
-    (async () => {
-        try {
-            const res = await fetch(url, {
-                headers: { ...authHeaders(), 'Accept': 'text/event-stream' },
-                signal: controller.signal
-            });
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // keep incomplete line
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            receiveTailEvent(JSON.parse(line.slice(6)));
-                        } catch (parseError) { console.warn('Skipped a live tail line', parseError); }
-                    }
-                }
-            }
-        } catch (e) {
-            if (e.name !== 'AbortError') {
-                const div = document.createElement('div');
-                div.style.color = 'var(--error)';
-                div.textContent = 'Stream ended: ' + e.message;
-                output.appendChild(div);
-            }
-        }
-        // Clean up
-        document.getElementById('tailPauseBtn').disabled = true;
-        setTailPaused(false);
-        document.getElementById('tailDot').style.display = 'none';
-        document.getElementById('tailStartBtn').textContent = 'Start';
-        document.getElementById('tailStartBtn').classList.remove('btn-danger');
-        document.getElementById('tailStartBtn').classList.add('btn-primary');
-        tailEventSource = null;
-    })();
-}
-
-function clearTail() {
-    document.getElementById('tailOutput').innerHTML = '';
-    tailBuffer = [];
-    tailCount = 0;
-    document.getElementById('tailCount').textContent = '0 events';
-}
+/* Live Tail lives in livetail.js. */
 
 /* ===== Search Jobs ===== */
 let jobPollTimer = null;
