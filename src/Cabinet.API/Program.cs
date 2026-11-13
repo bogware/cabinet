@@ -834,6 +834,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         sp.GetRequiredService<ILogger<Cabinet.API.Services.ApiKeyService>>(),
         sp.GetService<IDocumentStore>()));
     services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp => sp.GetRequiredService<Cabinet.API.Services.ApiKeyService>());
+
+    // The user directory: local accounts, SCIM provisioning, and groups that give roles
+    Cabinet.API.Services.Identity.IdentityRegistration.AddCabinetIdentity(services, configuration);
 }
 
 // cabinet-api --restore <backup.db.gz> [--force]

@@ -32,6 +32,7 @@ public static class SettingsCatalog
         new("Updates", "Installing new releases from GitHub."),
         new("Gaming", "Parsers and detection for game servers."),
         new("Network & security", "Proxies, browser origins and single sign-on."),
+        new("Accounts", "Local accounts, their passwords and authenticator codes, and SCIM provisioning."),
         new("Background work", "How often scheduled work runs, and how instances find each other."),
     ];
 
@@ -360,6 +361,27 @@ public static class SettingsCatalog
         S("SSO:DefaultRole", "Network & security", "Default role", SettingType.Enum, "Viewer", "The role for signed-in users no mapping matches.", options: ["Viewer", "Analyst", "Admin", "SuperAdmin"]),
         S("SSO:RoleMappings", "Network & security", "Role mappings", SettingType.Json, null,
             "Claims to roles and index permissions: [{\"claimType\": \"groups\", \"claimValue\": \"ops\", \"role\": \"Analyst\", \"indexPermissions\": [{\"indexPattern\": \"ops-*\", \"capabilities\": \"Search\"}]}]."),
+
+        // Accounts
+        S("Accounts:LocalSignIn", "Accounts", "Local accounts can sign in", SettingType.Bool, true,
+            "Let users made on the Users page sign in to the dashboard with a user name and password. Off, only single sign-on and API keys work; the accounts stay."),
+        S("Accounts:PasswordMinLength", "Accounts", "Shortest password", SettingType.Int, 12,
+            "Passwords shorter than this are refused. Passwords can't contain the user name or email, and the most common ones are refused.", unit: "characters", min: 8, max: 256),
+        S("Accounts:PasswordIterations", "Accounts", "Password hashing work", SettingType.Int, 600000,
+            "PBKDF2-HMAC-SHA256 iterations for new passwords. Never fewer than 600,000. Raising it applies to each password as it's next set or used.", min: 600000, max: 10000000),
+        S("Accounts:LockoutThreshold", "Accounts", "Wrong attempts before lockout", SettingType.Int, 5,
+            "Wrong passwords or authenticator codes in a row before an account is locked. An administrator can unlock it sooner.", min: 1, max: 100),
+        S("Accounts:LockoutMinutes", "Accounts", "Lockout length", SettingType.Int, 15,
+            "How long a locked account stays locked.", unit: "minutes", min: 1, max: 1440),
+        S("Accounts:RequireMfa", "Accounts", "Require an authenticator code", SettingType.Enum, "Nobody",
+            "Local accounts that must use an authenticator app to sign in: nobody, everyone, or a role and those above it. Someone who hasn't set one up is asked to when they next sign in. Single sign-on users use their identity provider's.",
+            options: ["Nobody", "Everyone", "Analyst", "Admin", "SuperAdmin"]),
+        S("Accounts:MfaIssuer", "Accounts", "Name in authenticator apps", SettingType.String, "Cabinet",
+            "The name authenticator apps show beside the account. Name the deployment if people use more than one."),
+        S("Accounts:DirectoryCacheSeconds", "Accounts", "Reread users every", SettingType.Int, 5,
+            "How long an instance reuses what it read about a user. Deactivating someone, or signing them out everywhere, applies on other instances within this time, and at once on the one that made the change.", unit: "seconds", min: 0, max: 300),
+        S("Accounts:ScimMaxResults", "Accounts", "Most SCIM results per page", SettingType.Int, 200,
+            "The most users or groups one SCIM list returns, whatever count the identity provider asks for.", min: 10, max: 1000),
 
         // Background work
         Limit(nameof(ServerLimits.ScheduledSearchCheckSeconds), "Background work", "Check scheduled searches every",

@@ -96,6 +96,7 @@ public sealed class SettingsCatalogTests
         { "Syslog", typeof(SyslogConfiguration), [] },
         { "Webhook", typeof(Cabinet.Alerts.WebhookConfiguration), [] },
         { "Updates", typeof(UpdateOptions), [] },
+        { "Accounts", typeof(Cabinet.API.Services.Identity.AccountOptions), [] },
         // Algorithm is fixed; the cloud key providers and rotation days aren't implemented
         { "Encryption", typeof(EncryptionConfiguration), ["Algorithm", "AwsKmsKeyArn", "AzureKeyVaultUrl", "KeyRotationDays"] },
         // SAML and LDAP aren't implemented; Oidc is described setting by setting
