@@ -18,6 +18,9 @@ public enum StorageBackend
 
     /// <summary>Cabinet's own columnar engine, kept in files under <c>Storage:DataPath</c>.</summary>
     Cabinet,
+
+    /// <summary>A ClickHouse server, for volumes past one machine's disk.</summary>
+    ClickHouse,
 }
 
 /// <summary>
@@ -43,6 +46,7 @@ public static class StorageRegistration
             "POSTGRESQL" or "POSTGRES" => StorageBackend.Postgres,
             "OPENSEARCH" or "ELASTICSEARCH" => StorageBackend.OpenSearch,
             "CABINET" or "ENGINE" => StorageBackend.Cabinet,
+            "CLICKHOUSE" => StorageBackend.ClickHouse,
             _ => StorageBackend.Sqlite,
         };
 
@@ -60,7 +64,7 @@ public static class StorageRegistration
 
     /// <summary>Whether a backend stores events but nothing else, so metadata goes elsewhere.</summary>
     public static bool HoldsEventsOnly(StorageBackend backend) =>
-        backend is StorageBackend.OpenSearch or StorageBackend.Cabinet;
+        backend is StorageBackend.OpenSearch or StorageBackend.Cabinet or StorageBackend.ClickHouse;
 
     private static string? ResolveMetadataPostgres(IConfiguration configuration) =>
         HoldsEventsOnly(ResolveBackend(configuration))

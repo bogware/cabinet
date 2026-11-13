@@ -595,3 +595,31 @@ public sealed class OpenSearchBqlEndToEndTests : BqlEndToEndTests
         (await client.DeleteAsync($"{url}/_template/{_indexPrefix}-template")).EnsureSuccessStatusCode();
     }
 }
+
+[Trait("Category", "Integration")]
+public sealed class ClickHouseBqlEndToEndTests : BqlEndToEndTests
+{
+    private static readonly string? Url = Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_URL");
+
+    private ClickHouseLogStorage? _storage;
+
+    protected override bool IsAvailable => !string.IsNullOrEmpty(Url);
+
+    // A table per test class run, so runs don't see each other's events
+    protected override ILogStorage CreateStorage() => _storage = new ClickHouseLogStorage(
+        Url!,
+        NullLogger<ClickHouseLogStorage>.Instance,
+        database: "cabinet_tests",
+        table: $"e2e_{Guid.NewGuid():N}",
+        username: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER"),
+        password: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS"));
+
+    public override async Task DisposeAsync()
+    {
+        if (_storage != null)
+        {
+            await _storage.DropAsync();
+            _storage.Dispose();
+        }
+    }
+}

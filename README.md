@@ -48,7 +48,7 @@ The built-in Cabinet engine stores a million events in 50 MB, counts them in und
 <td valign="top">
 
 ### Lean to run
-One server process with no database to run, no JVM, and no cluster to babysit. It runs on Linux, Windows, Docker or Kubernetes. PostgreSQL and OpenSearch are there when you need several instances or an existing cluster.
+One server process with no database to run, no JVM, and no cluster to babysit. It runs on Linux, Windows, Docker or Kubernetes. PostgreSQL, OpenSearch and ClickHouse are there when you need several instances, an existing cluster, or more than one machine's disk.
 
 </td>
 <td valign="top">
@@ -131,7 +131,7 @@ Cabinet also takes OpenTelemetry (OTLP/HTTP), syslog, a REST API, and its own fo
 ## What's inside
 
 - **Search**: plain-English questions, BQL, and SPL syntax (OR, NOT, phrases, wildcards, `earliest=`), `stats` and `timechart`, `top` and `rare`, `eval`, `rex`, `transaction`, `join`, lookups, macros, subsearches, `cluster` for log patterns, `iplocation`, and async search jobs.
-- **Storage**: the Cabinet engine (write-ahead log, compressed column segments, per-block summaries and Bloom filters, background merges), plus SQLite, PostgreSQL and OpenSearch. Retention per index, and archive to a folder or S3 before deletion.
+- **Storage**: the Cabinet engine (write-ahead log, compressed column segments, per-block summaries and Bloom filters, background merges), plus SQLite, PostgreSQL, OpenSearch and ClickHouse. Retention per index, and archive to a folder or S3 before deletion.
 - **Ingest**: Splunk HEC, OpenTelemetry logs, traces and metrics, syslog, REST, and an agent with a disk spool and checkpoints, so outages and restarts don't lose or repeat lines. An ingest pipeline drops, samples, routes or redacts before anything is stored.
 - **Detection and response**: rules evaluated on every event at ingest, 29 built-in rules, Sigma import, ATT&CK coverage, anomaly rules (spikes, silence, new values, new kinds of line), backtesting, cases, and actions to Slack, Teams, PagerDuty, Opsgenie, Jira, ServiceNow, email and webhooks.
 - **Dashboards and reports**: line, area, bar, pie, single value, gauge, heatmap, map and table panels, and scheduled reports emailed as HTML with a PDF.

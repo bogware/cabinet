@@ -349,3 +349,36 @@ public sealed class EngineSegmentAggregatePushdownTests : AggregatePushdownTests
         Directory.Delete(_path, recursive: true);
     }
 }
+
+[Trait("Category", "Integration")]
+public sealed class ClickHouseAggregatePushdownTests : AggregatePushdownTests
+{
+    private static readonly string? Url = Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_URL");
+
+    private ClickHouseLogStorage? _storage;
+
+    protected override bool IsAvailable => !string.IsNullOrEmpty(Url);
+
+    // Counts by built-in fields and time buckets; everything else runs in the pipeline
+    protected override bool PushesDown(string query) => query is
+        "find * | stats count" or "find * | stats count by host" or "find * | timechart span=1h count" or "find * | timechart span=1h count by host"
+        or "find * | timechart span=7d count" or "find \"alpha\" | stats count by sourcetype" or "find * | stats count by host | sort - count | head 2"
+        or "find * | top 5 host";
+
+    protected override ILogStorage CreateStorage() => _storage = new ClickHouseLogStorage(
+        Url!,
+        NullLogger<ClickHouseLogStorage>.Instance,
+        database: "cabinet_tests",
+        table: $"agg_{Guid.NewGuid():N}",
+        username: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_USER"),
+        password: Environment.GetEnvironmentVariable("CABINET_TEST_CLICKHOUSE_PASS"));
+
+    public override async Task DisposeAsync()
+    {
+        if (_storage != null)
+        {
+            await _storage.DropAsync();
+            _storage.Dispose();
+        }
+    }
+}

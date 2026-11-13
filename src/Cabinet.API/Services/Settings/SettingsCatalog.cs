@@ -67,8 +67,8 @@ public static class SettingsCatalog
     [
         // Storage
         S("Storage:Type", "Storage", "Storage backend", SettingType.Enum, "SQLite",
-            "Where events are stored. SQLite is a single file on this machine and suits one server. PostgreSQL suits larger volumes and several instances. OpenSearch suits very large volumes. Cabinet is the built-in columnar engine: files under the data folder, fast searches and counts over large volumes on one server. Memory keeps nothing across restarts and is for testing. Changing it doesn't move existing events.",
-            options: ["SQLite", "PostgreSQL", "OpenSearch", "Cabinet", "Memory"]),
+            "Where events are stored. SQLite is a single file on this machine and suits one server. PostgreSQL suits larger volumes and several instances. OpenSearch suits very large volumes. Cabinet is the built-in columnar engine: files under the data folder, fast searches and counts over large volumes on one server. ClickHouse suits volumes past one machine's disk, on a ClickHouse server you run. Memory keeps nothing across restarts and is for testing. Changing it doesn't move existing events.",
+            options: ["SQLite", "PostgreSQL", "OpenSearch", "Cabinet", "ClickHouse", "Memory"]),
         S("Storage:ConnectionString", "Storage", "Connection string", SettingType.Secret, null,
             "For SQLite, the database file, such as \"Data Source=D:\\Cabinet\\cabinet.db\". For PostgreSQL, the host, database and credentials. For OpenSearch, its URL. Hidden because it can hold a password; the storage panel shows where events are."),
         S("Storage:DataPath", "Storage", "Data folder", SettingType.String, "cabinet-data",
@@ -87,6 +87,10 @@ public static class SettingsCatalog
             "With OpenSearch or the Cabinet engine, a SQLite file for saved searches, rules, dashboards and other settings, such as \"Data Source=cabinet-meta.db\". Leave empty otherwise."),
         S("Storage:MetadataPostgresConnectionString", "Storage", "Metadata database (PostgreSQL)", SettingType.Secret, null,
             "With OpenSearch or the Cabinet engine and several instances, a PostgreSQL database for metadata, so instances share it. Takes precedence over the SQLite metadata file."),
+        S("Storage:ClickHouseDatabase", "Storage", "ClickHouse database", SettingType.String, "cabinet",
+            "With ClickHouse, the database events go in, created if missing. Storage:ConnectionString is its HTTP address, and Storage:Username and Storage:Password sign in."),
+        S("Storage:ClickHouseTable", "Storage", "ClickHouse table", SettingType.String, "events",
+            "With ClickHouse, the table events go in, created if missing."),
         S("Storage:IndexPrefix", "Storage", "OpenSearch index prefix", SettingType.String, "cabinet-logs",
             "Prefix for the OpenSearch indexes events go in."),
         S("Storage:Username", "Storage", "OpenSearch username", SettingType.String, null, "User for OpenSearch, if it requires one."),

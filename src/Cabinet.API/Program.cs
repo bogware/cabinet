@@ -850,7 +850,7 @@ void ValidateConfiguration(IConfiguration configuration)
 {
     var validStorageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch", "Cabinet", "Engine"
+        "SQLite", "Memory", "PostgreSQL", "Postgres", "OpenSearch", "Elasticsearch", "Cabinet", "Engine", "ClickHouse"
     };
 
     var storageType = configuration["Storage:Type"] ?? "SQLite";
@@ -867,6 +867,12 @@ void ValidateConfiguration(IConfiguration configuration)
         var connStr = configuration["Storage:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connStr))
             throw new InvalidOperationException("Storage:ConnectionString is required for PostgreSQL backend");
+    }
+
+    if (storageType.Equals("ClickHouse", StringComparison.OrdinalIgnoreCase)
+        && string.IsNullOrWhiteSpace(configuration["Storage:ConnectionString"]))
+    {
+        throw new InvalidOperationException("Storage:ConnectionString is required for ClickHouse: its HTTP address, such as http://clickhouse:8123");
     }
 
     if (storageType.Equals("OpenSearch", StringComparison.OrdinalIgnoreCase) ||
@@ -915,7 +921,7 @@ void ValidateConfiguration(IConfiguration configuration)
 async Task InitializeStorageWithRetryAsync(ILogStorage storage, IConfiguration configuration)
 {
     var storageType = configuration["Storage:Type"] ?? "SQLite";
-    var isRemoteBackend = storageType.ToUpperInvariant() is "POSTGRESQL" or "POSTGRES" or "OPENSEARCH" or "ELASTICSEARCH";
+    var isRemoteBackend = storageType.ToUpperInvariant() is "POSTGRESQL" or "POSTGRES" or "OPENSEARCH" or "ELASTICSEARCH" or "CLICKHOUSE";
 
     if (!isRemoteBackend)
     {

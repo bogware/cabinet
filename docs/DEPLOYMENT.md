@@ -36,6 +36,7 @@ This guide covers installing and operating Cabinet. Run a single API instance; s
 | In-Memory | `Memory` | Lost on restart. For tests. |
 | PostgreSQL | `PostgreSQL` | CI tests against PostgreSQL 16, and Compose runs it. |
 | OpenSearch | `OpenSearch` | Connection string is the cluster URL. |
+| ClickHouse | `ClickHouse` | Connection string is its HTTP address, such as `http://clickhouse:8123`. For volumes past one machine's disk. |
 
 ## Docker Compose
 
@@ -360,11 +361,13 @@ OpenSearch also reads `Storage:IndexPrefix` (default `cabinet-logs`), `Storage:U
 
 The Cabinet engine reads `Storage:DataPath`, the folder for its files, one subfolder per index; put it on a fast local disk, not a network share. `Storage:EngineFlushEvents` (default 100,000) and `Storage:EngineFlushSeconds` (default 10) say how long new events stay in memory before going into a compressed segment; memory use grows with the first. `Storage:EngineSyncWrites` (default on) waits for each batch to reach the disk before acknowledging it. `Storage:EngineMaxSegmentEvents` (default 5,000,000) caps how large background merges make segments. Its metadata is kept like OpenSearch's.
 
+ClickHouse reads `Storage:ClickHouseDatabase` (default `cabinet`) and `Storage:ClickHouseTable` (default `events`), both created if missing, and signs in with `Storage:Username` and `Storage:Password`. Counts, counts by built-in fields, timecharts of counts, `top` and `rare` run in ClickHouse; other aggregates run in Cabinet. Duplicate IDs are caught before insert, with stores from one API instance taking turns, so run one writing instance per table. Its metadata is kept like OpenSearch's, and backups are ClickHouse's own (`BACKUP TABLE`).
+
 There is no fallback backend. A remote backend still unreachable after retries (2, 5 and 10 seconds apart) makes startup fail with a non-zero exit code.
 
 Where non-log data lives:
 
-| Data | SQLite | PostgreSQL | OpenSearch or Cabinet engine |
+| Data | SQLite | PostgreSQL | OpenSearch, ClickHouse or Cabinet engine |
 |------|--------|------------|------------|
 | Dashboards, knowledge objects, saved queries, schedules | Log database | PostgreSQL | Local metadata database |
 | Search jobs, data models | Log database | Local metadata database | Local metadata database |

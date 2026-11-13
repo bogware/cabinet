@@ -67,7 +67,7 @@ public static class StorageInfoService
                 size = stats.StorageSizeBytes;
                 (free, total) = Disk(location);
                 break;
-            case "OpenSearch":
+            case "OpenSearch" or "ClickHouse":
                 location = UrlHost(connection);
                 size = stats.StorageSizeBytes > 0 ? stats.StorageSizeBytes : null;
                 break;
@@ -97,12 +97,13 @@ public static class StorageInfoService
         "OPENSEARCH" or "ELASTICSEARCH" => "OpenSearch",
         "MEMORY" or "INMEMORY" => "Memory",
         "CABINET" or "ENGINE" => "Cabinet",
+        "CLICKHOUSE" => "ClickHouse",
         _ => "SQLite",
     };
 
     private static string? MetadataLocation(IConfiguration configuration, string type, string? location)
     {
-        if (type is not ("OpenSearch" or "Cabinet"))
+        if (type is not ("OpenSearch" or "Cabinet" or "ClickHouse"))
         {
             return location == null ? null : $"The same database ({location})";
         }

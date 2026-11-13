@@ -330,6 +330,7 @@ finally
 | Unit tests / CI | In-Memory | `Memory` |
 | External relational database | PostgreSQL | `PostgreSQL` |
 | Existing OpenSearch cluster | OpenSearch | `OpenSearch` |
+| More than one machine's disk, with a ClickHouse server to run | ClickHouse | `ClickHouse` |
 
 [BENCHMARKS.md](BENCHMARKS.md) has measured figures for each backend on one machine.
 
@@ -424,6 +425,7 @@ When the first stage after those filters is `stats` or `timechart`, `BqlQueryEng
 | SQLite | All but percentiles and deviations, which SQLite lacks |
 | Cabinet engine | Every aggregate, in parallel over blocks; percentiles exactly up to ten million kept values; `min` and `max` of text alone fall back |
 | OpenSearch | Counts by built-in fields and aligned time buckets |
+| ClickHouse | Counts by built-in fields and time buckets, `top` and `rare` of built-in fields |
 
 Decorators decide too: encrypted fields, extracted fields and masking for the caller all refuse, because storage can't see what the caller would. `AggregatePushdownTests` runs the same queries pushed and not pushed on every backend and requires identical answers. A pushed query reports the events it covered in `eventsScanned`, and its trace span has `cabinet.pushed_down`.
 
