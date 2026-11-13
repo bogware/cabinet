@@ -108,7 +108,7 @@ The storage chain is `PipelineLogStorage` (the ingest pipeline: drop, sample, ro
 ### Identity & auth
 
 - Event IDs are **ULIDs** (time-ordered, 26-char Crockford Base32) — not GUIDs.
-- Auth is **API key via `X-API-Key` header only** (no query string). Keys are stored as SHA-256 hashes and looked up by hash in a dictionary (`ApiKeyService`). `ARCHITECTURE.md` and the class comment say "constant-time comparison", but the code doesn't do one. Tiered keys (Basic/Professional/Enterprise) map to RBAC roles.
+- Auth is **API key via `X-API-Key` header only** (no query string). Keys are stored as SHA-256 hashes and compared with every stored hash in constant time (`ApiKeyService`). `/metrics` needs a key above Ingest when `Metrics:RequireKey` is on (new installs), except from loopback and `Metrics:AllowFrom`. Tiered keys (Basic/Professional/Enterprise) map to RBAC roles.
 - SSO: OIDC bearer tokens for API clients; for the dashboard, OIDC code flow, SAML (ITfoxtec) and LDAP all end in the `Session` cookie scheme (`BrowserSession`, `AuthController` under `/auth`). A cookie request that changes anything must carry `X-Cabinet-Request`. Claims map to roles through `ClaimRoleMapper`.
 
 ### Security pipeline (every request)

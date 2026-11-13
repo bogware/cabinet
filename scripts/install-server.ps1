@@ -252,6 +252,8 @@ else {
         ApiKeys = @{ Keys = $keys }
         Gaming = @{ Enabled = [bool]$Gaming }
         Backup = @{ ArchivePath = "$DataDir\backups" }
+        # Metrics only with a key, or from this machine; Metrics:AllowFrom adds a Prometheus server
+        Metrics = @{ RequireKey = $true }
     }
     $settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsPath -Encoding UTF8
     Protect-File $settingsPath

@@ -15,10 +15,12 @@ namespace Cabinet.API.Controllers;
 public class UpdatesController : ControllerBase
 {
     private readonly UpdateService _updates;
+    private readonly UpdateOptions _options;
 
-    public UpdatesController(UpdateService updates)
+    public UpdatesController(UpdateService updates, UpdateOptions? options = null)
     {
         _updates = updates;
+        _options = options ?? new UpdateOptions();
     }
 
     /// <summary>
@@ -79,7 +81,8 @@ public class UpdatesController : ControllerBase
 
         _updates.RecordAgent(string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)], platform, version);
         var server = ReleaseVersions.Parse(ReleaseVersions.CurrentFull)!.Value;
-        if (ReleaseVersions.Compare((ReleaseVersions.Normalize(agentVersion.Core), agentVersion.Pre), server) >= 0)
+        if (ReleaseVersions.Compare((ReleaseVersions.Normalize(agentVersion.Core), agentVersion.Pre), server) >= 0
+            || !_options.OffersAgentTo(host ?? string.Empty))
         {
             return NoContent();
         }

@@ -13,7 +13,7 @@ Only the latest `main` is supported. Fixes are not backported to earlier release
 ## Deployment guidance
 
 - **Terminate TLS at a reverse proxy.** The API container listens on plain HTTP. List the proxy in `Network:TrustedProxies`; otherwise `X-Forwarded-For` is ignored and every client appears to have the proxy's address.
-- **Restrict `/metrics` at the network.** It is unauthenticated, as are `/health`, `/health/ready` and `/health/live`.
+- **Require a key for `/metrics`** with `Metrics:RequireKey` (on for new installs), and list your Prometheus server in `Metrics:AllowFrom` or give it a key as a bearer token. `/health`, `/health/ready` and `/health/live` stay open, so restrict them at the network if their answers matter to you.
 - **Treat API keys as secrets.** Generate them with `openssl rand -hex 32` and pass them through environment variables or a secret store. The configuration value is the raw key, which the API hashes in memory.
 - **Keep Postgres off public networks.** The Compose stack doesn't publish them to the host.
 - **Protect the data directory and database.** Log contents are stored as ingested, apart from fields you configure for encryption, and returned as stored, apart from fields you configure for masking. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Use disk or database encryption as well.

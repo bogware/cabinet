@@ -176,6 +176,9 @@ if [[ ! -f "$CONFIG_DIR/appsettings.json" ]]; then
     "ArchivePath": "$DATA_DIR/backups",
     "RetentionDays": 30,
     "AutoBackupEnabled": false
+  },
+  "Metrics": {
+    "RequireKey": true
   }
 }
 CFGEOF

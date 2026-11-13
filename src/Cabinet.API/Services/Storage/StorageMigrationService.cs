@@ -104,10 +104,22 @@ public sealed class StorageMigrationService
         var normalized = StorageBackends.Normalize(type);
         if (normalized is null || !StorageBackends.Movable.Contains(normalized))
         {
-            return new StorageTestResult { Message = "Choose SQLite or PostgreSQL." };
+            return new StorageTestResult { Message = "Choose SQLite, PostgreSQL or the Cabinet engine." };
         }
 
         var location = StorageBackends.Describe(normalized, connectionString);
+        if (normalized == "Cabinet")
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return new StorageTestResult { Message = "Give the folder the Cabinet engine keeps its files in." };
+            }
+
+            if (!Directory.Exists(connectionString) || !Directory.EnumerateFileSystemEntries(connectionString).Any())
+            {
+                return new StorageTestResult { Ok = true, Location = location, EventsStored = 0, Message = "An empty folder: ready to copy into. It's created when you move." };
+            }
+        }
         if (normalized == "SQLite" && StorageInfoService.SqliteFile(connectionString) is { } file && !File.Exists(file))
         {
             var folder = Path.GetDirectoryName(Path.GetFullPath(file));
@@ -198,7 +210,7 @@ public sealed class StorageMigrationService
         var target = StorageBackends.Normalize(type);
         if (target is null || !StorageBackends.Movable.Contains(target))
         {
-            throw new InvalidOperationException("Choose SQLite or PostgreSQL.");
+            throw new InvalidOperationException("Choose SQLite, PostgreSQL or the Cabinet engine.");
         }
 
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -254,10 +266,12 @@ public sealed class StorageMigrationService
         }
     }
 
-    private static bool SameLocation(string type, string a, string b) =>
-        type == "SQLite"
-            ? string.Equals(Path.GetFullPath(StorageInfoService.SqliteFile(a) ?? a), Path.GetFullPath(StorageInfoService.SqliteFile(b) ?? b), StringComparison.OrdinalIgnoreCase)
-            : string.Equals(StorageBackends.Describe(type, a), StorageBackends.Describe(type, b), StringComparison.OrdinalIgnoreCase);
+    private bool SameLocation(string type, string a, string b) => type switch
+    {
+        "SQLite" => string.Equals(Path.GetFullPath(StorageInfoService.SqliteFile(a) ?? a), Path.GetFullPath(StorageInfoService.SqliteFile(b) ?? b), StringComparison.OrdinalIgnoreCase),
+        "Cabinet" => string.Equals(Path.GetFullPath(a), StorageBackends.EngineDataPath(_configuration), StringComparison.OrdinalIgnoreCase),
+        _ => string.Equals(StorageBackends.Describe(type, a), StorageBackends.Describe(type, b), StringComparison.OrdinalIgnoreCase),
+    };
 
     private async Task RunAsync(string targetType, string targetConnection, bool copy, string principal, CancellationToken cancellationToken)
     {
@@ -535,11 +549,7 @@ public sealed class StorageMigrationService
         cancellationToken.ThrowIfCancellationRequested();
         Note("Switching", $"Switching to {StorageBackends.Describe(targetType, targetConnection)}");
         await _settings.SaveAsync(
-            new Dictionary<string, JsonElement>
-            {
-                ["Storage:Type"] = JsonSerializer.SerializeToElement(targetType),
-                ["Storage:ConnectionString"] = JsonSerializer.SerializeToElement(targetConnection),
-            },
+            StorageBackends.StorageSettings(_configuration, targetType, targetConnection).ToDictionary(pair => pair.Key, pair => JsonSerializer.SerializeToElement(pair.Value)),
             principal,
             "storage migration",
             CancellationToken.None);

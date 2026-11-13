@@ -103,7 +103,7 @@ public class ApiKeyService : IApiKeyService
         await EnsureLoadedAsync();
         var keyHash = HashKey(apiKey);
 
-        if (_keysByHash.TryGetValue(keyHash, out var keyInfo) && keyInfo.IsActive)
+        if (FindConstantTime(keyHash) is { IsActive: true } keyInfo)
         {
             // Check expiration
             if (keyInfo.ExpiresAt.HasValue && keyInfo.ExpiresAt.Value < DateTime.UtcNow)
@@ -311,6 +311,25 @@ public class ApiKeyService : IApiKeyService
         return _keysByHash.Values
             .Where(k => k.IsActive)
             .ToList();
+    }
+
+    /// <summary>
+    /// The key with this hash, compared against every stored hash in constant time, so how long a
+    /// check takes says nothing about how close a guess came to any key.
+    /// </summary>
+    private ApiKeyInfo? FindConstantTime(string keyHash)
+    {
+        var wanted = Encoding.ASCII.GetBytes(keyHash);
+        ApiKeyInfo? found = null;
+        foreach (var (hash, info) in _keysByHash)
+        {
+            if (CryptographicOperations.FixedTimeEquals(wanted, Encoding.ASCII.GetBytes(hash)))
+            {
+                found = info;
+            }
+        }
+
+        return found;
     }
 
     /// <summary>

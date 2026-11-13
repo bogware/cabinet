@@ -137,7 +137,7 @@ const STORAGE_POLL_MS = 1000;
 let storagePoll = null;
 
 function storageTypeLabel(type) {
-    return type === 'SQLite' ? 'SQLite file' : type === 'PostgreSQL' ? 'PostgreSQL database' : type;
+    return type === 'SQLite' ? 'SQLite file' : type === 'PostgreSQL' ? 'PostgreSQL database' : type === 'Cabinet' ? 'Cabinet engine folder' : type;
 }
 
 function renderStorageOverview() {
@@ -179,6 +179,7 @@ function renderStorageOverview() {
     const movable = overview && overview.movableTo.includes(type);
     document.getElementById('storageActions').hidden = !movable;
     document.getElementById('moveSqliteCard').hidden = type !== 'SQLite';
+    document.getElementById('engineCard').hidden = type === 'Cabinet';
     renderStorageProgress(overview ? overview.migration : null);
 }
 
@@ -258,6 +259,19 @@ async function switchToPostgres() {
     const what = copy ? 'Copy everything into PostgreSQL and switch to it' : 'Switch to PostgreSQL without copying (it starts with what it holds)';
     if (!confirm(`${what}? Cabinet keeps running while it copies, then restarts on PostgreSQL. The SQLite file is left as it is.`)) return;
     await startMove({ type: 'PostgreSQL', connectionString, copy }, 'postgresResult');
+}
+
+function testEngineTarget() {
+    const folder = document.getElementById('engineFolder').value.trim();
+    if (!folder) { showResult('engineResult', false, 'Enter the folder, such as D:\\Cabinet\\data'); return; }
+    return testStorage('Cabinet', folder, 'engineResult');
+}
+
+async function switchToEngine() {
+    const folder = document.getElementById('engineFolder').value.trim();
+    if (!folder) { showResult('engineResult', false, 'Enter the folder'); return; }
+    if (!confirm(`Copy everything into the Cabinet engine at ${folder} and switch to it? Cabinet keeps running while it copies, then restarts on the engine. The current database is left as it is, so you can switch back.`)) return;
+    await startMove({ type: 'Cabinet', connectionString: folder, copy: true }, 'engineResult');
 }
 
 async function startFresh() {

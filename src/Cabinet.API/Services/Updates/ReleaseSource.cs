@@ -24,6 +24,21 @@ public sealed class UpdateOptions
 
     /// <summary>The service to restart when updating. Empty = CabinetAPI on Windows, cabinet-api elsewhere.</summary>
     public string? ServiceName { get; set; }
+
+    /// <summary>
+    /// Agents that take this server's agent build, by the host name they report, with * as a
+    /// wildcard: a staged rollout, such as a test machine first and the rest after. Empty, the
+    /// default, means every agent.
+    /// </summary>
+    public List<string> AgentHosts { get; set; } = [];
+
+    /// <summary>Whether an agent reporting this host name takes this server's agent build.</summary>
+    public bool OffersAgentTo(string host) =>
+        AgentHosts.Count == 0 || AgentHosts.Any(pattern => System.Text.RegularExpressions.Regex.IsMatch(
+            host,
+            "^" + System.Text.RegularExpressions.Regex.Escape(pattern.Trim()).Replace("\\*", ".*", StringComparison.Ordinal) + "$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(100)));
 }
 
 /// <summary>A published release.</summary>

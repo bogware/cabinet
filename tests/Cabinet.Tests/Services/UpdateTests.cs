@@ -132,6 +132,19 @@ public sealed class UpdateTests : IDisposable
         ReleaseVersions.FullVersion(informational, Version.Parse(core)).Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData(new string[0], "anything", true)]
+    [InlineData(new[] { "l4d2-dev" }, "l4d2-dev", true)]
+    [InlineData(new[] { "l4d2-dev" }, "L4D2-DEV", true)]
+    [InlineData(new[] { "l4d2-dev" }, "l4d2-prod", false)]
+    [InlineData(new[] { "web-*", "db-1" }, "web-07", true)]
+    [InlineData(new[] { "web-*" }, "xweb-07", false)]
+    [InlineData(new[] { "a.b" }, "axb", false)]
+    public void AgentRollout_OffersTheBuildToListedHosts(string[] hosts, string host, bool offered)
+    {
+        new UpdateOptions { AgentHosts = [.. hosts] }.OffersAgentTo(host).Should().Be(offered);
+    }
+
     [Fact]
     public void FourPartVersions_CompareAsThree()
     {

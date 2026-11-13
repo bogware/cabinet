@@ -199,7 +199,7 @@ OIDC bearer tokens are covered in ADR-008.
 - API keys are 32+ character random strings — not vulnerable to dictionary attacks
 - SHA-256 is fast, and a key is validated on every request
 - bcrypt/Argon2 are deliberately slow, which would add latency to every request
-- `ApiKeyService` looks keys up by SHA-256 hash in a dictionary. It does not do a constant-time comparison.
+- `ApiKeyService` hashes a presented key with SHA-256 and compares it with every stored hash in constant time.
 
 Configuration holds the raw key. It is hashed when loaded, and only the hash is kept in memory. Validation is local on every instance.
 

@@ -13,7 +13,7 @@ namespace Cabinet.API.Services.Storage;
 public static class StorageBackends
 {
     /// <summary>Backends events can be moved between.</summary>
-    public static readonly IReadOnlyList<string> Movable = ["SQLite", "PostgreSQL"];
+    public static readonly IReadOnlyList<string> Movable = ["SQLite", "PostgreSQL", "Cabinet"];
 
     /// <summary>The canonical name for a storage type, or null if it isn't one.</summary>
     public static string? Normalize(string? type) => (type ?? string.Empty).ToUpperInvariant() switch
@@ -31,12 +31,30 @@ public static class StorageBackends
     public static IConfiguration With(IConfiguration configuration, string type, string connectionString) =>
         new ConfigurationBuilder()
             .AddConfiguration(configuration)
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Storage:Type"] = type,
-                ["Storage:ConnectionString"] = connectionString,
-            })
+            .AddInMemoryCollection(StorageSettings(configuration, type, connectionString).ToDictionary(pair => pair.Key, pair => (string?)pair.Value))
             .Build();
+
+    /// <summary>
+    /// The settings that put Cabinet on a store. For the Cabinet engine the location is its data
+    /// folder, and metadata goes in a SQLite file inside it, unless a shared PostgreSQL holds
+    /// metadata already.
+    /// </summary>
+    public static Dictionary<string, string> StorageSettings(IConfiguration configuration, string type, string location)
+    {
+        var settings = new Dictionary<string, string> { ["Storage:Type"] = type, ["Storage:ConnectionString"] = location };
+        if (Normalize(type) == "Cabinet")
+        {
+            var folder = Path.GetFullPath(location);
+            settings["Storage:ConnectionString"] = folder;
+            settings["Storage:DataPath"] = folder;
+            if (string.IsNullOrEmpty(configuration["Storage:MetadataPostgresConnectionString"]))
+            {
+                settings["Storage:MetadataConnectionString"] = $"Data Source={Path.Combine(folder, "metadata.db")}";
+            }
+        }
+
+        return settings;
+    }
 
     /// <summary>The events backend alone, without encryption or detection in front of it.</summary>
     public static ILogStorage CreateLogStorage(IConfiguration configuration, ILoggerFactory loggers)

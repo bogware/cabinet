@@ -192,6 +192,67 @@ public sealed class StorageMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task MovingToTheCabinetEngine_CopiesEverything_AndKeepsMetadataInItsFolder()
+    {
+        var (migration, gate, configuration) = Build("SQLite", Sqlite("source.db"));
+        await SeedAsync(configuration, 3210);
+        var folder = Path.Combine(_directory, "engine");
+
+        (await migration.TestAsync("Cabinet", folder)).Ok.Should().BeTrue();
+        migration.Start("Cabinet", folder, copy: true, "test");
+        var status = await WaitAsync(migration);
+
+        status.State.Should().Be("WaitingForRestart", status.Error ?? status.Phase);
+        status.EventsCopied.Should().Be(3210);
+        (await SettingAsync(configuration, "Storage:Type", "Cabinet")).Should().Be("Cabinet");
+        configuration["Storage:DataPath"].Should().Be(folder);
+        configuration["Storage:MetadataConnectionString"].Should().Be($"Data Source={Path.Combine(folder, "metadata.db")}");
+        gate.PausedBecause.Should().NotBeNull();
+        (await CountAsync(configuration)).Should().Be(3210);
+        await MetadataShouldMatchAsync(configuration);
+
+        // And back: the engine is a source too
+        var (back, _, engineConfiguration) = Build("Cabinet", folder);
+        engineConfiguration["Storage:DataPath"] = folder;
+        engineConfiguration["Storage:MetadataConnectionString"] = configuration["Storage:MetadataConnectionString"];
+        back.Start("SQLite", Sqlite("again.db"), copy: true, "test");
+        (await WaitAsync(back)).EventsCopied.Should().Be(3210);
+    }
+
+    [SkippableFact]
+    public async Task MovingFromPostgres_ToTheCabinetEngine_CopiesEventsAndMetadata()
+    {
+        Skip.If(string.IsNullOrEmpty(Postgres));
+        var database = $"cabinet_toengine_{Guid.NewGuid():N}"[..30];
+        var source = new NpgsqlConnectionStringBuilder(Postgres) { Database = database }.ConnectionString;
+        var (creator, _, _) = Build("SQLite", Sqlite("unused.db"));
+        await creator.CreatePostgresDatabaseAsync(source);
+        try
+        {
+            var (migration, _, configuration) = Build("PostgreSQL", source);
+            await SeedAsync(configuration, 2345);
+            var folder = Path.Combine(_directory, "from-postgres");
+
+            migration.Start("Cabinet", folder, copy: true, "test");
+            var status = await WaitAsync(migration);
+
+            status.State.Should().Be("WaitingForRestart", status.Error ?? status.Phase);
+            (await SettingAsync(configuration, "Storage:Type", "Cabinet")).Should().Be("Cabinet");
+            (await CountAsync(configuration)).Should().Be(2345);
+            await MetadataShouldMatchAsync(configuration);
+            (await CountAsync(StorageBackends.With(configuration, "PostgreSQL", source))).Should().Be(2345, "PostgreSQL is left as it was, to switch back to");
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var admin = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(Postgres) { Database = "postgres" }.ConnectionString);
+            await admin.OpenAsync();
+            await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{database}\" WITH (FORCE)", admin);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
     public async Task CopyingIntoADatabaseWithEvents_IsRefused_AndNothingSwitches()
     {
         var (migration, gate, configuration) = Build("SQLite", Sqlite("old.db"));

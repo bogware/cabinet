@@ -1095,6 +1095,19 @@
                                     <div class="st-result" id="moveResult" role="status"></div>
                                 </div>
 
+                                <div class="st-card" id="engineCard">
+                                    <h3>Switch to the Cabinet engine</h3>
+                                    <p class="st-desc">Cabinet's own storage: much faster searches and aggregates on one server, a fraction of the disk, and no database to run. Events, settings, rules, keys and history are copied while Cabinet keeps running; at the end new events wait a few seconds for the switch. The current database is kept, so you can switch back.</p>
+                                    <label class="st-field">Folder for its files
+                                        <input type="text" id="engineFolder" placeholder="D:\Cabinet\data" spellcheck="false">
+                                    </label>
+                                    <div class="st-buttons">
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="testEngineTarget">Check</button>
+                                        <button type="button" class="btn btn-primary btn-sm" data-click="switchToEngine">Switch to the Cabinet engine</button>
+                                    </div>
+                                    <div class="st-result" id="engineResult" role="status"></div>
+                                </div>
+
                                 <div class="st-card" id="postgresCard">
                                     <h3>Switch to PostgreSQL</h3>
                                     <p class="st-desc">Faster searches and aggregates on large volumes, and room for more than one Cabinet server. Everything is copied while Cabinet keeps running; at the end new events wait a few seconds for the switch.</p>
