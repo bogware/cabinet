@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Cabinet.API.Authentication;
+using Cabinet.API.Services.Identity;
 using Cabinet.Core.Interfaces;
 using Cabinet.Core.Models;
 using ITfoxtec.Identity.Saml2;
@@ -26,6 +27,8 @@ public sealed class AuthController : ControllerBase
     private readonly IAuditLogger _audit;
     private readonly IAuthenticationSchemeProvider _schemes;
     private readonly ILogger<AuthController> _logger;
+    private readonly UserDirectory? _directory;
+    private readonly SignInThrottle? _throttle;
 
     public AuthController(
         IAuditLogger audit,
@@ -34,7 +37,9 @@ public sealed class AuthController : ControllerBase
         SsoConfiguration? sso = null,
         ClaimRoleMapper? mapper = null,
         LdapAuthenticator? ldap = null,
-        SamlSignIn? saml = null)
+        SamlSignIn? saml = null,
+        UserDirectory? directory = null,
+        SignInThrottle? throttle = null)
     {
         _audit = audit;
         _schemes = schemes;
@@ -43,6 +48,8 @@ public sealed class AuthController : ControllerBase
         _mapper = mapper;
         _ldap = ldap;
         _saml = saml;
+        _directory = directory;
+        _throttle = throttle;
     }
 
     /// <summary>Which ways of signing in are on, and who's signed in.</summary>
@@ -51,11 +58,15 @@ public sealed class AuthController : ControllerBase
     public async Task<IActionResult> Providers()
     {
         var session = await HttpContext.AuthenticateAsync(BrowserSession.Scheme);
+        var oidc = await _schemes.GetSchemeAsync(BrowserSession.OidcScheme) != null;
         return Ok(new
         {
-            oidc = await _schemes.GetSchemeAsync(BrowserSession.OidcScheme) != null,
+            oidc,
+            oidcProvider = oidc ? OidcProviderName() : null,
             saml = _saml != null,
             ldap = _ldap != null,
+            local = _directory != null && _directory.Options.LocalSignIn && await _directory.HasLocalUsersAsync(HttpContext.RequestAborted),
+            localAccount = session.Principal?.FindFirst("ClientId")?.Value?.StartsWith(DirectoryClaims.LocalPrefix, StringComparison.Ordinal) == true,
             signedIn = session.Succeeded,
             name = session.Principal?.FindFirst(ClaimTypes.Name)?.Value ?? session.Principal?.FindFirst("name")?.Value
                 ?? session.Principal?.FindFirst("preferred_username")?.Value ?? session.Principal?.FindFirst("ClientId")?.Value,
@@ -86,13 +97,26 @@ public sealed class AuthController : ControllerBase
             return NotFound();
         }
 
-        var identity = await _ldap.AuthenticateAsync(request.Username ?? string.Empty, request.Password ?? string.Empty, cancellationToken);
+        // The same slowing as local accounts get, since the directory may not lock accounts itself
+        var userName = request.Username ?? string.Empty;
+        var address = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var attempted = AuditName.Sanitize(userName);
+        if (_throttle?.RetryAfter($"ldap:{userName}", address) is { } wait && wait > TimeSpan.Zero)
+        {
+            Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            await AuditAsync($"ldap-{attempted}", "LDAP sign-in slowed after repeated failures", false);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { message = "Too many wrong tries. Wait a moment and try again.", retryAfter = Math.Ceiling(wait.TotalSeconds) });
+        }
+
+        var identity = await _ldap.AuthenticateAsync(userName, request.Password ?? string.Empty, cancellationToken);
         if (identity == null)
         {
-            await AuditAsync($"ldap-{request.Username}", "LDAP sign-in failed", false);
+            _throttle?.Failed($"ldap:{userName}", address);
+            await AuditAsync($"ldap-{attempted}", "LDAP sign-in failed", false);
             return Unauthorized(new { message = "Wrong user name or password" });
         }
 
+        _throttle?.Succeeded($"ldap:{userName}");
         return await CompleteAsync(identity, "ldap");
     }
 
@@ -163,8 +187,20 @@ public sealed class AuthController : ControllerBase
     private async Task<IActionResult> CompleteAsync(ClaimsIdentity identity, string provider)
     {
         _mapper!.MapClaims(identity, _sso!, provider);
-        var who = identity.FindFirst("ClientId")?.Value ?? $"{provider}-unknown";
-        if (identity.FindFirst(PrincipalResolver.RoleClaim) == null)
+        var who = AuditName.Sanitize(identity.FindFirst("ClientId")?.Value ?? $"{provider}-unknown");
+
+        // A user deactivated in the directory can't sign in, whatever the provider says
+        if (!await DirectoryClaims.LinkSsoAsync(identity, _directory, session: true, HttpContext.RequestAborted))
+        {
+            await AuditAsync(who, $"{provider.ToUpperInvariant()} sign-in refused: the user is deactivated in Cabinet", false);
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Your account is deactivated in Cabinet. Ask an administrator." });
+        }
+
+        var directoryGrant = identity.FindFirst(DirectoryClaims.UserId)?.Value is { } userId && _directory != null
+            && await _directory.GetAsync(userId, HttpContext.RequestAborted) is { } directoryUser
+            ? await _directory.GrantForAsync(directoryUser, HttpContext.RequestAborted)
+            : null;
+        if (identity.FindFirst(PrincipalResolver.RoleClaim) == null && directoryGrant == null)
         {
             // Signed in at the provider, but no mapping gives them a role here
             await AuditAsync(who, $"{provider.ToUpperInvariant()} sign-in has no role in Cabinet", false);
@@ -175,6 +211,9 @@ public sealed class AuthController : ControllerBase
         await AuditAsync(who, $"Signed in with {provider.ToUpperInvariant()}", true);
         return Ok(new { name = identity.FindFirst(ClaimTypes.Name)?.Value ?? who });
     }
+
+    /// <summary>Which kind of OIDC provider is configured: Entra, Cognito or Generic, for the sign-in button's label.</summary>
+    private string OidcProviderName() => (_sso?.Oidc?.Provider ?? OidcProvider.Generic).ToString();
 
     private Task AuditAsync(string principal, string description, bool success) =>
         _audit.LogAsync(new AuditEvent

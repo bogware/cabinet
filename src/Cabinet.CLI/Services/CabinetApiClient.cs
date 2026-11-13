@@ -16,10 +16,7 @@ public class CabinetApiClient : IDisposable
 
     public CabinetApiClient(string baseUrl, string apiKey)
     {
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(baseUrl)
-        };
+        _httpClient = RemoteServer.Create(baseUrl, TimeSpan.FromSeconds(100));
         _apiKey = apiKey;
 
         _httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);

@@ -277,8 +277,12 @@ public sealed class IndexRestrictedLogStorage : ILogStorage, IAggregatingLogStor
             return null;
         }
 
+        // What the query narrowed itself to, within what this caller may read. Patterns from
+        // elsewhere can't be intersected exactly, so the caller's indexes are used alone.
         var restricted = context.Clone();
-        restricted.AllowedIndexes = readable;
+        restricted.AllowedIndexes = context.AllowedIndexes is { } requested && requested.All(name => !name.Contains('*', StringComparison.Ordinal))
+            ? requested.Where(name => readable.Any(pattern => IndexPermission.Matches(pattern, name))).ToList()
+            : readable;
         return restricted;
     }
 }
@@ -293,11 +297,13 @@ public static class PrincipalResolver
     public const string IndexPermissionClaim = "IndexPermission";
 
     /// <summary>
-    /// A stored principal wins, so an administrator can override anyone. API keys otherwise get
-    /// their tier's role, and OIDC users the role their token's claims mapped to. An identity with
-    /// neither gets nothing.
+    /// A stored principal wins, so an administrator can override anyone. Then, for someone in the
+    /// user directory, what the directory gives them now: their own role and their groups'. A
+    /// deactivated directory user gets nothing. API keys otherwise get their tier's role, and OIDC
+    /// users the role their token's claims mapped to. An identity with none of these gets nothing.
+    /// Local accounts only ever get what the directory gives them.
     /// </summary>
-    public static async Task<RbacPrincipal?> ResolveAsync(ClaimsPrincipal user, IRbacService rbac, CancellationToken cancellationToken = default)
+    public static async Task<RbacPrincipal?> ResolveAsync(ClaimsPrincipal user, IRbacService rbac, CancellationToken cancellationToken = default, Services.Identity.UserDirectory? directory = null)
     {
         var id = user.FindFirst("ClientId")?.Value;
         if (string.IsNullOrEmpty(id))
@@ -309,6 +315,32 @@ public static class PrincipalResolver
         if (principal != null)
         {
             return principal;
+        }
+
+        var local = id.StartsWith(DirectoryClaims.LocalPrefix, StringComparison.Ordinal);
+        if (user.FindFirst(DirectoryClaims.UserId)?.Value is { } userId)
+        {
+            var account = directory == null ? null : await directory.GetAsync(userId, cancellationToken);
+            if (account is not { Active: true })
+            {
+                return null;
+            }
+
+            if (await directory!.GrantForAsync(account, cancellationToken) is { } grant)
+            {
+                return new RbacPrincipal
+                {
+                    Id = id,
+                    DisplayName = account.DisplayName ?? account.UserName,
+                    Role = grant.Role,
+                    IndexPermissions = grant.IndexPermissions,
+                };
+            }
+        }
+
+        if (local)
+        {
+            return null;
         }
 
         if (!Enum.TryParse<SystemRole>(user.FindFirst(RoleClaim)?.Value, out var role))

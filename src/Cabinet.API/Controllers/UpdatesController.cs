@@ -79,7 +79,11 @@ public class UpdatesController : ControllerBase
             return Problem(detail: "Unknown platform or version", statusCode: 400);
         }
 
-        _updates.RecordAgent(string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)], platform, version);
+        _updates.RecordAgent(
+            string.IsNullOrWhiteSpace(host) ? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown" : host[..Math.Min(host.Length, 128)],
+            platform,
+            version,
+            User.FindFirst("ClientId")?.Value);
         var server = ReleaseVersions.Parse(ReleaseVersions.CurrentFull)!.Value;
         if (ReleaseVersions.Compare((ReleaseVersions.Normalize(agentVersion.Core), agentVersion.Pre), server) >= 0
             || !_options.OffersAgentTo(host ?? string.Empty))
@@ -93,7 +97,7 @@ public class UpdatesController : ControllerBase
         var offered = agentVersion.Pre == null ? server.Core.ToString() : package?.Version;
         return package == null
             ? NoContent()
-            : Ok(new AgentUpdateOffer { Version = offered!, Sha256 = package.Sha256, Size = package.Size });
+            : Ok(new AgentUpdateOffer { Version = offered!, Sha256 = package.Sha256, Size = package.Size, Signature = package.Signature });
     }
 
     /// <summary>
@@ -118,4 +122,11 @@ public class AgentUpdateOffer
     public string Version { get; set; } = string.Empty;
     public string Sha256 { get; set; } = string.Empty;
     public long Size { get; set; }
+
+    /// <summary>
+    /// The publisher's signature over the agent program (base64 of a DER ECDSA P-256 / SHA-256
+    /// signature), from the release's <c>cabinet-agent-&lt;platform&gt;.sig</c>. Agents from 3.0.1
+    /// check it against the key built into them; earlier agents ignore it.
+    /// </summary>
+    public string? Signature { get; set; }
 }

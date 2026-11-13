@@ -21,7 +21,7 @@ public sealed class RulesCommand : Command
     public RulesCommand() : base("rules", "Detection rules as YAML files: test them, push them to a server, or pull a server's rules")
     {
         var pathArgument = new Argument<string>("path", "A rule file, or a directory of them");
-        var serverOption = new Option<string?>("--server", "The Cabinet server, such as https://cabinet.example.com. Also CABINET_SERVER; the key comes from CABINET_API_KEY.");
+        var serverOption = new Option<string?>("--server", "The Cabinet server, such as https://cabinet.example.com. Also CABINET_SERVER; the key comes from CABINET_API_KEY, and CABINET_CERT_SHA256 pins a self-signed certificate.");
 
         var test = new Command("test", "Check rule files and run the tests in them");
         test.AddArgument(pathArgument);
@@ -106,7 +106,7 @@ public sealed class RulesCommand : Command
             return null;
         }
 
-        var client = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(1) };
+        var client = Services.RemoteServer.Create(server, TimeSpan.FromMinutes(1));
         client.DefaultRequestHeaders.Add("X-API-Key", key);
         return client;
     }

@@ -26,6 +26,12 @@ var contentRoot = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHel
     ? AppContext.BaseDirectory
     : Directory.GetCurrentDirectory();
 
+// Logs go beside the program unless CABINET_LOG_DIR says otherwise: Linux services keep their
+// program read-only and write only under their data folder
+var logDirectory = Environment.GetEnvironmentVariable("CABINET_LOG_DIR") is { Length: > 0 } configuredLogs
+    ? configuredLogs
+    : Path.Combine(contentRoot, "logs");
+
 // Shared by the logger used during startup and the one configuration can adjust
 LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Information()
@@ -34,7 +40,7 @@ LoggerConfiguration ConfigureLogging(LoggerConfiguration logging) => logging
     .MinimumLevel.Override("Microsoft.AspNetCore.Authentication", LogEventLevel.Information)
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File(Path.Combine(contentRoot, "logs", "cabinet-api-.log"),
+    .WriteTo.File(Path.Combine(logDirectory, "cabinet-api-.log"),
         outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}",
         rollingInterval: RollingInterval.Day,
         rollOnFileSizeLimit: true,
@@ -184,6 +190,9 @@ try
     {
         options.ForwardDefaultSelector = context =>
         {
+            // SCIM takes only SCIM tokens, which work nowhere else
+            if (context.Request.Path.StartsWithSegments(Cabinet.API.Authentication.ScimAuthenticationHandler.PathPrefix))
+                return Cabinet.API.Authentication.ScimAuthenticationHandler.SchemeName;
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
                 return "Bearer";
@@ -196,38 +205,32 @@ try
 
     if (ssoConfig?.Enabled == true && ssoConfig.Oidc != null)
     {
+        if (Cabinet.API.Authentication.OidcProviders.Problem(ssoConfig.Oidc) is { } oidcProblem)
+        {
+            throw new InvalidOperationException($"Single sign-on settings: {oidcProblem}");
+        }
+
         authBuilder.AddJwtBearer("Bearer", options =>
         {
-            options.Authority = ssoConfig.Oidc.Authority;
-            options.Audience = ssoConfig.Oidc.ClientId;
-            options.RequireHttpsMetadata = !ssoConfig.Oidc.Authority.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase);
-            options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.FromMinutes(2)
-            };
+            // Entra, Cognito or any OIDC provider: issuers, audiences and claim names per provider
+            Cabinet.API.Authentication.OidcProviders.ConfigureBearer(options, ssoConfig.Oidc);
             options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
             {
                 OnTokenValidated = context =>
                 {
                     // Map OIDC claims to Cabinet claims for RBAC
-                    var mapper = context.HttpContext.RequestServices.GetService<ClaimRoleMapper>();
-                    if (mapper != null && context.Principal != null)
+                    if (context.Principal?.Identity is System.Security.Claims.ClaimsIdentity identity)
                     {
-                        var identity = context.Principal.Identity as System.Security.Claims.ClaimsIdentity;
-                        if (identity != null)
-                        {
-                            mapper.MapClaims(identity, ssoConfig);
-                        }
+                        var services = context.HttpContext.RequestServices;
+                        Cabinet.API.Authentication.OidcProviders.Normalize(identity, ssoConfig.Oidc, services.GetService<ILoggerFactory>()?.CreateLogger("Cabinet.Sso"));
+                        services.GetService<ClaimRoleMapper>()?.MapClaims(identity, ssoConfig);
                     }
+
                     return Task.CompletedTask;
                 }
             };
         });
-        Log.Information("OIDC/JWT Bearer authentication enabled (Authority: {Authority})", ssoConfig.Oidc.Authority);
+        Log.Information("OIDC bearer tokens accepted from {Provider} at {Authority}", ssoConfig.Oidc.Provider, Cabinet.API.Authentication.OidcProviders.Authority(ssoConfig.Oidc));
     }
     else
     {
@@ -834,6 +837,9 @@ void ConfigureCabinetServices(IServiceCollection services, IConfiguration config
         sp.GetRequiredService<ILogger<Cabinet.API.Services.ApiKeyService>>(),
         sp.GetService<IDocumentStore>()));
     services.AddSingleton<Cabinet.API.Authentication.IApiKeyService>(sp => sp.GetRequiredService<Cabinet.API.Services.ApiKeyService>());
+
+    // The user directory: local accounts, SCIM provisioning, and groups that give roles
+    Cabinet.API.Services.Identity.IdentityRegistration.AddCabinetIdentity(services, configuration);
 }
 
 // cabinet-api --restore <backup.db.gz> [--force]

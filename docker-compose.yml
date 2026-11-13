@@ -101,7 +101,7 @@ services:
 
   # Grafana for Visualization
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.3.0
     container_name: cabinet-grafana
     ports:
       - "127.0.0.1:3000:3000"
@@ -121,7 +121,7 @@ services:
 
   # Prometheus for Metrics
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.55.1
     container_name: cabinet-prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -141,7 +141,7 @@ services:
 
   # LocalStack for AWS Services (Development)
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:3.8.1
     container_name: cabinet-localstack
     ports:
       - "127.0.0.1:4566:4566"
@@ -149,10 +149,9 @@ services:
       - SERVICES=s3,sqs,sns
       - DEBUG=0
       - DATA_DIR=/tmp/localstack/data
-      - DOCKER_HOST=unix:///var/run/docker.sock
+    # No Docker socket: S3, SQS and SNS don't need one, and it would give the container the host
     volumes:
       - localstack-data:/tmp/localstack
-      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - cabinet-network
     restart: unless-stopped

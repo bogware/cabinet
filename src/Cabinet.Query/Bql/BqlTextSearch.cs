@@ -32,6 +32,12 @@ public sealed class BqlTextSearch
     /// <summary>Whether the search is only words that must all appear, which storage does exactly.</summary>
     public bool IsPlainWords { get; private init; }
 
+    /// <summary>
+    /// Field values every matching line has: <c>field=value</c> terms joined by AND, without
+    /// wildcards. They compare without regard to case.
+    /// </summary>
+    public IReadOnlyList<(string Field, string Value)> RequiredFieldValues { get; private init; } = [];
+
     /// <summary>Whether it has any word or phrase, as opposed to only field terms.</summary>
     public bool HasText { get; private init; }
 
@@ -48,9 +54,12 @@ public sealed class BqlTextSearch
 
         var required = new List<string>();
         CollectRequired(root, required);
+        var fields = new List<(string, string)>();
+        CollectRequiredFields(root, fields);
         return new BqlTextSearch(root)
         {
             RequiredWords = required.Count == 0 ? null : string.Join(' ', required),
+            RequiredFieldValues = fields,
             IsPlainWords = IsPlain(root),
             HasText = HasTextNode(root),
         };
@@ -289,6 +298,23 @@ public sealed class BqlTextSearch
         }
     }
 
+    private static void CollectRequiredFields(Node node, List<(string, string)> fields)
+    {
+        switch (node)
+        {
+            case FieldTerm { IsExactEquality: true } term:
+                fields.Add((term.Field, term.Value));
+                break;
+            case And and:
+                foreach (var part in and.Parts)
+                {
+                    CollectRequiredFields(part, fields);
+                }
+
+                break;
+        }
+    }
+
     private static bool IsPlain(Node node) => node switch
     {
         All or Word => true,
@@ -418,6 +444,13 @@ public sealed class BqlTextSearch
         private readonly string _value;
         private readonly Regex? _wildcard;
         private readonly double? _number;
+
+        public string Field => _field;
+
+        public string Value => _value;
+
+        /// <summary>field=value with no wildcard: equal, ignoring case.</summary>
+        public bool IsExactEquality => _op == "=" && _wildcard == null;
 
         public FieldTerm(string field, string op, string value)
         {

@@ -13,7 +13,8 @@ namespace Cabinet.API.Controllers;
 [Route("api/[controller]")]
 public class HealthController : ControllerBase
 {
-    private static readonly DateTime StartTime = DateTime.UtcNow;
+    // Monotonic: the wall clock can step back, which made uptime briefly negative
+    private static readonly Stopwatch Running = Stopwatch.StartNew();
     private static long _totalRequests;
     private static long _totalErrors;
 
@@ -121,7 +122,7 @@ public class HealthController : ControllerBase
     public IActionResult GetMetrics()
     {
         var process = Process.GetCurrentProcess();
-        var uptime = DateTime.UtcNow - StartTime;
+        var uptime = Running.Elapsed;
         var totalRequests = Interlocked.Read(ref _totalRequests);
         var totalErrors = Interlocked.Read(ref _totalErrors);
 

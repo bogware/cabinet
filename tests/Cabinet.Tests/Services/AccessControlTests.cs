@@ -43,14 +43,20 @@ public sealed class EndpointCapabilityTests
                 .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .Where(method => method.GetCustomAttributes().Any(attribute => attribute is Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute))
                 .Where(method => method.GetCustomAttribute<AllowAnonymousAttribute>() == null)
-                .Where(method => method.GetCustomAttribute<RequireCapabilityAttribute>() == null
-                    && type.GetCustomAttribute<RequireCapabilityAttribute>() == null)
+                .Where(method => !IsChecked(method) && !IsChecked(type))
                 .Select(method => $"{type.Name}.{method.Name}"))
             .Where(name => !Exempt.Contains(name))
             .ToList();
 
         unprotected.Should().BeEmpty("a new endpoint has no RBAC check unless it asks for one");
     }
+
+    // A capability; or, for endpoints that only act on the caller's own local account, that the
+    // caller is signed in as one; or, for SCIM, a SCIM token, which can call nothing else
+    private static bool IsChecked(MemberInfo member) =>
+        member.GetCustomAttribute<RequireCapabilityAttribute>() != null
+        || member.GetCustomAttribute<RequireLocalAccountAttribute>() != null
+        || member.GetCustomAttribute<RequireScimTokenAttribute>() != null;
 
     [Theory]
     [InlineData(SystemRole.SuperAdmin, Capability.UserManagement, true)]
@@ -90,6 +96,33 @@ public sealed class EndpointCapabilityTests
 
         principal.IndexesWith(Capability.Search).Should().BeNull();
         principal.HasCapability(Capability.Search, "anything").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ANarrowedQuery_StaysWithinWhatTheCallerMayRead()
+    {
+        // A query narrowed to an index the caller can't read gets nothing, not that index
+        var inner = new InMemoryStorage();
+        await inner.StoreBatchAsync([
+            new LogEvent { RawLine = "secret", Index = "secret", Timestamp = DateTime.UtcNow },
+            new LogEvent { RawLine = "mine", Index = "team-a", Timestamp = DateTime.UtcNow },
+        ]);
+        var storage = new IndexRestrictedLogStorage(inner, new IndexAccessScope { ReadableIndexes = ["team-*"] });
+
+        async Task<List<string>> Read(params string[] indexes)
+        {
+            var lines = new List<string>();
+            await foreach (var e in storage.QueryAsync(new QueryContext { AllowedIndexes = indexes }))
+            {
+                lines.Add(e.RawLine);
+            }
+
+            return lines;
+        }
+
+        (await Read("secret")).Should().BeEmpty();
+        (await Read("TEAM-A")).Should().Equal("mine");
+        (await Read("secret", "team-a")).Should().Equal("mine");
     }
 
     [Fact]
@@ -303,6 +336,30 @@ public sealed class PostgresLeaderLeaseTests
             await admin.OpenAsync();
             await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS {database} WITH (FORCE)", admin);
             await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [SkippableFact]
+    public async Task ALeaderThatStopsConfirming_StopsCountingItselfTheLeader()
+    {
+        // A stalled loop (a starved thread pool, a hung socket) must not leave this instance
+        // acting as leader beside whoever takes the lock next
+        var lease = new PostgresLeaderLease("Host=127.0.0.1;Port=1;Database=none;Username=x;Password=x", NullLogger<PostgresLeaderLease>.Instance);
+        try
+        {
+            var type = typeof(PostgresLeaderLease);
+            type.GetField("_isLeader", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(lease, true);
+            var confirmed = type.GetField("_confirmedAt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+            confirmed.SetValue(lease, System.Diagnostics.Stopwatch.GetTimestamp());
+            lease.IsLeader.Should().BeTrue("just confirmed");
+
+            confirmed.SetValue(lease, System.Diagnostics.Stopwatch.GetTimestamp() - (long)((PostgresLeaderLease.ConfirmationLasts.TotalSeconds + 1) * System.Diagnostics.Stopwatch.Frequency));
+            lease.IsLeader.Should().BeFalse("its last confirmation is too old to count");
+        }
+        finally
+        {
+            await lease.DisposeAsync();
         }
     }
 
@@ -696,7 +753,7 @@ public sealed class AccessControlApiTests : IDisposable
         using var noRedirects = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = api.Client.BaseAddress };
 
         var providers = await (await noRedirects.GetAsync("/auth/providers")).Content.ReadAsStringAsync();
-        providers.Should().Contain("\"oidc\":true").And.Contain("\"signedIn\":false");
+        providers.Should().Contain("\"oidc\":true").And.Contain("\"oidcProvider\":\"Generic\"").And.Contain("\"signedIn\":false");
 
         using var login = await noRedirects.GetAsync("/auth/login/oidc?returnUrl=https://evil.example/");
         login.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -741,13 +798,13 @@ public sealed class AccessControlApiTests : IDisposable
 
         var providers = await api.Client.GetStringAsync("/auth/providers");
 
-        providers.Should().Contain("\"oidc\":false").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
+        providers.Should().Contain("\"oidc\":false").And.Contain("\"oidcProvider\":null").And.Contain("\"ldap\":false").And.Contain("\"saml\":false");
         (await api.Client.GetAsync("/auth/login/oidc")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await api.Client.PostAsJsonAsync("/auth/login/ldap", new { username = "a", password = "b" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     /// <summary>A running API process.</summary>
-    private sealed class ApiProcess : IAsyncDisposable
+    internal sealed class ApiProcess : IAsyncDisposable
     {
         private readonly Process _process;
         private readonly Task<string> _stdout;
@@ -825,7 +882,7 @@ public sealed class AccessControlApiTests : IDisposable
     }
 
     /// <summary>The two documents a JWT validator fetches from an identity provider, and tokens to match.</summary>
-    private sealed class OidcTestProvider : IAsyncDisposable
+    internal sealed class OidcTestProvider : IAsyncDisposable
     {
         private readonly TcpListener _listener;
         private readonly Task _serving;
@@ -850,12 +907,12 @@ public sealed class AccessControlApiTests : IDisposable
             return Task.FromResult(new OidcTestProvider(listener, key, $"http://localhost:{port}"));
         }
 
-        public string CreateToken(string subject, string group, string audience) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        public string CreateToken(string subject, string group, string audience, Dictionary<string, object>? extra = null) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = Authority,
             Audience = audience,
             Expires = DateTime.UtcNow.AddMinutes(10),
-            Claims = new Dictionary<string, object> { ["sub"] = subject, ["groups"] = group },
+            Claims = new Dictionary<string, object>(extra ?? new Dictionary<string, object>()) { ["sub"] = subject, ["groups"] = group },
             SigningCredentials = new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
         });
 

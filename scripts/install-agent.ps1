@@ -98,6 +98,7 @@ elseif (Test-Path ".\cabinet-agent.exe") {
 else {
     Write-Host "  NOTE: No cabinet-agent.exe found." -ForegroundColor Yellow
     Write-Host "  Download from: https://github.com/bogware/cabinet/releases"
+    Write-Host "  and check its signature first (docs/DEPLOYMENT.md, 'Verifying a release')."
 }
 
 # ─── Generate configuration ───────────────────────────────────────────

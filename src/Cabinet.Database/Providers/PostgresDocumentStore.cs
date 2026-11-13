@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Cabinet.Core.Interfaces;
 using Dapper;
@@ -160,7 +161,15 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task _loop;
     private volatile bool _isLeader;
+    private long _confirmedAt;
     private int _disposed;
+
+    /// <summary>
+    /// How long a confirmation of the lock counts. If the loop stalls (a starved thread pool, a
+    /// hung socket), this instance stops counting itself the leader within this time, rather
+    /// than carrying on beside whoever takes the lock next.
+    /// </summary>
+    public static readonly TimeSpan ConfirmationLasts = PollInterval * 2 + CheckTimeout;
 
     public PostgresLeaderLease(string connectionString, ILogger<PostgresLeaderLease> logger)
     {
@@ -178,7 +187,9 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
     }
 
     /// <inheritdoc />
-    public bool IsLeader => _isLeader;
+    public bool IsLeader => _isLeader && Stopwatch.GetElapsedTime(Interlocked.Read(ref _confirmedAt)) < ConfirmationLasts;
+
+    private void Confirmed() => Interlocked.Exchange(ref _confirmedAt, Stopwatch.GetTimestamp());
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -193,10 +204,12 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                 {
                     if (!_isLeader)
                     {
-                        _isLeader = await connection.ExecuteScalarAsync<bool>(
+                        var acquired = await connection.ExecuteScalarAsync<bool>(
                             new CommandDefinition("SELECT pg_try_advisory_lock(@Key)", new { Key = LockKey }, commandTimeout: (int)CheckTimeout.TotalSeconds, cancellationToken: cancellationToken));
-                        if (_isLeader)
+                        if (acquired)
                         {
+                            Confirmed();
+                            _isLeader = true;
                             _logger.LogInformation("This instance is now the leader");
                         }
                     }
@@ -205,6 +218,7 @@ public sealed class PostgresLeaderLease : ILeaderLease, IAsyncDisposable, IDispo
                         // Notices a lost connection, which means the lock is gone too
                         await connection.ExecuteScalarAsync<int>(
                             new CommandDefinition("SELECT 1", commandTimeout: (int)CheckTimeout.TotalSeconds, cancellationToken: cancellationToken));
+                        Confirmed();
                     }
 
                     await Task.Delay(PollInterval, cancellationToken);

@@ -39,7 +39,8 @@ public sealed class RequireCapabilityAttribute : Attribute, IAsyncAuthorizationF
         }
 
         var user = context.HttpContext.User;
-        var principal = user == null ? null : await PrincipalResolver.ResolveAsync(user, rbac, context.HttpContext.RequestAborted);
+        var principal = user == null ? null : await PrincipalResolver.ResolveAsync(
+            user, rbac, context.HttpContext.RequestAborted, context.HttpContext.RequestServices.GetService<Services.Identity.UserDirectory>());
         if (principal == null)
         {
             // No identity to check capabilities against, so deny. Letting this through

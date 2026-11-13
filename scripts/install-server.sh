@@ -93,22 +93,33 @@ fi
 # ─── Create directories ───────────────────────────────────────────────
 echo "[2/7] Creating directories"
 mkdir -p "$INSTALL_DIR"/{api,cli}
-mkdir -p "$DATA_DIR"/{db,backups,logs}
+mkdir -p "$DATA_DIR"/{db,backups,logs,settings,updates}
+# Dashboard settings used to live beside the program, where the service couldn't write them
+if [[ -f "$INSTALL_DIR/settings/cabinet.settings.json" && ! -f "$DATA_DIR/settings/cabinet.settings.json" ]]; then
+    mv "$INSTALL_DIR/settings/cabinet.settings.json" "$DATA_DIR/settings/cabinet.settings.json"
+fi
 mkdir -p "$CONFIG_DIR"
 
 # ─── Check/copy binaries ──────────────────────────────────────────────
 echo "[3/7] Checking for Cabinet binaries"
 
 BINARY_FOUND=false
-if [[ -f "$INSTALL_DIR/api/Cabinet.API" ]]; then
+if [[ -f "./Cabinet.API" ]]; then
+    # Run from a new release's folder, this installs or upgrades; settings and data are kept
+    if systemctl is-active --quiet cabinet-api 2>/dev/null; then
+        echo "  Stopping cabinet-api to replace it"
+        systemctl stop cabinet-api
+        RESTART_AFTER=true
+    fi
+    echo "  Copying the API from the current directory"
+    # Everything published beside it: the dashboard, settings and native libraries such as SQLite's
+    # but not appsettings.Production.json: it's a link to $CONFIG_DIR/appsettings.json, and
+    # copying over it would replace this server's settings with the release's defaults
+    find . -maxdepth 1 -mindepth 1 ! -name 'install-*.sh' ! -name 'appsettings.Production.json' -exec cp -r {} "$INSTALL_DIR/api/" \;
+    BINARY_FOUND=true
+elif [[ -f "$INSTALL_DIR/api/Cabinet.API" ]]; then
     BINARY_FOUND=true
     echo "  Found existing API binary"
-elif [[ -f "./Cabinet.API" ]]; then
-    echo "  Copying API binary from current directory"
-    cp -r ./Cabinet.API* "$INSTALL_DIR/api/" 2>/dev/null || true
-    cp -r ./appsettings*.json "$INSTALL_DIR/api/" 2>/dev/null || true
-    cp -r ./wwwroot "$INSTALL_DIR/api/" 2>/dev/null || true
-    BINARY_FOUND=true
 fi
 
 if [[ -f "./cabinet" ]] || [[ -f "./cabinet.dll" ]]; then
@@ -123,6 +134,7 @@ if [[ "$BINARY_FOUND" = false ]]; then
     echo "    $INSTALL_DIR/api/"
     echo ""
     echo "  Download from: https://github.com/bogware/cabinet/releases"
+    echo "  and check its signature first (docs/DEPLOYMENT.md, \"Verifying a release\")."
     echo ""
 fi
 
@@ -208,9 +220,13 @@ ln -sf "$CONFIG_DIR/appsettings.json" "$INSTALL_DIR/api/appsettings.Production.j
 # ─── Set ownership ─────────────────────────────────────────────────────
 echo "[5/7] Setting ownership and permissions"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+# The program belongs to root: the service can run it but not change it
+chown -R root:root "$INSTALL_DIR"
 chown -R root:root "$CONFIG_DIR"
-chmod 644 "$CONFIG_DIR/appsettings.json"
+# It can hold a database password: root and the service's group only
+chown root:"$SERVICE_USER" "$CONFIG_DIR" "$CONFIG_DIR/appsettings.json"
+chmod 750 "$CONFIG_DIR"
+chmod 640 "$CONFIG_DIR/appsettings.json"
 chmod 600 "$CONFIG_DIR/cabinet.env"
 # Binary needs to be executable
 chmod +x "$INSTALL_DIR/api/Cabinet.API" 2>/dev/null || true
@@ -249,11 +265,15 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=$DATA_DIR $INSTALL_DIR/api
+ReadWritePaths=$DATA_DIR
 ReadOnlyPaths=$CONFIG_DIR
 
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=DOTNET_ENVIRONMENT=Production
+# Everything the service writes is under the data folder; the program stays read-only to it
+Environment=CABINET_LOG_DIR=$DATA_DIR/logs
+Environment=CABINET_SETTINGS_FILE=$DATA_DIR/settings/cabinet.settings.json
+Environment=Updates__WorkDirectory=$DATA_DIR/updates
 EnvironmentFile=-$CONFIG_DIR/cabinet.env
 
 StandardOutput=journal
@@ -270,6 +290,10 @@ SVCEOF
 
     systemctl daemon-reload
     echo "  Systemd service installed: cabinet-api"
+    if [[ "${RESTART_AFTER:-false}" == true ]]; then
+        systemctl start cabinet-api
+        echo "  Started cabinet-api on the new version"
+    fi
 else
     echo "  Warning: systemd not found. You'll need to start Cabinet manually."
 fi

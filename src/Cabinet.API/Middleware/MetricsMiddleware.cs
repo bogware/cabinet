@@ -54,8 +54,21 @@ public sealed class MetricsMiddleware
             // Open unless Metrics:RequireKey is on (new installs turn it on). Then a scrape needs a
             // key above Ingest, as X-API-Key or a bearer token, which Prometheus can send, unless
             // it comes from this machine or an address in Metrics:AllowFrom.
+            var caller = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (KeyGuesses.IsBlocked(caller, DateTime.UtcNow))
+            {
+                context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                context.Response.Headers.RetryAfter = "600";
+                return;
+            }
+
             if (!await MayReadMetricsAsync(context))
             {
+                if (HasKey(context))
+                {
+                    KeyGuesses.Fail(caller, DateTime.UtcNow);
+                }
+
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 context.Response.Headers.WWWAuthenticate = "Bearer";
                 await context.Response.WriteAsync("/metrics needs an API key: send it as X-API-Key or Authorization: Bearer.");
@@ -82,6 +95,36 @@ public sealed class MetricsMiddleware
         }
     }
 
+    private static bool HasKey(HttpContext context) =>
+        context.Request.Headers.ContainsKey("X-API-Key") || context.Request.Headers.Authorization.Count > 0;
+
+    /// <summary>
+    /// Wrong keys sent to /metrics, by address. /metrics answers before the pre-authentication
+    /// rate limit (Prometheus scrapes often), so guessing keys there is limited here: after
+    /// <see cref="MaxGuesses"/> in ten minutes, that address is refused without its key being checked.
+    /// </summary>
+    internal static class KeyGuesses
+    {
+        public const int MaxGuesses = 20;
+        private static readonly TimeSpan Window = TimeSpan.FromMinutes(10);
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTime Since)> Failures = new();
+
+        public static bool IsBlocked(string caller, DateTime now) =>
+            Failures.TryGetValue(caller, out var entry) && now - entry.Since < Window && entry.Count >= MaxGuesses;
+
+        public static void Fail(string caller, DateTime now)
+        {
+            if (Failures.Count > 100_000)
+            {
+                Failures.Clear();
+            }
+
+            Failures.AddOrUpdate(caller, (1, now), (_, entry) => now - entry.Since >= Window ? (1, now) : (entry.Count + 1, entry.Since));
+        }
+
+        public static void Reset() => Failures.Clear();
+    }
+
     /// <summary>Whether this request may read /metrics, under Metrics:RequireKey and Metrics:AllowFrom.</summary>
     internal static async Task<bool> MayReadMetricsAsync(HttpContext context)
     {
@@ -91,8 +134,11 @@ public sealed class MetricsMiddleware
             return true;
         }
 
+        // A proxy on this machine makes every request look local; it says so with a forwarding
+        // header, and then the caller isn't trusted as this machine
         var address = context.Connection.RemoteIpAddress;
-        if (address != null && (System.Net.IPAddress.IsLoopback(address) || AllowedAddress(address, configuration.GetSection("Metrics:AllowFrom").Get<string[]>() ?? [])))
+        var forwarded = context.Request.Headers.ContainsKey("X-Forwarded-For") || context.Request.Headers.ContainsKey("Forwarded");
+        if (address != null && ((System.Net.IPAddress.IsLoopback(address) && !forwarded) || AllowedAddress(address, configuration.GetSection("Metrics:AllowFrom").Get<string[]>() ?? [])))
         {
             return true;
         }

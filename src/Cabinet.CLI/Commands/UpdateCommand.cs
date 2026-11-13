@@ -15,7 +15,7 @@ public class UpdateCommand : Command
 
     public UpdateCommand() : base("update", "Show a Cabinet server's version and update it from the latest release")
     {
-        var serverOption = new Option<string?>("--server", "Server URL (default: the remote server in your config, or http://localhost:8080)");
+        var serverOption = new Option<string?>("--server", "Server URL (default: the remote server in your config, or http://localhost:8080). CABINET_CERT_SHA256 pins a self-signed certificate.");
         var keyOption = new Option<string?>("--key", "Admin API key (default: CABINET_API_KEY, or the key in your config)");
         AddGlobalOption(serverOption);
         AddGlobalOption(keyOption);
@@ -42,7 +42,7 @@ public class UpdateCommand : Command
             return 1;
         }
 
-        using var http = new HttpClient { BaseAddress = new Uri(server.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(10) };
+        using var http = Services.RemoteServer.Create(server, TimeSpan.FromMinutes(10));
         http.DefaultRequestHeaders.Add("X-API-Key", key);
 
         try

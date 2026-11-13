@@ -97,9 +97,33 @@ CI publishes only the API image, to `ghcr.io/bogware/cabinet`. Build the agent a
 
 ## Packages and Installers
 
-CI builds these artifacts on `v*` tags and attaches them to a GitHub release. The latest published release, v1.0.0, predates the current `main` and this guide. To install the current code, run `./scripts/build-release.sh <version>`, which writes to `dist/`. It builds API, CLI and agent archives for Linux, Windows and macOS, plus `.deb` packages when `dpkg-deb` is available.
+Each GitHub release has these artifacts, built and signed by the Release workflow ([docs/CI.md](CI.md)): an archive per platform (`cabinet-<platform>.tar.gz`, or `.zip` for Windows) holding the API, CLI and agent, `.deb` packages, and the install scripts. Every one has a `.sha256` and a `.sig` beside it; check the signature before installing (see [Verifying a release](#verifying-a-release)). To build the current code yourself, run `./scripts/build-release.sh <version>`, which writes unsigned artifacts to `dist/`. It builds API, CLI and agent archives for Linux, Windows and macOS, plus `.deb` packages when `dpkg-deb` is available.
 
 Binaries are self-contained and single-file, so no .NET runtime is needed.
+
+### Verifying a release
+
+Releases from 3.0.1 on are signed with ECDSA P-256 over SHA-256. The public key is [`build/release-signing.pub.pem`](../build/release-signing.pub.pem) in the repository, and the same key is built into the server and the agent:
+
+```
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvmbaHgWhTTRlnyCau/X3thoO2fwa
+sXPcegaZlvyGgRQDGKASeAC0yXDi7M/viVho6JDqNAR51oSw2HuS7FNlng==
+-----END PUBLIC KEY-----
+```
+
+Each file's `.sig` is the base64 of the DER signature over the file's bytes. To check one, save the key as `release-signing.pub.pem` and run:
+
+```bash
+f=cabinet-linux-x64.tar.gz
+base64 -d "$f.sig" > "$f.sig.der"
+openssl dgst -sha256 -verify release-signing.pub.pem -signature "$f.sig.der" "$f"
+# Verified OK
+```
+
+Anything but `Verified OK` means the file isn't what the publisher released: don't install it. `SHA256SUMS` lists every file's SHA-256 and has its own `SHA256SUMS.sig`, so you can check that one signature and then `sha256sum -c SHA256SUMS --ignore-missing`. The `.sha256` files alone prove nothing about who made a file, since whoever could replace the file could replace them too. `cabinet-agent-<platform>.sig` is the signature over the agent program inside that platform's archive, which servers pass to agents when they update them.
+
+On Windows, `openssl` comes with Git for Windows (`C:\Program Files\Git\usr\bin\openssl.exe`), and `certutil -decode file.sig file.sig.der` does the base64 step.
 
 ### Linux: .deb
 
@@ -240,7 +264,7 @@ Delivery is at-least-once, and the server stores each event once.
 - **Old files.** `IgnoreOlderThanHours` on an input skips files last written longer ago than that, for folders with years of history. A file the agent was already reading is always finished, and an ignored file is read in full if it's written to again.
 - **Quiet files.** A file read to the end that hasn't changed for `CloseInactiveSeconds` (default 300) is closed, and reopened from its checkpoint when it changes. Programs that start a new file per session, such as game servers, don't leave thousands open.
 - **Deleting delivered files.** `DeleteDeliveredAfterDays` on an input deletes a file once the server has stored all of it and it hasn't been written to for that many days. Off by default. Only files the agent has read are deleted, so skipped history stays. A final line the writer never finished doesn't stop deletion. The service needs write access: `install-agent.sh --writable /path/to/logs`, and the folder's own permissions must allow the agent's user to delete.
-- **Updates.** The agent asks its server every `Agent:Update:CheckIntervalMinutes` (default 60) for the agent build matching the server's version, checks its SHA-256, swaps it in, and restarts through systemd. It updates only over https with the server's certificate verified or pinned (`Output:CertificateSha256`), since the program arrives over that connection. `Agent:Update:Enabled=false` turns this off, and the server's `Updates:AgentHosts` limits which agents take a new version.
+- **Updates.** The agent asks its server every `Agent:Update:CheckIntervalMinutes` (default 60) for the agent build matching the server's version, checks its SHA-256 and the publisher's signature against the key built into the agent, swaps it in, and restarts through systemd. A build without a good signature is refused, so a server that has been taken over still can't give agents a program the publisher didn't sign; agents from 3.0.1 therefore don't update from servers before 3.0.1, which send no signature. It updates only over https with the server's certificate verified or pinned (`Output:CertificateSha256`), since the program arrives over that connection. `Agent:Update:AllowUnsigned=true` accepts unsigned builds, for testing development builds only. `Agent:Update:Enabled=false` turns this off, and the server's `Updates:AgentHosts` limits which agents take a new version.
 - **Pinned certificates.** `Output:CertificateSha256` makes the agent accept the server's certificate only if its SHA-256 fingerprint matches, whoever issued it and whatever name it holds. A malformed fingerprint stops the agent at startup.
 - **Time zones.** The agent sends its machine's time zone (or `Agent:TimeZone`), and the server uses it for lines whose times have no offset, such as game server logs. Other senders' such times are read as UTC.
 - **Shutdown.** The agent delivers what it has read for up to `ShutdownFlushSeconds` (default 20), then spools the rest.
@@ -299,11 +323,13 @@ Every setting the server reads is on the dashboard's Settings screen, grouped by
 
 Updates come from the GitHub releases. The server looks for a new one every `Updates:CheckIntervalHours` (default 6) and never installs one by itself: start it from **Settings > Updates** on the dashboard, `cabinet update apply`, or `POST /api/v1/updates/apply`, which need the `UserManagement` capability. `cabinet update` and `GET /api/v1/updates` show the running and newest versions and each agent's version.
 
-Installing downloads the release's archive for this platform, checks it against the release's SHA-256, and starts a separate updater, which stops the service, backs up the program to `backup\api`, copies the new one in, and starts it again. Settings (`appsettings.Production.json`) and logs are never replaced. If the new version doesn't answer `/health/ready` within 90 seconds, the backup is restored. Progress goes to `updates\update.log` beside the program folder.
+Installing downloads the release's archive for this platform, checks it against the release's SHA-256 and, before unpacking anything, against the publisher's signature (`<archive>.sig`, see [Verifying a release](#verifying-a-release)) with the key built into the server. A release without a signature, or with one that doesn't match, is refused and nothing changes; releases before 3.0.1 aren't signed, so install those with the installer. The agent build the server hands agents comes from a verified archive and carries its own signature, which agents check too. Then it starts a separate updater, which stops the service, backs up the program to `backup\api`, copies the new one in, and starts it again. Settings (`appsettings.Production.json`) and logs are never replaced. If the new version doesn't answer `/health/ready` within 90 seconds, the backup is restored. Progress goes to `updates\update.log` beside the program folder.
 
 While the repository is private, the server needs a GitHub token that can read it: a fine-grained token limited to this repository with read-only Contents access. Give it to the Windows installer once with `-UpdateToken`, or set `Updates:Token` or `CABINET_UPDATE_TOKEN`. Agents never need it: they get their builds from the server.
 
 A server can update itself when it runs as a Windows service, or as a systemd service running as root. In Docker, pull the new image instead.
+
+`Updates:AllowUnsigned=true` lets the server install a release, and offer agents a build, that has no signature at all. It exists for testing development builds you publish to a release source of your own, which aren't signed, and is off by default; the server logs a warning at startup and on every unsigned download while it's on. A signature that is present but wrong is refused even then. It can be set only in the settings file or the environment (`Updates__AllowUnsigned=true`), not from the dashboard. Don't leave it on in production: it lets whoever controls the release source choose what the server runs.
 
 ## Kubernetes
 
@@ -569,6 +595,56 @@ Under `SSO` (`Enabled`): an identity gets the role and index permissions that `S
 - **LDAP or Active Directory** (`Ldap:Server`, `Port`, `UseSsl`, `BaseDn`, `BindDn`, `BindPassword`, `UserSearchFilter`): the dashboard asks for a directory user name and password, finds the user with the service account, and binds as them. Groups come from `memberOf`, by full DN or CN.
 
 Dashboard sign-ins get an HttpOnly, SameSite=Strict session cookie lasting `SSO:SessionHours` (8) while used, and at most `SSO:MaxSessionHours` (24) from sign-in. A cookie request that changes anything must carry the `X-Cabinet-Request` header, which the dashboard sends and another site's page can't.
+
+### Local accounts and MFA
+
+People can sign in to the dashboard with a user name and password kept in Cabinet, with or without single sign-on beside it. The sign-in dialog offers it once there's a local account and `Accounts:LocalSignIn` is on (the default).
+
+1. Sign in with an admin API key (Admin tier) and open **Users**.
+2. **New User**, signing in with "A password here", with the role they need. Leave the password empty to get a temporary one, shown once, which they replace when they first sign in. Make your own SuperAdmin account first, then keep the admin key for automation or emergencies.
+3. They sign in with the user name and password, and set up an authenticator app under **My account** (Microsoft Authenticator, Google Authenticator, 1Password and others). Cabinet shows the key to type into the app and an `otpauth://` link for a phone; there's no QR code. Setting one up gives ten recovery codes, shown once, each of which signs in once without the app.
+
+Passwords are hashed with PBKDF2-HMAC-SHA256, 600,000 iterations (`Accounts:PasswordIterations`) and a random salt. They must have `Accounts:PasswordMinLength` (12) characters and not contain the user name or email or be a common password. Wrong passwords or codes are slowed per account and per address, and `Accounts:LockoutThreshold` (5) in a row lock the account for `Accounts:LockoutMinutes` (15); **Unlock** on the Users page ends that sooner. `Accounts:RequireMfa` makes an authenticator compulsory for `Everyone`, or for `Analyst`, `Admin` or `SuperAdmin` and above; anyone it applies to who hasn't set one up is asked to at their next sign-in. **Reset MFA** removes someone's authenticator if they lose it.
+
+Authenticator secrets are encrypted with the encryption-at-rest key when `Encryption:Enabled` is on, and otherwise with ASP.NET Data Protection, whose keys Cabinet keeps in the metadata database (`data-protection-keys`) so every instance can read them and session cookies survive restarts. Back that database up with the rest, and if you turn encryption at rest on or off later, people set up their authenticators again.
+
+### The user directory with single sign-on
+
+The **Users** page is also where single sign-on users can be managed. When someone signs in with OIDC, SAML or LDAP, or calls the API with an OIDC token, Cabinet looks for a directory user whose external ID is the identity provider's ID for them (Entra's object ID, `oid`, or the token's subject), or whose user name or email is their sign-in name (`preferred_username`, `upn`) or verified email. If there is one:
+
+- a deactivated user is refused, even with a valid session at the identity provider, and their existing sessions end;
+- their own role and their groups' roles apply, so a group your identity provider provisions over SCIM gives the role you map it to here; with none, `SSO:RoleMappings` still decides;
+- deactivating or deleting them, or **Sign out**, ends their dashboard sessions at their next request.
+
+A principal saved through `/api/v1/roles` still overrides both. Cabinet trusts the names your identity provider vouches for, so use an authority for your own tenant, not one any organization can sign in to.
+
+### SCIM provisioning
+
+SCIM lets your identity provider create, update and deactivate Cabinet's directory users and groups as people join, move and leave. Cabinet serves SCIM 2.0 at `https://<cabinet>/scim/v2`. Each identity provider needs a SCIM token: on the **Users** page, under SCIM provisioning, give it a name and choose **New SCIM token**, and copy the token, which isn't shown again. A SCIM token only works on SCIM; revoke it there when it's no longer needed. Amazon Cognito has no SCIM client, so with Cognito, manage users on the Users page or rely on `SSO:RoleMappings`.
+
+**Microsoft Entra ID**
+
+1. In the Entra admin center, open **Enterprise applications** and the application people use to sign in to Cabinet (or **New application**, **Create your own application**, "Integrate any other application you don't find in the gallery").
+2. **Provisioning**, **New configuration** (or **Get started**), with **Provisioning Mode** Automatic.
+3. **Tenant URL** `https://<cabinet>/scim/v2` and **Secret Token** the SCIM token. **Test Connection**: Entra looks up made-up users, and Cabinet answers with empty lists.
+4. Under **Mappings**, **Provision Microsoft Entra ID Users**: keep `userPrincipalName` to `userName`, and change the source of `externalId` from `mailNickname` to `objectId`, so a user's external ID is the `oid` in their sign-in tokens. Cabinet keeps `userName`, `active`, `displayName`, `title`, `emails[type eq "work"].value`, `name.givenName`, `name.familyName`, `externalId` and the enterprise `department`; you can remove other mappings, which it ignores. Leave **Provision Microsoft Entra ID Groups** on to provision groups.
+5. Under **Users and groups**, assign the people and groups who use Cabinet, and set **Scope** to "Sync only assigned users and groups".
+6. Turn **Provisioning Status** on and save. The first cycle starts within minutes; later ones run about every 40 minutes, and **Provision on demand** pushes one user at once.
+7. In Cabinet, the groups appear on the Users page with source Scim. **Edit** each to give the role its members need.
+
+Unassigning or disabling a user in Entra sets them inactive in Cabinet, which ends their sessions; Entra deletes them some time later.
+
+**Okta**
+
+1. In the Okta Admin Console, open the app integration people use to sign in to Cabinet. SCIM provisioning is available on SAML and SWA app integrations (**General**, **App Settings**, **Provisioning**: SCIM). For an OIDC sign-in, add a separate app integration for provisioning, such as "SCIM 2.0 Test App (OAuth Bearer Token)" from the catalog.
+2. **Provisioning**, **Integration**: **SCIM connector base URL** `https://<cabinet>/scim/v2`, **Unique identifier field for users** `userName`, **Supported provisioning actions** Push New Users, Push Profile Updates and Push Groups, **Authentication Mode** HTTP Header, and the SCIM token as the bearer token. **Test Connector Configuration**, then save.
+3. **Provisioning**, **To App**: enable Create Users, Update User Attributes and Deactivate Users. Leave Sync Password off: Cabinet ignores passwords sent over SCIM, and SCIM users sign in through single sign-on.
+4. **Assignments**: assign people and groups. **Push Groups**: push the groups whose members need roles.
+5. In Cabinet, give each pushed group a role on the Users page.
+
+Okta updates users with PUT and deactivates them by setting `active` to false; it doesn't delete them. Its users' external ID is the Okta user ID, which is the subject of Okta's sign-in tokens.
+
+SCIM requests are rate limited like other clients and limited to `Limits:ScimMaxRequestMB` (1 MB). `Accounts:ScimMaxResults` (200) caps a page of results. Every change is in the audit log as the token's `scim-<id>`.
 
 ### Not implemented
 

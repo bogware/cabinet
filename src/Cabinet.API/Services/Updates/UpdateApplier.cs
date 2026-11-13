@@ -45,8 +45,21 @@ public sealed class UpdateApplier
         return (false, "Only a server running as a Windows or systemd service can update itself. In Docker, pull the new image.");
     }
 
-    /// <summary>Starts the updater process. This server is stopped by it shortly after.</summary>
-    public void Launch(string stagedDirectory, Version version)
+    /// <summary>
+    /// Starts the updater process. This server is stopped by it shortly after.
+    /// </summary>
+    /// <param name="stagedDirectory">The unpacked, verified release.</param>
+    /// <param name="fromVersion">The running version in full, such as 3.0.0-rc.4.</param>
+    /// <param name="toTag">The release's tag, such as v3.0.1.</param>
+    public void Launch(string stagedDirectory, string fromVersion, string toTag)
+    {
+        var start = PrepareStart(stagedDirectory, fromVersion, toTag);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Couldn't start the updater");
+        _logger.LogInformation("Updater started; progress goes to {Log}", Path.GetFullPath(Path.Combine(stagedDirectory, "..", "..", "update.log")));
+    }
+
+    /// <summary>Writes the updater script into the staged release and says how to start it.</summary>
+    internal ProcessStartInfo PrepareStart(string stagedDirectory, string fromVersion, string toTag)
     {
         var installDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
         var apiDirectory = Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
@@ -67,7 +80,8 @@ public sealed class UpdateApplier
                     "-ApiDirectory", apiDirectory,
                     "-InstallDirectory", installDirectory,
                     "-Staged", stagedDirectory,
-                    "-Version", version.ToString(),
+                    "-From", fromVersion,
+                    "-Version", toTag,
                     "-HealthUrl", health,
                     "-Log", log,
                 },
@@ -89,15 +103,14 @@ public sealed class UpdateApplier
                 {
                     $"--unit=cabinet-update-{DateTime.UtcNow:yyyyMMddHHmmss}", "--collect", "/bin/bash", script,
                     string.IsNullOrWhiteSpace(_options.ServiceName) ? "cabinet-api" : _options.ServiceName,
-                    apiDirectory, stagedDirectory, version.ToString(), health, log,
+                    apiDirectory, stagedDirectory, toTag, health, log, fromVersion,
                 },
             };
         }
 
         start.UseShellExecute = false;
         start.CreateNoWindow = true;
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Couldn't start the updater");
-        _logger.LogInformation("Updater started; progress goes to {Log}", Path.GetFullPath(log));
+        return start;
     }
 
     /// <summary>An address on this machine the updater can check health on.</summary>
@@ -121,7 +134,7 @@ public sealed class UpdateApplier
     private const string WindowsScript = """
         param(
             [string]$ServiceName, [string]$ApiDirectory, [string]$InstallDirectory, [string]$Staged,
-            [string]$Version, [string]$HealthUrl, [string]$Log
+            [string]$From, [string]$Version, [string]$HealthUrl, [string]$Log
         )
         $ErrorActionPreference = "Stop"
         function Say([string]$Text) { Add-Content -Path $Log -Value "$(Get-Date -Format o) $Text" }
@@ -156,7 +169,7 @@ public sealed class UpdateApplier
 
         $backup = Join-Path $InstallDirectory "backup\api"
         try {
-            Say "Updating to $Version"
+            Say "Updating from $From to $Version"
             Start-Sleep -Seconds 2
             Stop-Service -Name $ServiceName -Force
             (Get-Service -Name $ServiceName).WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60))
@@ -193,14 +206,14 @@ public sealed class UpdateApplier
 
     private const string LinuxScript = """
         #!/bin/bash
-        # Arguments: service, program folder, staged release, version, health URL, log
-        service="$1"; api="$2"; staged="$3"; version="$4"; health="$5"; log="$6"
+        # Arguments: service, program folder, staged release, release tag, health URL, log, running version
+        service="$1"; api="$2"; staged="$3"; version="$4"; health="$5"; log="$6"; from="$7"
         say() { echo "$(date -Is) $*" >> "$log"; }
         copy_program() { (cd "$1" && find . -mindepth 1 -maxdepth 1 ! -name appsettings.Production.json ! -name logs -exec cp -a {} "$2/" \;); }
         healthy() { for _ in $(seq 1 90); do curl -fs "$health" >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
 
         backup="$(dirname "$api")/backup/api"
-        say "Updating to $version"
+        say "Updating from $from to $version"
         sleep 2
         systemctl stop "$service"
         rm -rf "$backup"; mkdir -p "$backup"

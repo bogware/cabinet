@@ -75,7 +75,7 @@ public enum SsoProviderType
     /// <summary>
     /// OpenID Connect — the recommended and only implemented SSO provider.
     /// Supports JWT Bearer tokens via any OIDC-compliant identity provider
-    /// (Entra ID, Okta, Keycloak, Auth0, etc.).
+    /// (Microsoft Entra ID, Amazon Cognito, Okta, Auth0, etc.).
     /// </summary>
     Oidc,
 
@@ -95,14 +95,44 @@ public enum SsoProviderType
 /// <summary>
 /// OpenID Connect authentication settings. This is the only SSO provider currently
 /// implemented in Cabinet. Configured via the <c>Sso:Oidc</c> configuration section.
-/// Supports any OIDC-compliant identity provider (Entra ID, Okta, Keycloak, Auth0, etc.).
+/// Supports any OIDC-compliant identity provider (Microsoft Entra ID, Amazon Cognito, Okta, Auth0, etc.).
 /// </summary>
 public sealed class OidcSettings
 {
     /// <summary>
-    /// OIDC authority URL (issuer). Example: <c>https://login.microsoftonline.com/{tenant}/v2.0</c>
+    /// The identity provider, for what it does differently: <see cref="OidcProvider.Entra"/> and
+    /// <see cref="OidcProvider.Cognito"/> derive the authority, issuers and audiences, and read their
+    /// own group claims. <see cref="OidcProvider.Generic"/> (the default) takes everything as configured.
     /// </summary>
-    public required string Authority { get; set; }
+    public OidcProvider Provider { get; set; } = OidcProvider.Generic;
+
+    /// <summary>
+    /// OIDC authority URL (issuer). Example: <c>https://login.microsoftonline.com/{tenant}/v2.0</c>.
+    /// Leave empty for Entra and Cognito to derive it from <see cref="TenantId"/>, or
+    /// <see cref="Region"/> and <see cref="UserPoolId"/>.
+    /// </summary>
+    public string Authority { get; set; } = string.Empty;
+
+    /// <summary>Entra ID: the directory (tenant) ID or a verified domain. Not common or organizations: one organization signs in.</summary>
+    public string? TenantId { get; set; }
+
+    /// <summary>Cognito: the user pool's AWS region, such as us-east-1.</summary>
+    public string? Region { get; set; }
+
+    /// <summary>Cognito: the user pool ID, such as us-east-1_AbCdEf123.</summary>
+    public string? UserPoolId { get; set; }
+
+    /// <summary>
+    /// More audiences accepted in bearer tokens besides <see cref="ClientId"/>, such as an Entra
+    /// application ID URI (api://... is accepted for Entra already) or a resource server identifier.
+    /// </summary>
+    public List<string> Audiences { get; set; } = [];
+
+    /// <summary>
+    /// Cognito: other app clients whose access tokens are accepted. Cognito access tokens have no
+    /// audience, only the client_id they were issued to; <see cref="ClientId"/> is always accepted.
+    /// </summary>
+    public List<string> ClientIds { get; set; } = [];
 
     /// <summary>
     /// OIDC client (application) ID registered with the identity provider.
@@ -126,9 +156,24 @@ public sealed class OidcSettings
     public string CallbackPath { get; set; } = "/auth/callback";
 
     /// <summary>
-    /// Name of the JWT claim containing group memberships, used for role mapping.
+    /// Name of the JWT claim containing group memberships, used for role mapping. Its values are
+    /// also given as <c>groups</c> claims, so role mappings on <c>groups</c> work with any provider.
+    /// Cognito's is <c>cognito:groups</c>, used when this is left as <c>groups</c>.
     /// </summary>
     public string GroupsClaim { get; set; } = "groups";
+}
+
+/// <summary>Identity providers whose differences Cabinet knows.</summary>
+public enum OidcProvider
+{
+    /// <summary>Any other standard OpenID Connect provider, such as Okta, Auth0, Google Workspace or Ping, with the authority given.</summary>
+    Generic,
+
+    /// <summary>Microsoft Entra ID (Azure AD): tenant issuers v1 and v2, oid as the stable user ID, app roles and group object IDs.</summary>
+    Entra,
+
+    /// <summary>Amazon Cognito user pools: access tokens identified by client_id, groups in cognito:groups.</summary>
+    Cognito,
 }
 
 /// <summary>

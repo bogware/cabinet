@@ -18,6 +18,9 @@ public sealed class ServerLimits
     /// <summary>Largest OTLP request once decompressed, in MB.</summary>
     public int OtlpMaxDecompressedMB { get; set; } = 64;
 
+    /// <summary>Largest SCIM request, in MB.</summary>
+    public int ScimMaxRequestMB { get; set; } = 1;
+
     /// <summary>Time a search on the search page may run, in seconds.</summary>
     public int QueryTimeoutSeconds { get; set; } = 60;
 

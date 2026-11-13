@@ -309,7 +309,7 @@ Before requesting review, verify:
 ### Review Process
 
 1. At least one maintainer approval required
-2. CI pipeline must pass (build + test)
+2. CI must pass (build + test). CI runs only when started by hand, so a maintainer runs it on the branch (`gh workflow run ci.yml --ref <branch>`, see docs/CI.md)
 3. No unresolved review comments
 4. Squash-merge to `main` (preserves clean history)
 

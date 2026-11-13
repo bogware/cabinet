@@ -21,10 +21,15 @@ async function loadSignInOptions() {
         const res = await fetch('/auth/providers', { headers: { Accept: 'application/json' } });
         if (!res.ok) return null;
         const p = await res.json();
-        document.getElementById('loginOidc').hidden = !p.oidc;
+        const oidcButton = document.getElementById('loginOidc');
+        oidcButton.hidden = !p.oidc;
+        oidcButton.textContent = p.oidcProvider === 'Entra' ? 'Sign in with Microsoft' : p.oidcProvider === 'Cognito' ? 'Sign in with AWS' : 'Sign in with SSO';
         document.getElementById('loginSaml').hidden = !p.saml;
         document.getElementById('loginLdap').hidden = !p.ldap;
-        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap);
+        document.getElementById('loginLocal').hidden = !p.local;
+        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap || p.local);
+        const account = document.getElementById('accountButton');
+        if (account) account.hidden = !(p.signedIn && p.localAccount && !API_KEY);
         const signOut = document.getElementById('signOutButton');
         if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
         return p;

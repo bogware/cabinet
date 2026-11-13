@@ -94,6 +94,17 @@ public abstract class BqlEndToEndTests : IAsyncLifetime
     private static string? Text(IDictionary<string, object?> row, string field) =>
         row.TryGetValue(field, out var value) ? value?.ToString() : null;
 
+    // ─── index= narrows storage, ignoring case as the search term does ───
+
+    [SkippableFact]
+    public async Task IndexTerm_InAnyCase_FindsTheIndex_AndAnotherIndexFindsNothing()
+    {
+        (await CountAsync($"find index={RunIndex.ToUpperInvariant()}")).Should().Be(5);
+        (await CountAsync($"find error index={RunIndex}")).Should().Be(2);
+        (await CountAsync("find index=some-other-index")).Should().Be(0);
+        (await CountAsync($"find index={RunIndex} index=some-other-index")).Should().Be(0);
+    }
+
     // ─── Reading everything: a page continues from the last event of the one before ───
 
     [SkippableTheory]

@@ -79,6 +79,68 @@ Send a token as `Authorization: Bearer <token>`. `Sso:RoleMappings` maps claims 
 
 The first matching mapping applies. With `AutoProvision` off, the default, anyone else gets 403. With it on, anyone else gets `DefaultRole`, which means every account the identity provider knows. A principal saved through `/api/v1/roles` with the ID `oidc-<subject>` overrides the mapping.
 
+A token for someone in the user directory (below) gets what the directory gives them, and is refused with 401 if the directory has deactivated them, whatever the identity provider says.
+
+### Local accounts
+
+People can also sign in to the dashboard with a user name and password kept in Cabinet, plus an authenticator app if they have one. These endpoints are for the dashboard, not API clients; scripts use API keys. Every POST to them needs the `X-Cabinet-Request` header.
+
+| Endpoint | Body | What happens |
+|----------|------|--------------|
+| `POST /auth/login/local` | `{userName, password}` | Signs in, or returns the next step |
+| `POST /auth/login/mfa` | `{challenge, code}` | An authenticator code, or a recovery code |
+| `POST /auth/login/password` | `{challenge, newPassword}` | A new password, when the account must change it |
+| `POST /auth/login/mfa/enroll` | `{challenge}` | Starts setting up an authenticator when the account's role must have one; returns `secret` and `otpauthUri` |
+| `POST /auth/login/mfa/enroll/confirm` | `{challenge, code}` | Confirms it and signs in; returns ten `recoveryCodes`, shown once |
+
+Each answers `{"status": "signed-in"}` with the session cookie set, or a next step: `mfa-required`, `password-change-required` or `mfa-enrollment-required`, with a `challenge`. A challenge is single-use, lasts five minutes, belongs to one user and one step, and isn't a session. A wrong password or code is 401 with the same message whether or not the account exists; repeated failures are slowed (429 with `Retry-After`) and lock the account (`Accounts:LockoutThreshold`, default 5, for `Accounts:LockoutMinutes`, default 15).
+
+Signed in with a local account, the user manages their own account:
+
+| Endpoint | Body | |
+|----------|------|---|
+| `GET /auth/account` | | Name, role, whether MFA is on or required, recovery codes left |
+| `POST /auth/account/password` | `{currentPassword, newPassword}` | Ends the user's other sessions |
+| `POST /auth/account/mfa/enroll` | | Returns `secret` and `otpauthUri` |
+| `POST /auth/account/mfa/confirm` | `{code}` | Turns MFA on; returns recovery codes |
+| `POST /auth/account/mfa/recovery-codes` | `{code}` | New recovery codes |
+| `POST /auth/account/mfa/disable` | `{code}` | Refused if the role must use MFA |
+| `POST /auth/account/sign-out-everywhere` | | |
+
+Codes are TOTP (RFC 6238: SHA1, six digits, 30 seconds), accepted one step either side of now, and a code's time step can't be used twice.
+
+### Users and groups
+
+With `UserManagement`, `/api/v1/users` manages the user directory: local accounts, users an identity provider provisions over SCIM, and single sign-on users given a role or deactivated here.
+
+```bash
+# A local account. Without a password, a temporary one is returned once and must be changed at first sign-in.
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"userName": "alice", "email": "alice@example.com", "role": "Analyst"}' \
+  https://cabinet.example.com/api/v1/users
+
+# A single sign-on user: no password; matched to the identity provider's user by externalId or user name
+curl -X POST ... -d '{"userName": "bob@example.com", "sso": true, "externalId": "<Entra object ID>", "role": "Viewer"}'
+```
+
+`PUT /api/v1/users/{id}` replaces `displayName`, `email`, `active`, `role` and `indexPermissions`, and changes `userName`, `externalId` and `groups` when given. `POST /api/v1/users/{id}/reset-password` returns a temporary password; `reset-mfa`, `unlock` and `sign-out` do what they say. Deactivating, resetting a password or MFA, signing out everywhere and deleting all end the user's sessions at their next request (on other instances within `Accounts:DirectoryCacheSeconds`, default 5).
+
+`/api/v1/groups` manages groups: `{displayName, role, indexPermissions, members}`. A group's role and index permissions apply to its members; with several, the highest role wins and index permissions are combined. Groups provisioned over SCIM appear here, and their role is set here.
+
+What a caller gets, in order: a principal saved through `/api/v1/roles` for their client ID; then, for someone in the directory, their own role and their groups'; then the SSO claim mappings. A local account gets only what the directory gives it.
+
+### SCIM
+
+`/scim/v2` is a SCIM 2.0 server (RFC 7643 and 7644) for identity providers such as Microsoft Entra ID and Okta: `ServiceProviderConfig`, `ResourceTypes`, `Schemas`, and `Users` and `Groups` with GET (with `filter`, `startIndex` and `count`), POST, PUT, PATCH and DELETE. It authenticates with a SCIM token sent as `Authorization: Bearer <token>`, which works nowhere else, just as API keys don't work on SCIM. Make tokens on the Users page or with `UserManagement`:
+
+```bash
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{"name": "Entra ID"}' https://cabinet.example.com/api/v1/scim-tokens
+# {"token": "scim_...", ...}  shown once
+curl -X DELETE -H "X-API-Key: $KEY" https://cabinet.example.com/api/v1/scim-tokens/{id}
+```
+
+Setting `active` to false deactivates a user and keeps them; DELETE removes them. Cabinet keeps `userName`, `name.givenName`, `name.familyName`, `displayName`, `title`, `emails`, `active`, `externalId` and the enterprise extension's `department`; other attributes are accepted and ignored. Errors use the SCIM error schema with a `scimType`. See the deployment guide for setting up Entra ID and Okta.
+
 ### Development Keys
 
 Available only when `ASPNETCORE_ENVIRONMENT=Development`:
@@ -640,7 +702,7 @@ With the gaming extension on: `GET /api/v1/moderation/players` and `GET /api/v1/
 
 ### Dashboard sign-in
 
-`/auth/providers`, `/auth/login/oidc`, `/auth/login/saml`, `POST /auth/login/ldap` and `POST /auth/logout` are for the dashboard, not API clients. See the deployment guide's SSO section.
+`/auth/providers`, `/auth/login/oidc`, `/auth/login/saml`, `POST /auth/login/ldap`, the local account endpoints under `/auth/login` and `/auth/account` (see [Local accounts](#local-accounts)) and `POST /auth/logout` are for the dashboard, not API clients. `/auth/providers` says which ways of signing in are on, including `local` and `oidcProvider` (`Entra`, `Cognito` or `Generic`). See the deployment guide's SSO section.
 
 ### Alerts
 
