@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cabinet.Core.Interfaces;
@@ -29,6 +30,10 @@ public sealed partial class ClickHouseLogStorage : ILogStorage, IDisposable
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private volatile bool _initialized;
+
+    // Fields are stored as written, so "É" is stored as É rather than É. Filters read
+    // values with JSONExtractString, which unescapes, so rows stored before this match too.
+    private static readonly JsonSerializerOptions FieldsJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <param name="url">The HTTP interface, such as http://clickhouse:8123.</param>
     /// <param name="database">The database to keep events in, created if missing.</param>
@@ -126,6 +131,9 @@ public sealed partial class ClickHouseLogStorage : ILogStorage, IDisposable
     private readonly record struct Param(string Name, string Type, string Value);
 
     private static string Text(string? value) => value ?? string.Empty;
+
+    /// <summary>A field filter's value as the text it's compared with; null matches a JSON null.</summary>
+    private static string FilterText(object? value) => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "null";
 
     private static string Number(long value) => value.ToString(CultureInfo.InvariantCulture);
 
@@ -263,7 +271,7 @@ public sealed partial class ClickHouseLogStorage : ILogStorage, IDisposable
                     ["line_number"] = e.LineNumber,
                     ["parser"] = e.ParserName,
                     ["tags"] = e.GetTagSnapshot(),
-                    ["fields"] = JsonSerializer.Serialize(e.Fields),
+                    ["fields"] = JsonSerializer.Serialize(e.Fields, FieldsJson),
                 })).Append('\n');
             }
 
@@ -368,17 +376,16 @@ public sealed partial class ClickHouseLogStorage : ILogStorage, IDisposable
             var n = 0;
             foreach (var (name, expected) in filters)
             {
-                // The field's value as text, ignoring case; an array means any of its values
+                // A field named in any case, as LogEvent.Fields is, whose value as text equals one
+                // of the options ignoring case; an array means any of its values. A string is
+                // compared unescaped, whatever escaping it was stored with.
                 var options = expected is object?[] any ? any : [expected];
-                var value = $"lowerUTF8(JSONExtractRaw(fields, {{ff{n}:String}}))";
-                var texts = options.Select(o => JsonSerializer.Serialize(o switch { null => null, string s => (object)s.ToLowerInvariant(), _ => o })).ToList();
-                var alternatives = texts.Select((_, k) => $"{value} = {{fv{n}_{k}:String}} OR trim(BOTH '\"' FROM {value}) = {{fs{n}_{k}:String}}");
-                sql.Append($" AND JSONHas(fields, {{ff{n}:String}}) AND ({string.Join(" OR ", alternatives)})");
+                var alternatives = options.Select((_, k) => $"lowerUTF8(if(JSONType(kv.2) = 'String', JSONExtractString(kv.2), kv.2)) = lowerUTF8({{fs{n}_{k}:String}})");
+                sql.Append($" AND arrayExists(kv -> lowerUTF8(kv.1) = lowerUTF8({{ff{n}:String}}) AND ({string.Join(" OR ", alternatives)}), JSONExtractKeysAndValuesRaw(fields))");
                 p.Add(new Param($"ff{n}", "String", name));
-                for (var k = 0; k < texts.Count; k++)
+                for (var k = 0; k < options.Length; k++)
                 {
-                    p.Add(new Param($"fv{n}_{k}", "String", texts[k]));
-                    p.Add(new Param($"fs{n}_{k}", "String", Convert.ToString(options[k], CultureInfo.InvariantCulture)?.ToLowerInvariant() ?? "null"));
+                    p.Add(new Param($"fs{n}_{k}", "String", FilterText(options[k])));
                 }
 
                 n++;

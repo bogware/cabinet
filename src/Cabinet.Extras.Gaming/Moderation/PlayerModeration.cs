@@ -97,7 +97,8 @@ public static class PlayerModeration
 
     /// <summary>Whether this is a Steam ID: STEAM_X:Y:Z or [U:1:N].</summary>
     public static bool IsSteamId(string value) =>
-        System.Text.RegularExpressions.Regex.IsMatch(value, @"^(STEAM_[0-5]:[01]:\d{1,12}|\[U:1:\d{1,12}\])$");
+        System.Text.RegularExpressions.Regex.IsMatch(value, @"^(STEAM_[0-5]:[01]:\d{1,12}|\[U:1:\d{1,12}\])$",
+            System.Text.RegularExpressions.RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// Text that can go inside a quoted console argument. The Source console splits commands at

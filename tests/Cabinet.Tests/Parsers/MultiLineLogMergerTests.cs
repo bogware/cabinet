@@ -76,4 +76,23 @@ public class MultiLineLogMergerTests
         var results = merger.ProcessLines(Array.Empty<string>()).ToList();
         results.Should().BeEmpty();
     }
+
+    [Fact]
+    public void ProcessLines_CatastrophicPattern_TimesOutAsNoMatch()
+    {
+        // A configured pattern that backtracks exponentially on a line that almost matches
+        const string pattern = @"^(\w+\s?)*$";
+        var line = new string('a', 40) + "!";
+        var act = () => new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromMilliseconds(200)).IsMatch(line);
+        act.Should().Throw<System.Text.RegularExpressions.RegexMatchTimeoutException>("the pattern must really be catastrophic for this test to mean anything");
+
+        var merger = new MultiLineLogMerger(new MultiLineConfig { Mode = MultiLineMode.StartPattern, Pattern = pattern });
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var results = merger.ProcessLines(new[] { "start", line }).ToList();
+        watch.Stop();
+
+        results.Should().ContainSingle().Which.Should().Be("start\n" + line);
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+    }
 }
