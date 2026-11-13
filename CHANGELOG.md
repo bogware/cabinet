@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-13
+
+Enterprise sign-in and signed releases. Upgrading: dashboard sessions end once, since their keys now live in the metadata database; update the server before its agents, because 3.1 agents install only signed builds, which a 3.1 server offers; and on Linux, rerun the installer (or reinstall the package) so the service gets its new data-folder settings.
+
 ### Added
 
 - **Entra ID and Cognito presets** for single sign-on (`Sso:Oidc:Provider`): from the tenant, or the region and user pool, Cabinet works out the authority, accepts Entra's v1 and v2 tokens for that tenant only (never `common` or `organizations`), knows users by their Entra object ID (the one SCIM uses, where `sub` differs per app), maps app roles (`roles`) and groups, warns when Entra leaves groups out of a token, accepts Cognito access tokens by their `client_id`, and reads groups from `cognito:groups`. Tested against a real Entra tenant and Cognito user pool.
@@ -45,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Linux installer copies everything published with the server, including SQLite's native library, which it left out.
 - The alert log went to a `cabinet` folder in the program's folder when the service account has no home, as Linux services don't; it goes beside the server's logs.
 - `scripts/build-release.sh` had a syntax error and couldn't run.
+- A search could be cached without a write made in the same clock tick as it started, so it showed one event too few until the cache expired.
 
 
 ## [3.0.0] - 2026-11-13
