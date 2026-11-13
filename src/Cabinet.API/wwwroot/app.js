@@ -24,7 +24,10 @@ async function loadSignInOptions() {
         document.getElementById('loginOidc').hidden = !p.oidc;
         document.getElementById('loginSaml').hidden = !p.saml;
         document.getElementById('loginLdap').hidden = !p.ldap;
-        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap);
+        document.getElementById('loginLocal').hidden = !p.local;
+        document.getElementById('loginSsoDivider').hidden = !(p.oidc || p.saml || p.ldap || p.local);
+        const account = document.getElementById('accountButton');
+        if (account) account.hidden = !(p.signedIn && p.localAccount && !API_KEY);
         const signOut = document.getElementById('signOutButton');
         if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
         return p;

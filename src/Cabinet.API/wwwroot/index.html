@@ -520,6 +520,10 @@
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75C0 1.784.784 1 1.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM4 5h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 5Zm0 3h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 8Zm0 3h4a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 11Z"/></svg>
                 Indexes
             </button>
+            <button type="button" class="nav-item" data-page="users">
+                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/></svg>
+                Users
+            </button>
             <button type="button" class="nav-item" data-page="settings">
                 <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.022.078.281.834a1.18 1.18 0 0 0 1.402.756l.849-.21c.652-.163 1.31.098 1.727.563.5.56.91 1.197 1.2 1.891a1.37 1.37 0 0 1-.498 1.576l-.69.5a1.18 1.18 0 0 0 0 1.94l.69.5c.484.35.733.98.498 1.576a7.1 7.1 0 0 1-1.2 1.89 1.37 1.37 0 0 1-1.727.564l-.849-.21a1.18 1.18 0 0 0-1.402.756l-.281.834c-.17.646-.716 1.195-1.459 1.26a8.4 8.4 0 0 1-1.402 0c-.743-.065-1.289-.614-1.459-1.26l-.281-.834a1.18 1.18 0 0 0-1.402-.756l-.849.21c-.652.163-1.31-.098-1.727-.563a7.1 7.1 0 0 1-1.2-1.891 1.37 1.37 0 0 1 .498-1.576l.69-.5a1.18 1.18 0 0 0 0-1.94l-.69-.5A1.37 1.37 0 0 1 .28 4.862a7.1 7.1 0 0 1 1.2-1.89c.417-.466 1.075-.727 1.727-.564l.849.21a1.18 1.18 0 0 0 1.402-.756l.281-.834C5.856.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm0 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
                 Settings
@@ -538,6 +542,7 @@
             <div class="topbar-right">
                 <div class="status" id="healthStatus"><span class="dot" id="healthDot"></span><span id="healthText">Connecting...</span></div>
                 <button class="api-key-btn" data-click="toggleTheme" id="themeBtn" title="Toggle light/dark theme">Theme</button>
+                <button class="api-key-btn" data-click="showAccount" id="accountButton" hidden>My account</button>
                 <button class="api-key-btn" data-click="changeApiKey">API Key</button>
             </div>
         </div>
@@ -999,6 +1004,36 @@
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Destination</th><th scope="col">Secret</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="connectorsBody"></tbody>
+                </table></div></div>
+            </div>
+
+            <!-- ===== USERS PAGE ===== -->
+            <div class="page" id="page-users">
+                <div class="toolbar">
+                    <h3>Users</h3>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary btn-sm" data-click="showUserModal">+ New User</button>
+                        <button class="btn btn-secondary btn-sm" data-click="showGroupModal">+ New Group</button>
+                        <button class="btn btn-secondary btn-sm" data-click="loadUsers">Refresh</button>
+                    </div>
+                </div>
+                <p class="page-note">Local accounts sign in with a password and, if they set one up, an authenticator app. Users your identity provider provisions over SCIM, and single sign-on users added here, sign in through single sign-on; deactivating one here stops them however they sign in. Groups give their members a role.</p>
+                <p id="usersNote" class="page-note" role="status"></p>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">User</th><th scope="col">Source</th><th scope="col">Role</th><th scope="col">Groups</th><th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="usersBody"></tbody>
+                </table></div></div>
+                <h4 style="margin-top:20px">Groups</h4>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Group</th><th scope="col">Source</th><th scope="col">Gives role</th><th scope="col">Index permissions</th><th scope="col">Members</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="groupsBody"></tbody>
+                </table></div></div>
+                <h4 style="margin-top:20px">SCIM provisioning</h4>
+                <p class="page-note">Entra ID, Okta and other identity providers can create, update and deactivate users and groups here through SCIM 2.0 at <span class="mono" id="scimEndpoint">/scim/v2</span>, with a token made below. A SCIM token can only call SCIM.</p>
+                <div class="toolbar-actions" style="margin-bottom:8px"><input type="text" id="scimTokenName" aria-label="SCIM token name" placeholder="Name, such as Entra ID" style="max-width:240px"> <button class="btn btn-secondary btn-sm" data-click="createScimToken">+ New SCIM token</button></div>
+                <div class="panel"><div class="scroll-y"><table>
+                    <thead><tr><th scope="col">Name</th><th scope="col">Starts with</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                    <tbody id="scimTokensBody"></tbody>
                 </table></div></div>
             </div>
 
@@ -1472,6 +1507,30 @@
                 <div class="form-group"><label for="ldapPassword">Password</label><input type="password" id="ldapPassword" autocomplete="current-password"></div>
                 <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLdap">Sign in</button></div>
             </div>
+            <div id="loginLocal" hidden>
+                <div id="localStepPassword">
+                    <div class="form-group"><label for="localUser">User name</label><input type="text" id="localUser" autocomplete="username"></div>
+                    <div class="form-group"><label for="localPassword">Password</label><input type="password" id="localPassword" autocomplete="current-password"></div>
+                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocal">Sign in</button></div>
+                </div>
+                <div id="localStepMfa" hidden>
+                    <div class="form-group"><label for="localMfaCode">Code from your authenticator app, or a recovery code</label><input type="text" id="localMfaCode" autocomplete="one-time-code" inputmode="numeric"></div>
+                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalMfa">Continue</button></div>
+                </div>
+                <div id="localStepPasswordChange" hidden>
+                    <p class="page-note" id="localPasswordChangeNote">Choose a new password to continue.</p>
+                    <div class="form-group"><label for="localNewPassword">New password</label><input type="password" id="localNewPassword" autocomplete="new-password"></div>
+                    <div class="form-group"><label for="localNewPassword2">New password again</label><input type="password" id="localNewPassword2" autocomplete="new-password"></div>
+                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalNewPassword">Continue</button></div>
+                </div>
+                <div id="localStepEnroll" hidden>
+                    <p class="page-note">Your account has to use an authenticator app. Add this account to one (Microsoft Authenticator, Google Authenticator, 1Password and others) by entering the key below, then type the code it shows.</p>
+                    <div class="form-group"><label for="localEnrollSecret">Key</label><input type="text" id="localEnrollSecret" readonly class="mono"></div>
+                    <p class="page-note">Or open this link on the device with the app: <a id="localEnrollLink" href="#" rel="noopener">add to authenticator</a></p>
+                    <div class="form-group"><label for="localEnrollCode">Code from the app</label><input type="text" id="localEnrollCode" autocomplete="one-time-code" inputmode="numeric"></div>
+                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalEnroll">Continue</button></div>
+                </div>
+            </div>
             <p id="loginSsoDivider" class="page-note" hidden>Or use an API key:</p>
             <form id="loginForm">
                 <div class="form-group"><label for="loginKey">API key</label><input type="password" id="loginKey" autocomplete="current-password" required></div>
@@ -1479,6 +1538,87 @@
                 <p id="loginError" class="page-note" role="alert"></p>
                 <div class="modal-actions"><button class="btn btn-primary" type="submit">Sign in</button></div>
             </form>
+        </div>
+    </div>
+
+    <!-- User -->
+    <div class="modal-bg" id="userModal">
+        <div class="modal">
+            <h3 id="userModalTitle">New User</h3>
+            <div class="form-group"><label for="userName">User name</label><input type="text" id="userName" autocomplete="off"></div>
+            <div class="form-group"><label for="userDisplayName">Display name</label><input type="text" id="userDisplayName"></div>
+            <div class="form-group"><label for="userEmail">Email</label><input type="email" id="userEmail"></div>
+            <div class="form-group" id="userKindGroup"><label for="userKind">Signs in with</label>
+                <select id="userKind" data-change="userKindChanged"><option value="local">A password here (local account)</option><option value="sso">Single sign-on only</option></select></div>
+            <div class="form-group" id="userPasswordGroup"><label for="userPassword">Password (leave empty to make a temporary one)</label><input type="password" id="userPassword" autocomplete="new-password"></div>
+            <div class="form-group" id="userExternalIdGroup"><label for="userExternalId">Identity provider's ID for the user (optional, such as Entra's object ID)</label><input type="text" id="userExternalId"></div>
+            <div class="form-group"><label for="userRole">Role given directly</label>
+                <select id="userRole"><option value="">None (groups decide)</option><option>Viewer</option><option>Analyst</option><option>Admin</option><option>SuperAdmin</option></select></div>
+            <div class="form-group"><label for="userPermissions">Index permissions, one per line, such as "team-*: Search, Ingest". Empty: the role applies to every index.</label><textarea id="userPermissions" rows="3"></textarea></div>
+            <div class="form-group"><span class="page-note">Groups</span><div id="userGroups"></div></div>
+            <div class="form-group"><label class="check-label"><input type="checkbox" id="userActive" checked> Active</label></div>
+            <p id="userResult" class="page-note" role="alert"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["userModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveUser">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Group -->
+    <div class="modal-bg" id="groupModal">
+        <div class="modal">
+            <h3 id="groupModalTitle">New Group</h3>
+            <div class="form-group"><label for="groupName">Name</label><input type="text" id="groupName"></div>
+            <div class="form-group"><label for="groupRole">Role it gives its members</label>
+                <select id="groupRole"><option value="">None</option><option>Viewer</option><option>Analyst</option><option>Admin</option><option>SuperAdmin</option></select></div>
+            <div class="form-group"><label for="groupPermissions">Index permissions, one per line, such as "team-*: Search". Empty: the role applies to every index.</label><textarea id="groupPermissions" rows="3"></textarea></div>
+            <div class="form-group"><span class="page-note">Members</span><div id="groupMembers" style="max-height:200px;overflow-y:auto"></div></div>
+            <p id="groupResult" class="page-note" role="alert"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="closeModal" data-args='["groupModal"]'>Cancel</button>
+                <button class="btn btn-primary" data-click="saveGroup">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Something shown once: a temporary password, a token, recovery codes -->
+    <div class="modal-bg" id="onceModal">
+        <div class="modal">
+            <h3 id="onceTitle">Copy this now</h3>
+            <p class="page-note" id="onceNote"></p>
+            <pre class="mono" id="onceValue" style="user-select:all;white-space:pre-wrap;word-break:break-all"></pre>
+            <div class="modal-actions"><button class="btn btn-primary" data-click="closeModal" data-args='["onceModal"]'>Done</button></div>
+        </div>
+    </div>
+
+    <!-- My account -->
+    <div class="modal-bg" id="accountModal">
+        <div class="modal">
+            <h3>My account</h3>
+            <p class="page-note" id="accountSummary"></p>
+            <h4>Password</h4>
+            <div class="form-group"><label for="accountCurrentPassword">Current password</label><input type="password" id="accountCurrentPassword" autocomplete="current-password"></div>
+            <div class="form-group"><label for="accountNewPassword">New password</label><input type="password" id="accountNewPassword" autocomplete="new-password"></div>
+            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-secondary btn-sm" data-click="changeOwnPassword">Change password</button></div>
+            <h4 style="margin-top:16px">Authenticator app</h4>
+            <p class="page-note" id="accountMfaStatus"></p>
+            <div id="accountMfaEnroll" hidden>
+                <div class="form-group"><label for="accountMfaSecret">Key for your authenticator app</label><input type="text" id="accountMfaSecret" readonly class="mono"></div>
+                <p class="page-note">Or open this link on the device with the app: <a id="accountMfaLink" href="#" rel="noopener">add to authenticator</a></p>
+            </div>
+            <div class="form-group"><label for="accountMfaCode">Code from the app (or a recovery code to remove it)</label><input type="text" id="accountMfaCode" autocomplete="one-time-code"></div>
+            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+                <button class="btn btn-secondary btn-sm" id="accountMfaStart" data-click="startOwnMfa">Set up</button>
+                <button class="btn btn-secondary btn-sm" id="accountMfaConfirm" data-click="confirmOwnMfa" hidden>Confirm</button>
+                <button class="btn btn-secondary btn-sm" id="accountMfaCodes" data-click="newOwnRecoveryCodes" hidden>New recovery codes</button>
+                <button class="btn btn-danger btn-sm" id="accountMfaRemove" data-click="removeOwnMfa" hidden>Remove</button>
+            </div>
+            <p id="accountResult" class="page-note" role="alert"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" data-click="signOutEverywhere">Sign out everywhere</button>
+                <button class="btn btn-primary" data-click="closeModal" data-args='["accountModal"]'>Close</button>
+            </div>
         </div>
     </div>
 

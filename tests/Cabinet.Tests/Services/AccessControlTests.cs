@@ -752,7 +752,7 @@ public sealed class AccessControlApiTests : IDisposable
     }
 
     /// <summary>A running API process.</summary>
-    private sealed class ApiProcess : IAsyncDisposable
+    internal sealed class ApiProcess : IAsyncDisposable
     {
         private readonly Process _process;
         private readonly Task<string> _stdout;
@@ -830,7 +830,7 @@ public sealed class AccessControlApiTests : IDisposable
     }
 
     /// <summary>The two documents a JWT validator fetches from an identity provider, and tokens to match.</summary>
-    private sealed class OidcTestProvider : IAsyncDisposable
+    internal sealed class OidcTestProvider : IAsyncDisposable
     {
         private readonly TcpListener _listener;
         private readonly Task _serving;
@@ -855,12 +855,12 @@ public sealed class AccessControlApiTests : IDisposable
             return Task.FromResult(new OidcTestProvider(listener, key, $"http://localhost:{port}"));
         }
 
-        public string CreateToken(string subject, string group, string audience) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        public string CreateToken(string subject, string group, string audience, Dictionary<string, object>? extra = null) => new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = Authority,
             Audience = audience,
             Expires = DateTime.UtcNow.AddMinutes(10),
-            Claims = new Dictionary<string, object> { ["sub"] = subject, ["groups"] = group },
+            Claims = new Dictionary<string, object>(extra ?? new Dictionary<string, object>()) { ["sub"] = subject, ["groups"] = group },
             SigningCredentials = new SigningCredentials(_key, SecurityAlgorithms.RsaSha256),
         });
 
