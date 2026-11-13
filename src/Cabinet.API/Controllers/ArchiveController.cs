@@ -41,6 +41,11 @@ public sealed class ArchiveController : ControllerBase
             return Problem(detail: "No archive is set up. An administrator can set one with Archive:Type.", statusCode: StatusCodes.Status404NotFound);
         }
 
+        if (index != null && !EventArchiver.CanArchive(index))
+        {
+            return Problem(detail: "An archived index's name has only letters, digits, '-', '_' and '.'.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
         var chunks = await _archive.ListAsync(index, cancellationToken);
         return Ok(chunks
             .Where(c => _scope.CanRead(c.Index))
@@ -78,6 +83,11 @@ public sealed class ArchiveController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Index) || request.From >= request.To || string.IsNullOrWhiteSpace(request.Query) || request.Query.Length > 10_000)
         {
             return Problem(detail: "Name an index, a time range, and a query.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!EventArchiver.CanArchive(request.Index))
+        {
+            return Problem(detail: "An archived index's name has only letters, digits, '-', '_' and '.'.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         if (!_scope.CanRead(request.Index))
@@ -169,6 +179,11 @@ public sealed class ArchiveController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Index) || request.From >= request.To || request.To - request.From > TimeSpan.FromDays(31))
         {
             return Problem(detail: "Name an index and a time range of up to 31 days.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (!EventArchiver.CanArchive(request.Index))
+        {
+            return Problem(detail: "An archived index's name has only letters, digits, '-', '_' and '.'.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         var target = string.IsNullOrWhiteSpace(request.TargetIndex) ? $"{request.Index}-restored" : request.TargetIndex.Trim();

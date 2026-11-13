@@ -15,13 +15,33 @@ public partial class SourceModParser : GamingLogParser
     public override string Name => "SourceMod";
     public override string SourceType => GamingSourceTypes.SourceMod;
 
-    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}.*\[.*\]")]
+    // "[" then "]" later on the first line. Each part stops at the character after it, so the
+    // match is linear: ".*\[.*\]" took minutes on a line of brackets that never closed.
+    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}[^\[\n]*\[[^\]\n]*\]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex SourceModLogPattern();
+
+    // Player pattern: "Name<id><steamid><team>". A backtracking engine retries "[^<]+" from every
+    // quote, which is quadratic on a line of quotes, so this runs without backtracking.
+    private static readonly Regex PlayerPattern = new(
+        @"""([^<]+)<(\d+)><([^>]+)>(?:<([^>]+)>)?""",
+        RegexOptions.NonBacktracking, RegexTimeout);
 
     public override bool CanParse(string line)
     {
         // SourceMod logs have patterns like: L MM/DD/YYYY - HH:MM:SS: [plugin.smx]
-        return SourceModLogPattern().IsMatch(line) || line.Contains("[SM]") || line.Contains(".smx");
+        if (line.Contains("[SM]") || line.Contains(".smx"))
+        {
+            return true;
+        }
+
+        try
+        {
+            return SourceModLogPattern().IsMatch(line);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     protected override void ExtractSpecificFields(string line, LogEvent logEvent)
@@ -153,9 +173,7 @@ public partial class SourceModParser : GamingLogParser
 
     private void ExtractPlayerActions(string line, LogEvent logEvent)
     {
-        // Player pattern: "Name<id><steamid><team>"
-        var playerPattern = @"""([^<]+)<(\d+)><([^>]+)>(?:<([^>]+)>)?""";
-        var matches = Regex.Matches(line, playerPattern);
+        var matches = PlayerPattern.Matches(line);
 
         if (matches.Count > 0)
         {

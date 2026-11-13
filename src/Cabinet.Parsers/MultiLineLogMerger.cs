@@ -107,13 +107,28 @@ public static class MultiLinePatterns
 /// </summary>
 public sealed class MultiLineLogMerger
 {
+    private static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
     private readonly Regex _pattern;
     private readonly MultiLineConfig _config;
 
     public MultiLineLogMerger(MultiLineConfig config)
     {
         _config = config;
-        _pattern = new Regex(config.Pattern, RegexOptions.Compiled);
+        // The pattern comes from configuration and runs on every line, so it gets a time limit
+        _pattern = new Regex(config.Pattern, RegexOptions.Compiled, PatternTimeout);
+    }
+
+    // A line the pattern can't decide in time counts as not matching
+    private bool Matches(string line)
+    {
+        try
+        {
+            return _pattern.IsMatch(line);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -127,7 +142,7 @@ public sealed class MultiLineLogMerger
 
         foreach (var line in lines)
         {
-            var isPatternMatch = _pattern.IsMatch(line);
+            var isPatternMatch = Matches(line);
             bool isNewEntry;
 
             if (_config.Mode == MultiLineMode.StartPattern)

@@ -16,20 +16,27 @@ public partial class L4D2Parser : GamingLogParser
     public override string Name => "L4D2";
     public override string SourceType => GamingSourceTypes.L4D2;
 
-    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}")]
+    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex L4D2LogPattern();
 
     // A player: name, user ID, Steam ID or BOT, team, then optional character, state and so on.
     // Names can hold quotes and spaces but not '<'.
     private const string Player = @"""(?<name>[^<]*)<(?<uid>-?\d+)><(?<steam>[^>]*)><(?<team>[^>]*)>(?:<(?<class>[^>]*)>)?(?:<[^>]*>)*""";
 
-    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}\s+-\s+\d{2}:\d{2}:\d{2}:\s*")]
+    [GeneratedRegex(@"^L\s+\d{2}/\d{2}/\d{4}\s+-\s+\d{2}:\d{2}:\d{2}:\s*", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex Prefix();
 
     public override bool CanParse(string line)
     {
         // L4D2 logs typically start with "L MM/DD/YYYY"
-        return L4D2LogPattern().IsMatch(line);
+        try
+        {
+            return L4D2LogPattern().IsMatch(line);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     // Severity comes from what the server wrote, never from what a player typed in chat, and

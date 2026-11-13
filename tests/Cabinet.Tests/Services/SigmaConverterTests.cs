@@ -124,4 +124,110 @@ public sealed class SigmaConverterTests
         MitreAttack.Techniques.Select(t => t.Id).Should().OnlyHaveUniqueItems();
         MitreAttack.Techniques.SelectMany(t => t.Tactics).Should().OnlyContain(id => MitreAttack.Tactics.Any(tactic => tactic.Id == id));
     }
+
+    private static string Rule(string selection, string condition = "sel") =>
+        $"title: Hostile\ndetection:\n    sel: {selection}\n    condition: {condition}\n";
+
+    [Fact]
+    public void AliasBomb_IsRejected_BeforeItExpands()
+    {
+        // "Billion laughs": nine aliases of nine aliases, 582 bytes that took 34 s and 66 GB to load
+        var yaml = new System.Text.StringBuilder("title: lol\nlogsource: {}\ndetection:\n    a: &a [\"lol\",\"lol\",\"lol\",\"lol\",\"lol\",\"lol\",\"lol\",\"lol\",\"lol\"]\n");
+        for (var c = 'b'; c <= 'i'; c++)
+        {
+            var previous = (char)(c - 1);
+            yaml.Append($"    {c}: &{c} [{string.Join(",", Enumerable.Repeat($"*{previous}", 9))}]\n");
+        }
+        yaml.Append("    condition: i\n");
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var results = SigmaConverter.Convert(yaml.ToString());
+        watch.Stop();
+
+        results.Should().ContainSingle();
+        results[0].Rule.Should().BeNull();
+        results[0].Problem.Should().Contain("alias");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Theory]
+    [InlineData("flow")]
+    [InlineData("block")]
+    [InlineData("map")]
+    public void DeepNesting_FailsCleanly(string kind)
+    {
+        // 5,000 levels overflowed the stack and killed the process
+        const int depth = 5_000;
+        var selection = kind switch
+        {
+            "flow" => new string('[', depth) + "x" + new string(']', depth),
+            "block" => "\n        " + string.Concat(Enumerable.Repeat("- ", depth)) + "x",
+            _ => string.Concat(Enumerable.Repeat("{a: ", depth)) + "x" + new string('}', depth),
+        };
+
+        var results = SigmaConverter.Convert(Rule(selection));
+
+        results.Should().ContainSingle();
+        results[0].Rule.Should().BeNull();
+        results[0].Problem.Should().Contain("levels deep");
+    }
+
+    [Fact]
+    public void NestingWithinTheLimit_StillConverts()
+    {
+        var selection = new string('[', 10) + "needle" + new string(']', 10);
+
+        var result = SigmaConverter.Convert(Rule(selection)).Single();
+
+        result.Problem.Should().BeNull();
+        result.Rule!.Condition.Should().Contain("needle");
+    }
+
+    [Fact]
+    public void TooManyValues_InOneSelection_AreRejected()
+    {
+        var values = string.Join(",", Enumerable.Range(0, SigmaConverter.MaxConditions + 1).Select(i => $"v{i}"));
+
+        var result = SigmaConverter.Convert(Rule($"{{ CommandLine|contains: [{values}] }}")).Single();
+
+        result.Rule.Should().BeNull();
+        result.Problem.Should().Contain("conditions");
+    }
+
+    [Fact]
+    public void ASelectionNamedOverAndOver_CountsEachTime()
+    {
+        // 100 values named 100 times would write out 10,000 tests
+        var values = string.Join(",", Enumerable.Range(0, 100).Select(i => $"v{i}"));
+        var condition = string.Join(" or ", Enumerable.Repeat("sel", 100));
+
+        var result = SigmaConverter.Convert(Rule($"{{ CommandLine: [{values}] }}", condition)).Single();
+
+        result.Rule.Should().BeNull();
+        result.Problem.Should().Contain("conditions");
+    }
+
+    [Fact]
+    public void TooMuchText_IsRejected()
+    {
+        var results = SigmaConverter.Convert(Rule("x") + "# " + new string('x', SigmaConverter.MaxInputLength));
+
+        results.Should().ContainSingle();
+        results[0].Rule.Should().BeNull();
+        results[0].Problem.Should().Contain("longer than");
+    }
+
+    [Theory]
+    [InlineData("(")]
+    [InlineData("not ")]
+    public void DeeplyNestedCondition_FailsCleanly(string opener)
+    {
+        // The condition parser recurses on each "(" and "not"
+        var condition = string.Concat(Enumerable.Repeat(opener, 200_000)) + "sel" + (opener == "(" ? new string(')', 200_000) : string.Empty);
+
+        var result = SigmaConverter.Convert(Rule("x", condition)).Single();
+
+        result.Rule.Should().BeNull();
+        result.Problem.Should().Contain("levels deep");
+    }
 }

@@ -15,16 +15,28 @@ public partial class SteamCMDParser : GamingLogParser
     public override string Name => "SteamCMD";
     public override string SourceType => GamingSourceTypes.SteamCMD;
 
-    [GeneratedRegex(@"^\[.*\]\s+(?:Downloading|Installing|Validating|Updating|Loading|Connecting)")]
+    [GeneratedRegex(@"^\[.*\]\s+(?:Downloading|Installing|Validating|Updating|Loading|Connecting)", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex SteamCMDPattern();
 
     public override bool CanParse(string line)
     {
-        return SteamCMDPattern().IsMatch(line) ||
+        return MatchesSteamCMDPattern(line) ||
                line.Contains("Steam", StringComparison.OrdinalIgnoreCase) ||
                line.Contains("app_update", StringComparison.OrdinalIgnoreCase) ||
                line.Contains("workshop", StringComparison.OrdinalIgnoreCase) ||
                line.Contains("Update state", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesSteamCMDPattern(string line)
+    {
+        try
+        {
+            return SteamCMDPattern().IsMatch(line);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     protected override void ExtractSpecificFields(string line, LogEvent logEvent)
