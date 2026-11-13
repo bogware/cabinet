@@ -205,6 +205,17 @@ public sealed class DetectionEngineTests
 
         (await _history.GetAlertsAsync()).Should().ContainSingle().Which.Severity.Should().Be("Critical");
     }
+
+    [Fact]
+    public void APatternInAConditionRunningOutOfTime_IsCounted_NotQuietlyANonMatch()
+    {
+        var matcher = new BqlEventMatcher(null, "match(_raw, \"^(a+)+$\")", null);
+        var logEvent = new LogEvent { RawLine = new string('a', 40) + "!", Timestamp = DateTime.UtcNow };
+
+        matcher.TryMatch(logEvent, out _).Should().BeFalse();
+
+        matcher.Timeouts.Should().Be(1);
+    }
 }
 
 public sealed class BuiltinDetectionRuleTests

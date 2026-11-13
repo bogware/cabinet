@@ -3,41 +3,53 @@ namespace Cabinet.Query.Natural;
 /// <summary>Closeness of words, for correcting typos.</summary>
 public static class Fuzzy
 {
-    /// <summary>Optimal string alignment distance: edits, with a swap of neighbors counting as one.</summary>
+    /// <summary>
+    /// Longest word worth correcting. Words and field names come from people and from logs, so
+    /// either can be huge, and comparing two takes time in proportion to both lengths.
+    /// </summary>
+    public const int MaxLength = 64;
+
+    /// <summary>
+    /// Optimal string alignment distance: edits, with a swap of neighbors counting as one. Words
+    /// whose lengths differ by more than 3, or longer than <see cref="MaxLength"/>, are never close,
+    /// and give 4 or more without being compared.
+    /// </summary>
     public static int Distance(string a, string b)
     {
+        if (Math.Abs(a.Length - b.Length) > 3 || a.Length > MaxLength || b.Length > MaxLength)
+        {
+            return Math.Max(4, Math.Abs(a.Length - b.Length));
+        }
+
         a = a.ToLowerInvariant();
         b = b.ToLowerInvariant();
-        if (Math.Abs(a.Length - b.Length) > 3)
-        {
-            return 4;
-        }
 
-        var d = new int[a.Length + 1, b.Length + 1];
-        for (var i = 0; i <= a.Length; i++)
-        {
-            d[i, 0] = i;
-        }
-
+        // Only the last two rows are needed: the one before, and the one before that for swaps
+        var older = new int[b.Length + 1];
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
         for (var j = 0; j <= b.Length; j++)
         {
-            d[0, j] = j;
+            previous[j] = j;
         }
 
         for (var i = 1; i <= a.Length; i++)
         {
+            current[0] = i;
             for (var j = 1; j <= b.Length; j++)
             {
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                current[j] = Math.Min(Math.Min(previous[j] + 1, current[j - 1] + 1), previous[j - 1] + cost);
                 if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1])
                 {
-                    d[i, j] = Math.Min(d[i, j], d[i - 2, j - 2] + 1);
+                    current[j] = Math.Min(current[j], older[j - 2] + 1);
                 }
             }
+
+            (older, previous, current) = (previous, current, older);
         }
 
-        return d[a.Length, b.Length];
+        return previous[b.Length];
     }
 
     /// <summary>Most edits a word of this length may be from what it's corrected to.</summary>

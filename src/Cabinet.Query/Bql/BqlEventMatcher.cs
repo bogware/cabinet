@@ -39,7 +39,16 @@ public sealed class BqlEventMatcher
         }
     }
 
-    /// <summary>Times a pattern ran out of time on an event, which counts as not matching.</summary>
+    /// <summary>
+    /// Times a pattern, the rule's own or one in its condition, ran out of time on an event. That
+    /// event isn't checked against the rule, so callers must not let this pass unnoticed: the
+    /// detection engine warns about each one and turns the rule off when they keep happening.
+    /// </summary>
+    /// <remarks>
+    /// Firing on a timeout instead would let anyone who can write a log line raise alerts at will
+    /// by padding lines, and giving a pattern unlimited time would let them stall detection for
+    /// every rule. Counting and reporting is the choice that keeps both visible.
+    /// </remarks>
     public int Timeouts { get; private set; }
 
     /// <summary>
@@ -57,7 +66,7 @@ public sealed class BqlEventMatcher
             }
 
             var row = BqlQueryEngine.ConvertToExpando(logEvent);
-            if (_condition != null && !BqlExpressionEvaluator.EvaluateBool(_condition, row))
+            if (_condition != null && !BqlExpressionEvaluator.EvaluateDetectionCondition(_condition, row, RegexTimeout))
             {
                 return false;
             }
