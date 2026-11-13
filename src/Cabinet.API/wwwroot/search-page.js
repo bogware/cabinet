@@ -631,8 +631,8 @@ function renderFields() {
                 <div class="sx-value">
                     <span class="sx-value-label" title="${esc(v.value)}">${esc(v.value)}</span>
                     <span class="sx-value-count">${fmt(v.count)} &middot; ${(v.share * 100).toFixed(v.share < 0.1 ? 1 : 0)}%</span>
-                    <span>${canFilter ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, false)}">+</button>
-                    <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, true)}">&minus;</button>` : ''}</span>
+                    <span>${canFilter ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, false)}">Only</button>
+                    <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(f.name)} = ${esc(v.value)}" data-click="filterOnSummary" data-args="${fieldArgs(f.name, v.value, true)}">Hide</button>` : ''}</span>
                     <span class="sx-value-bar"><span style="width:${(v.share * 100).toFixed(1)}%"></span></span>
                 </div>`).join('');
             const name = CabinetSearch.fieldName(f.name);
@@ -919,7 +919,7 @@ function renderBuilderConditions() {
             `<select data-cond="${i}" data-part="op" aria-label="Comparison">${ops.map(([v, l]) => `<option value="${esc(v)}"${v === c.op ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>` +
             `<input data-cond="${i}" data-part="value" aria-label="Value" list="builderValues${i}" value="${esc(c.value)}" placeholder="Value">` +
             `<datalist id="builderValues${i}">${values.map(v => `<option value="${esc(v)}">`).join('')}</datalist>` +
-            `<button type="button" class="btn btn-secondary btn-sm" data-click="removeBuilderCondition" data-args="[${i}]" aria-label="Remove condition">&times;</button></div>`;
+            `<button type="button" class="btn btn-secondary btn-sm" data-click="removeBuilderCondition" data-args="[${i}]" >Remove</button></div>`;
     }).join('');
     document.querySelectorAll('#builderConditions [data-cond]').forEach(el => {
         const update = () => {
@@ -1015,10 +1015,10 @@ function eventDetailHtml(row, i) {
         const value = k === 'Severity' && typeof row[k] === 'number' ? `${CabinetSearch.SEVERITIES[row[k]] ?? row[k]} (${row[k]})` : k === 'Timestamp' ? fmtTime(row[k]) : CabinetSearch.displayValue(row[k]);
         const canFilter = CabinetSearch.fieldName(k) !== null && k !== 'Id' && k !== 'Timestamp' && typeof row[k] !== 'object';
         const actions = canFilter
-            ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, false)}">+</button>
-               <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, true)}">&minus;</button>`
+            ? `<button type="button" class="sx-icon-btn" title="Only events with this value" aria-label="Filter on ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, false)}">Only</button>
+               <button type="button" class="sx-icon-btn" title="Leave out events with this value" aria-label="Exclude ${esc(k)}" data-click="filterOnEvent" data-args="${fieldArgs(i, k, true)}">Hide</button>`
             : '';
-        const column = `<button type="button" class="sx-icon-btn" title="${searchState.selectedFields.includes(k) ? 'Stop showing in events' : 'Show in events'}" aria-label="Show ${esc(k)} in events" data-click="toggleColumn" data-args="${fieldArgs(k)}">${searchState.selectedFields.includes(k) ? '&#9733;' : '&#9734;'}</button>`;
+        const column = `<button type="button" class="sx-icon-btn" title="${searchState.selectedFields.includes(k) ? 'Stop showing in events' : 'Show in events'}" aria-label="Show ${esc(k)} in events" data-click="toggleColumn" data-args="${fieldArgs(k)}">${searchState.selectedFields.includes(k) ? 'Remove column' : 'Add column'}</button>`;
         return `<tr><td>${esc(k)}</td><td class="sx-detail-value">${esc(value ?? '')}</td><td>${actions} ${column}</td></tr>`;
     }).join('');
     return `<div class="sx-event-detail"><table><tbody>${rows}</tbody></table>

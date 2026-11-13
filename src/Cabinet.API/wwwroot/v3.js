@@ -71,7 +71,7 @@ function receiveTailEvent(evt) {
 function showTailEvent(evt, pauseOnMatch) {
     const output = document.getElementById('tailOutput');
     const div = document.createElement('div');
-    div.style.cssText = 'padding:2px 0;border-bottom:1px solid rgba(48,54,61,0.3)';
+    div.style.cssText = 'padding:2px 0;border-bottom:1px solid var(--row-line)';
     const ts = evt.timestamp ? fmtTime(evt.timestamp) : '';
     const sev = evt.severity != null ? `<span class="${sevClass(evt.severity)}" style="display:inline-block;width:60px">${['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'CRIT', 'FATAL'][Math.min(parseInt(evt.severity) || 0, 6)]}</span>` : '';
     const raw = evt.rawLine || evt.RawLine || JSON.stringify(evt);
@@ -106,7 +106,7 @@ async function runInvestigation() {
     const button = document.getElementById('investigateButton');
     if (!question) return;
     button.disabled = true;
-    out.innerHTML = '<p class="page-note"><span class="spinner"></span> Investigating. This can take a minute.</p>';
+    out.innerHTML = '<p class="page-note">' + loadingHtml('Investigating. This can take a minute.') + '</p>';
     try {
         const r = await api('POST', '/api/v1/investigate', { question });
         const steps = (r.steps || []).map(s => `<li><code>${esc(s.query)}</code> <span style="color:var(--text-secondary)">${s.error ? 'failed: ' + esc(s.error) : esc(String(s.rows)) + ' rows'}</span>
@@ -156,7 +156,7 @@ function openPlayerFromInput() {
 async function openPlayer(player) {
     const panel = document.getElementById('playerProfile');
     panel.hidden = false;
-    panel.innerHTML = '<span class="spinner"></span>';
+    panel.innerHTML = loadingHtml('Loading this player…');
     try {
         const p = await api('GET', '/api/v1/moderation/players/' + encodeURIComponent(player));
         const history = Object.entries(p.adminActions || {}).map(([a, n]) => `${esc(a)} ${esc(String(n))}`).join(', ') || 'none';
@@ -291,7 +291,7 @@ async function newCase() {
 async function openCase(id) {
     const view = document.getElementById('caseView');
     view.hidden = false;
-    view.innerHTML = '<span class="spinner"></span>';
+    view.innerHTML = loadingHtml('Loading this case…');
     try {
         const [c, timeline] = await Promise.all([api('GET', '/api/v1/cases/' + encodeURIComponent(id)), api('GET', `/api/v1/cases/${encodeURIComponent(id)}/timeline`)]);
         const items = timeline.map(t => `<li style="padding:6px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text-muted)">${esc(fmtTime(t.time))}</span>
@@ -358,7 +358,7 @@ async function importSigma(save) {
     const out = document.getElementById('sigmaResult');
     const yaml = document.getElementById('sigmaYaml').value;
     if (!yaml.trim()) return;
-    out.innerHTML = '<span class="spinner"></span>';
+    out.innerHTML = loadingHtml('Reading the Sigma rules…');
     try {
         const res = await fetch('/api/v1/rules/sigma' + (save ? '?save=true' : ''), {
             method: 'POST',
@@ -430,7 +430,7 @@ function anomalyRuleFromForm() {
 
 async function testAnomalyRule() {
     const out = document.getElementById('anomalyTestResult');
-    out.innerHTML = '<span class="spinner"></span>';
+    out.innerHTML = loadingHtml('Checking the last window…');
     try {
         const findings = await api('POST', '/api/v1/anomaly-rules/test', anomalyRuleFromForm());
         out.innerHTML = findings.length === 0 ? '<p class="page-note">Nothing unusual in the last window.</p>'
@@ -507,13 +507,13 @@ function reportFromForm() {
 async function previewReport() {
     const box = document.getElementById('reportPreview');
     box.hidden = false;
-    box.innerHTML = '<span class="spinner"></span>';
+    box.innerHTML = loadingHtml('Building the preview…');
     try {
         const res = await fetch('/api/v1/reports/preview', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json', Accept: 'text/html' }, body: JSON.stringify(reportFromForm()) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         // The server encodes everything from the logs; the report is tables and inline styles
         box.innerHTML = await res.text();
-    } catch (e) { box.innerHTML = `<p style="color:#cf222e">${esc(e.message)}</p>`; }
+    } catch (e) { box.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`; }
 }
 
 async function saveReport() {
@@ -560,7 +560,7 @@ let connectorsByName = {};
 async function loadConnectors() {
     const tbody = document.getElementById('connectorsBody');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading connectors…') + '</td></tr>';
     try {
         const list = await api('GET', '/api/v1/connectors');
         connectorsByName = Object.fromEntries(list.map(c => [c.name, c]));
@@ -696,7 +696,7 @@ async function loadUsers() {
     const groupsBody = document.getElementById('groupsBody');
     if (!usersBody) return;
     document.getElementById('scimEndpoint').textContent = window.location.origin + '/scim/v2';
-    usersBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    usersBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px">' + loadingHtml('Loading users…') + '</td></tr>';
     try {
         [directoryUsers, directoryGroups] = await Promise.all([api('GET', '/api/v1/users'), api('GET', '/api/v1/groups')]);
     } catch (e) {

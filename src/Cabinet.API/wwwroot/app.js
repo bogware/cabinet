@@ -32,6 +32,9 @@ async function loadSignInOptions() {
         if (account) account.hidden = !(p.signedIn && p.localAccount && !API_KEY);
         const signOut = document.getElementById('signOutButton');
         if (signOut) signOut.hidden = !(p.signedIn || API_KEY);
+        const menuSignOut = document.getElementById('menuSignOut');
+        if (menuSignOut) menuSignOut.hidden = !(p.signedIn || API_KEY);
+        if (p.signedIn && p.name) showUserName(p.name);
         return p;
     } catch { return null; }
 }
@@ -125,6 +128,15 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && document.getElementById('sidebar').classList.contains('open')) toggleSidebar();
 });
 
+/* Return triggers the default (moss) button of the step it's typed in. Forms submit themselves. */
+document.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing || !event.target.matches('input:not([type=checkbox]):not([type=radio])')) return;
+    if (event.target.form) return;
+    const scope = event.target.closest('.enter-scope');
+    const button = scope && [...scope.querySelectorAll('.btn-primary')].find(b => b.offsetParent !== null && !b.disabled);
+    if (button) { event.preventDefault(); button.click(); }
+});
+
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const open = sidebar.classList.toggle('open');
@@ -170,24 +182,84 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
     item.addEventListener('click', () => navigate(item.dataset.page));
 });
 
-const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings'];
+const VALID_PAGES = ['rules', 'search','livetail','saved','jobs','dashboards','health','ingest','indexes','alerts','schedules','extractions','knowledge','settings','apikeys','all'];
 // Pages added by other scripts register here: { name: { title, load } }
 window.EXTRA_PAGES = window.EXTRA_PAGES || {};
 function isPage(page) { return VALID_PAGES.includes(page) || Object.prototype.hasOwnProperty.call(window.EXTRA_PAGES, page); }
+
+/* Pages that show another page's element: API keys is a section of Settings. */
+const PAGE_ALIASES = { apikeys: 'settings' };
+
+/* Pages that live inside a sidebar item, shown as a segmented control under the toolbar. The
+   sidebar item names its family in data-family; the first page is the item itself. */
+const PAGE_FAMILIES = {
+    saved: [['saved', 'Saved questions'], ['jobs', 'Background searches']],
+    reports: [['reports', 'Scheduled reports'], ['schedules', 'Scheduled searches']],
+    alerts: [['alerts', 'Alerts'], ['connectors', 'Connectors']],
+    rules: [['rules', 'Detection rules'], ['anomalies', 'Anomaly rules']],
+    indexes: [['indexes', 'Indexes'], ['extractions', 'Field extractions'], ['knowledge', 'Lookups & macros']],
+};
+
+const PAGE_TITLES = {
+    search: 'Search', livetail: 'Live Tail', saved: 'Saved questions', jobs: 'Background searches', investigate: 'AI investigator',
+    dashboards: 'Dashboards', reports: 'Scheduled reports', schedules: 'Scheduled searches', health: 'System health',
+    alerts: 'Alerts', connectors: 'Connectors', cases: 'Cases', rules: 'Detection rules', anomalies: 'Anomaly rules',
+    coverage: 'ATT&CK coverage', players: 'Players', ingest: 'Sources', pipelines: 'Ingest pipeline', indexes: 'Indexes & fields',
+    extractions: 'Field extractions', knowledge: 'Lookups & macros', users: 'Users & groups', apikeys: 'API keys',
+    settings: 'Settings', all: 'All pages',
+};
+
+/** The sidebar item a page belongs to: itself, or the item whose family holds it. */
+function navItemFor(page) {
+    return document.querySelector(`.nav-item[data-page="${page}"]`)
+        || [...document.querySelectorAll('.nav-item[data-family]')].find(item => item.dataset.family.split(' ').includes(page));
+}
+
+/** Puts the segmented control of sibling pages under each family member's toolbar. */
+function buildSubnav() {
+    Object.entries(PAGE_FAMILIES).forEach(([family, members]) => {
+        members.forEach(([page]) => {
+            const pageEl = document.getElementById('page-' + page);
+            if (!pageEl || pageEl.querySelector('.subnav')) return;
+            const nav = document.createElement('nav');
+            nav.className = 'subnav';
+            nav.setAttribute('aria-label', `${PAGE_TITLES[family]} pages`);
+            nav.innerHTML = `<div class="segmented">${members.map(([p, label]) =>
+                `<button type="button" data-click="navigate" data-args="${esc(JSON.stringify([p]))}"${p === page ? ' aria-current="page"' : ''}>${esc(label)}</button>`).join('')}</div>`;
+            const toolbar = pageEl.querySelector('.toolbar');
+            if (toolbar) toolbar.after(nav); else pageEl.prepend(nav);
+        });
+    });
+}
+
 function navigate(page) {
     if (!isPage(page)) return;
-    currentPage = page;
+    const elementPage = PAGE_ALIASES[page] || page;
+    currentPage = elementPage;
     document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
-    const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-    if (navItem) { navItem.classList.add('active'); navItem.setAttribute('aria-current', 'page'); }
+    const navItem = navItemFor(page);
+    if (navItem) {
+        navItem.classList.add('active');
+        navItem.setAttribute('aria-current', 'page');
+        const group = navItem.closest('.nav-group');
+        if (group && group.classList.contains('collapsed')) toggleNavGroup(group.dataset.group);
+    }
     document.getElementById('sidebar').classList.remove('open');
+    closeUserMenu();
     stopDashboardRefresh();
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const pageEl = document.getElementById('page-' + page);
+    const pageEl = document.getElementById('page-' + elementPage);
     if (pageEl) pageEl.classList.add('active');
+    document.getElementById('mainContent').scrollTop = 0;
     const extra = window.EXTRA_PAGES[page];
-    const titles = { [page]: extra ? extra.title : page, rules:'Detections', search:'Search', livetail:'Live Tail', saved:'Saved Queries', jobs:'Search Jobs', dashboards:'Dashboards', health:'System Health', ingest:'Ingest Logs', indexes:'Indexes', alerts:'Alerts', schedules:'Scheduled Searches', extractions:'Field Extractions', knowledge:'Knowledge Objects', settings:'Settings' };
-    document.getElementById('pageTitle').textContent = titles[page] || page;
+    const titles = { ...PAGE_TITLES };
+    if (extra && !titles[page]) titles[page] = extra.title;
+    document.title = `${titles[page] || page} - Cabinet`;
+    // API keys is the keys section of Settings; Settings itself opens where it was, unless that was the keys
+    if (typeof settingsState !== 'undefined') {
+        if (page === 'apikeys') settingsState.section = 'keys';
+        else if (page === 'settings' && settingsState.section === 'keys') settingsState.section = 'overview';
+    }
     // Update URL without reload
     // Search keeps its own state in the hash, so a search can be bookmarked
     const onSearch = window.location.hash.startsWith('#search');
@@ -205,10 +277,111 @@ function navigate(page) {
     if (page === 'schedules') loadSchedules();
     if (page === 'extractions') loadExtractions();
     if (page === 'knowledge') loadKnowledgeCurrent();
-    if (page === 'settings') loadSettings();
+    if (elementPage === 'settings') loadSettings();
     if (page === 'livetail') loadTailIndexes();
     if (page === 'jobs') loadJobs();
     if (extra && typeof extra.load === 'function') extra.load();
+}
+
+/* ===== Sidebar groups: collapse and expand, remembered in this browser ===== */
+const NAV_COLLAPSED_KEY = 'cabinet_nav_collapsed';
+
+function collapsedNavGroups() {
+    try { return JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]'); } catch { return []; }
+}
+
+function setNavGroupState(group, collapsed) {
+    const el = document.querySelector(`.nav-group[data-group="${group}"]`);
+    if (!el) return;
+    el.classList.toggle('collapsed', collapsed);
+    el.querySelector('.nav-group-header').setAttribute('aria-expanded', String(!collapsed));
+}
+
+function toggleNavGroup(group) {
+    const el = document.querySelector(`.nav-group[data-group="${group}"]`);
+    if (!el) return;
+    const collapsed = !el.classList.contains('collapsed');
+    setNavGroupState(group, collapsed);
+    const stored = collapsedNavGroups().filter(g => g !== group);
+    if (collapsed) stored.push(group);
+    try { localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify(stored)); } catch { /* storage refused: still toggles for this visit */ }
+}
+
+/** Right-aligned text beside a sidebar item, such as "3 new". kind 'alert' shows it in red. */
+function setNavMeta(page, text, kind) {
+    const meta = document.querySelector(`.nav-meta[data-meta="${page}"]`);
+    if (!meta) return;
+    meta.textContent = text || '';
+    meta.classList.toggle('nav-meta-alert', kind === 'alert');
+}
+
+/* ===== Account menu in the sidebar footer ===== */
+function showUserName(name) {
+    const button = document.getElementById('userButton');
+    button.textContent = name;
+    button.title = `Signed in as ${name}`;
+    document.getElementById('userMenuName').textContent = `Signed in as ${name}`;
+}
+
+function toggleUserMenu() {
+    const menu = document.getElementById('userMenu');
+    const open = menu.hidden;
+    menu.hidden = !open;
+    document.getElementById('userButton').setAttribute('aria-expanded', String(open));
+    if (open) {
+        syncThemeControls();
+        const first = menu.querySelector('button:not([hidden])');
+        if (first) first.focus();
+    }
+}
+
+function closeUserMenu() {
+    const menu = document.getElementById('userMenu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    document.getElementById('userButton').setAttribute('aria-expanded', 'false');
+}
+
+document.addEventListener('click', event => {
+    if (!event.target.closest('#userMenu, #userButton')) closeUserMenu();
+});
+
+/* ===== Theme: System (default), Light or Graphite; theme.js applies it before the page paints ===== */
+function setTheme(choice) {
+    if (window.CabinetTheme) window.CabinetTheme.set(choice);
+    syncThemeControls();
+}
+
+function saveThemeSetting() {
+    setTheme(document.getElementById('settingsTheme').value);
+}
+
+function syncThemeControls() {
+    const choice = window.CabinetTheme ? window.CabinetTheme.choice() : 'system';
+    document.querySelectorAll('[data-theme-option]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeOption === choice)));
+    const select = document.getElementById('settingsTheme');
+    if (select) select.value = choice;
+}
+
+/* Kept for anything that still calls it: moves to the next of System, Light, Graphite. */
+function toggleTheme() {
+    const order = ['system', 'light', 'graphite'];
+    const choice = window.CabinetTheme ? window.CabinetTheme.choice() : 'system';
+    setTheme(order[(order.indexOf(choice) + 1) % order.length]);
+}
+
+/* ===== Loading and error lines, for every page ===== */
+/** Striped progress plus a sentence saying what's happening. */
+function loadingHtml(sentence = 'Loading…') {
+    return `<span class="loading-line" role="status"><span class="progress" aria-hidden="true"></span><span>${esc(sentence)}</span></span>`;
+}
+
+/** A sentence saying what went wrong, and one button for the suggested action (a handler name). */
+function errorHtml(sentence, actionLabel, handler, args) {
+    const action = actionLabel && handler
+        ? ` <button type="button" class="btn btn-sm" data-click="${esc(handler)}"${args ? ` data-args="${esc(JSON.stringify(args))}"` : ''}>${esc(actionLabel)}</button>`
+        : '';
+    return `<div class="error-line" role="alert"><span>${esc(sentence)}</span>${action}</div>`;
 }
 
 /* ===== API Helper ===== */
@@ -235,7 +408,7 @@ async function api(method, path, body) {
 /* ===== Saved Queries ===== */
 async function loadSavedQueries() {
     const tbody = document.getElementById('savedQueriesBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading saved questions…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/query/saved');
         const queries = Array.isArray(data) ? data : (data.data || []);
@@ -301,12 +474,12 @@ async function confirmSaveQuery() {
 /* ===== Dashboards ===== */
 async function loadDashboards() {
     const el = document.getElementById('dashboardsList');
-    el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+    el.innerHTML = '<div class="empty-state">' + loadingHtml('Loading dashboards…') + '</div>';
     try {
         const data = await api('GET', '/api/v1/dashboards');
         const dashboards = Array.isArray(data) ? data : (data.data || []);
         if (dashboards.length === 0) {
-            el.innerHTML = '<div class="empty-state"><h3>No Dashboards</h3><p>Click "+ New Dashboard" to create one</p></div>';
+            el.innerHTML = '<div class="empty-state"><h3>No dashboards yet</h3><p>Choose New dashboard… to make one.</p></div>';
             return;
         }
         el.innerHTML = '';
@@ -421,7 +594,7 @@ async function viewDashboardPanels(d) {
         const section = document.createElement('section');
         section.className = 'dash-panel';
         section.style.gridColumn = `span ${Math.min(12, Math.max(1, panel.width || 6))}`;
-        section.innerHTML = `<h4>${esc(panel.title || 'Untitled panel')}</h4><div class="dash-panel-body"><span class="spinner"></span></div>`;
+        section.innerHTML = `<h4>${esc(panel.title || 'Untitled panel')}</h4><div class="dash-panel-body">${loadingHtml('Running this panel’s search…')}</div>`;
         grid.appendChild(section);
         return section.querySelector('.dash-panel-body');
     });
@@ -462,7 +635,7 @@ function addPanelRow(panel) {
     row.querySelector('.panel-down').onclick = () => { if (row.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row); };
     row.querySelector('.panel-preview-btn').onclick = () => {
         const preview = row.querySelector('.panel-preview');
-        preview.innerHTML = '<span class="spinner"></span>';
+        preview.innerHTML = loadingHtml('Running the search…');
         renderPanel({ query: row.querySelector('.panel-query').value.trim(), type: row.querySelector('.panel-type').value, title: row.querySelector('.panel-title').value }, preview);
     };
     document.getElementById('panelEditorList').appendChild(row);
@@ -568,7 +741,7 @@ async function ingestLogs() {
 /* ===== Indexes ===== */
 async function loadIndexes() {
     const el = document.getElementById('indexesList');
-    el.innerHTML = '<div class="empty-state"><span class="spinner"></span></div>';
+    el.innerHTML = '<div class="empty-state">' + loadingHtml('Loading indexes…') + '</div>';
     try {
         const data = await api('GET', '/api/v1/indexes');
         const indexes = Array.isArray(data) ? data : (data.data || data.indexes || []);
@@ -594,7 +767,7 @@ async function loadIndexes() {
 /* ===== Alerts ===== */
 async function loadAlerts() {
     const tbody = document.getElementById('alertsBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading alerts…') + '</td></tr>';
     try {
         const sev = document.getElementById('alertSevFilter').value;
         const ack = document.getElementById('alertAckFilter').value;
@@ -629,7 +802,7 @@ let rulesById = {};
 
 async function loadRules() {
     const tbody = document.getElementById('rulesBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading detection rules…') + '</td></tr>';
     try {
         const rules = await api('GET', '/api/v1/rules');
         rulesById = Object.fromEntries(rules.map(r => [r.id, r]));
@@ -810,7 +983,7 @@ async function ackAlert(id) {
 /* ===== Scheduled Searches ===== */
 async function loadSchedules() {
     const tbody = document.getElementById('schedulesBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading scheduled searches…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/scheduled-searches');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -917,7 +1090,7 @@ async function deleteSchedule(id) {
 /* ===== Field Extractions ===== */
 async function loadExtractions() {
     const tbody = document.getElementById('extractionsBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading field extractions…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/field-extractions');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1014,7 +1187,7 @@ function loadKnowledgeCurrent() {
 
 async function loadLookups() {
     const tbody = document.getElementById('lookupsBody');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px">' + loadingHtml('Loading lookups…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/lookups');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1034,7 +1207,7 @@ async function loadLookups() {
 
 async function loadMacros() {
     const tbody = document.getElementById('macrosBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading macros…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/macros');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1054,7 +1227,7 @@ async function loadMacros() {
 
 async function loadAliases() {
     const tbody = document.getElementById('aliasesBody');
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px">' + loadingHtml('Loading field aliases…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/knowledge/aliases');
         const items = Array.isArray(data) ? data : (data.data || []);
@@ -1384,7 +1557,7 @@ let jobPollTimer = null;
 
 async function loadJobs() {
     const tbody = document.getElementById('jobsBody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px"><span class="spinner"></span></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px">' + loadingHtml('Loading background searches…') + '</td></tr>';
     try {
         const data = await api('GET', '/api/v1/query/jobs');
         const jobs = Array.isArray(data) ? data : (data.data || data.jobs || []);
@@ -1483,53 +1656,80 @@ async function viewJobResults(id) {
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-/* ===== Theme Toggle ===== */
-function toggleTheme() {
-    const body = document.body;
-    body.classList.toggle('light');
-    const isLight = body.classList.contains('light');
-    localStorage.setItem('cabinet_theme', isLight ? 'light' : 'dark');
-    document.getElementById('themeBtn').textContent = isLight ? 'Dark' : 'Light';
-}
-
-// Restore theme on load
-(function() {
-    const saved = localStorage.getItem('cabinet_theme');
-    if (saved === 'light') {
-        document.body.classList.add('light');
-        document.getElementById('themeBtn').textContent = 'Dark';
-    }
-})();
-
 /* ===== API Key ===== */
 function changeApiKey() {
+    if (typeof settingsState !== 'undefined') settingsState.section = 'browser';
     navigate('settings');
 }
 
-/* ===== Health Polling ===== */
+/* ===== Health Polling: the sidebar footer's status line ===== */
+let healthState = 'connecting';
+let eventsPerSecond = null;
+
+function renderHealthLine() {
+    const dot = document.getElementById('healthDot');
+    const text = document.getElementById('healthText');
+    const labels = { ok: 'Healthy', warn: 'Degraded', err: "Can't reach the server", connecting: 'Connecting…' };
+    dot.className = 'dot ' + (healthState === 'connecting' ? '' : healthState);
+    const rate = healthState === 'ok' && eventsPerSecond !== null
+        ? ` · ${eventsPerSecond < 10 && eventsPerSecond > 0 ? eventsPerSecond.toFixed(1) : fmt(Math.round(eventsPerSecond))} events/s`
+        : '';
+    text.textContent = labels[healthState] + rate;
+}
+
 async function checkHealth() {
     try {
         const res = await fetch('/health/live');
-        const dot = document.getElementById('healthDot');
-        const text = document.getElementById('healthText');
-        if (res.ok) { dot.className = 'dot ok'; text.textContent = 'Connected'; }
-        else { dot.className = 'dot warn'; text.textContent = 'Degraded'; }
+        healthState = res.ok ? 'ok' : 'warn';
     } catch {
-        document.getElementById('healthDot').className = 'dot err';
-        document.getElementById('healthText').textContent = 'Disconnected';
+        healthState = 'err';
     }
+    renderHealthLine();
 }
 
 let storedEventCount = null;
+let lastStatsSample = null;
 
 async function loadStats() {
     try {
         const stats = await api('GET', '/api/v1/logs/stats');
         storedEventCount = stats.totalEvents || 0;
+        // Events per second: how much the stored count grew since the last look
+        const now = Date.now();
+        if (lastStatsSample && now > lastStatsSample.at) {
+            eventsPerSecond = Math.max(0, (storedEventCount - lastStatsSample.count) / ((now - lastStatsSample.at) / 1000));
+        }
+        lastStatsSample = { count: storedEventCount, at: now };
+        renderHealthLine();
         renderEmptyState();
     } catch (e) {
         // The count is a nicety on the empty search page; searching works without it
         storedEventCount = null;
+    }
+}
+
+/* Unacknowledged alerts, as "3 new" beside Alerts. One cheap request: the count comes in a header. */
+async function loadNavCounts() {
+    try {
+        const res = await fetch('/api/v1/alerts?acknowledged=false&count=1', { headers: { ...authHeaders(), Accept: 'application/json' } });
+        if (!res.ok) return;
+        const total = parseInt(res.headers.get('X-Total-Count') || '0', 10) || 0;
+        setNavMeta('alerts', total > 0 ? `${fmt(total)} new` : '', 'alert');
+    } catch {
+        // Only the sidebar's count is missing; the Alerts page loads on its own
+    }
+}
+
+/* Who's signed in, for the sidebar footer, when it isn't a sign-in session (an API key). */
+async function loadUserName() {
+    if (!API_KEY) return;
+    try {
+        const res = await fetch('/api/v1/roles/me', { headers: { ...authHeaders(), Accept: 'application/json' } });
+        if (!res.ok) return;
+        const me = await res.json();
+        if (me && me.clientId) showUserName(me.clientId);
+    } catch {
+        // The footer keeps saying "Account"
     }
 }
 
@@ -1592,17 +1792,22 @@ function sevBadge(sev) {
 }
 
 /* ===== Init ===== */
-checkHealth(); loadStats(); initSearchPage();
-// P3: Reduced polling frequency for production (60s health, 120s stats)
+document.getElementById('serverName').textContent = window.location.host;
+collapsedNavGroups().forEach(group => setNavGroupState(group, true));
+buildSubnav();
+syncThemeControls();
+checkHealth(); loadStats(); initSearchPage(); loadNavCounts(); loadUserName();
+// P3: Reduced polling frequency for production (60s health and stats, which give events per second)
 setInterval(checkHealth, 60000);
-setInterval(loadStats, 120000);
+setInterval(loadStats, 60000);
+setInterval(loadNavCounts, 60000);
 
 // P10: URL-based navigation — restore page from hash on load and back/forward
 (function() {
-    const hash = window.location.hash.replace('#', '');
+    const hash = window.location.hash.replace('#', '').split('?')[0];
     if (hash.startsWith('search')) {
         // A link to a search: the search page runs it
-    } else if (hash && document.getElementById('page-' + hash)) {
+    } else if (hash && isPage(hash)) {
         navigate(hash);
     } else {
         document.getElementById('queryInput').focus();
@@ -1617,7 +1822,7 @@ window.addEventListener('popstate', e => {
 document.addEventListener('keydown', e => {
     // Escape: close modals and drawers
     if (e.key === 'Escape') {
-        closeSaveModal(); closeDrawer();
+        closeSaveModal(); closeDrawer(); closeUserMenu();
         document.querySelectorAll('.modal-bg.show').forEach(m => m.classList.remove('show'));
         hideSuggestions(); closeTimePicker(); closeSearchMenu();
         return;

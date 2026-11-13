@@ -1,554 +1,102 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cabinet - Log Intelligence</title>
     <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <style>
-        :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
-            --bg-hover: #292e36;
-            --text-primary: #c9d1d9;
-            --text-secondary: #8b949e;
-            --text-muted: #8b949e;
-            --accent: #58a6ff;
-            --accent-hover: #79c0ff;
-            --success: #3fb950;
-            --warning: #d29922;
-            --error: #f85149;
-            --critical: #ff7b72;
-            --border: #30363d;
-            --sidebar-w: 220px;
-            --header-h: 48px;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-            background: var(--bg-primary); color: var(--text-primary); line-height: 1.5;
-            display: flex; height: 100vh; overflow: hidden;
-        }
-        /* Sidebar */
-        .sidebar {
-            width: var(--sidebar-w); background: var(--bg-secondary); border-right: 1px solid var(--border);
-            display: flex; flex-direction: column; flex-shrink: 0;
-        }
-        .sidebar-icon { vertical-align: -4px; margin-right: 8px; }
-        .sidebar-brand {
-            padding: 12px 16px; border-bottom: 1px solid var(--border);
-            font-size: 18px; font-weight: 700;
-        }
-        .sidebar-brand span { color: var(--accent); }
-        .sidebar-nav { flex: 1; padding: 8px; overflow-y: auto; }
-        .nav-section { font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 12px 8px 4px; letter-spacing: 0.5px; }
-        .nav-item {
-            display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px;
-            color: var(--text-secondary); cursor: pointer; font-size: 13px; transition: all 0.15s;
-        }
-        .nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-        .nav-item.active { background: rgba(88,166,255,0.1); color: var(--accent); }
-        .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
-        .sidebar-footer {
-            padding: 12px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted);
-        }
-        .sidebar-footer a { color: var(--accent); text-decoration: none; }
-        /* Main content */
-        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .topbar {
-            height: var(--header-h); background: var(--bg-secondary); border-bottom: 1px solid var(--border);
-            display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0;
-        }
-        .topbar-left { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; }
-        .topbar-right { display: flex; align-items: center; gap: 16px; }
-        .status { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
-        .dot { width: 8px; height: 8px; border-radius: 50%; }
-        .dot.ok { background: var(--success); }
-        .dot.warn { background: var(--warning); }
-        .dot.err { background: var(--error); }
-        .api-key-btn {
-            font-size: 12px; padding: 4px 10px; border-radius: 4px; cursor: pointer;
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
-        }
-        .api-key-btn:hover { color: var(--text-primary); border-color: var(--accent); }
-        .content { flex: 1; overflow-y: auto; padding: 20px; }
-        /* Page views */
-        .page { display: none; }
-        .page.active { display: block; }
-        /* Search bar */
-        .search-bar { display: flex; gap: 8px; margin-bottom: 20px; }
-        .search-bar input {
-            flex: 1; padding: 10px 14px; font-size: 14px; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px;
-            color: var(--text-primary); outline: none;
-        }
-        .search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
-        .search-bar select {
-            padding: 10px 12px; font-size: 13px; background: var(--bg-secondary); border: 1px solid var(--border);
-            border-radius: 6px; color: var(--text-primary); outline: none; cursor: pointer;
-        }
-        .btn {
-            padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
-            border: 1px solid transparent; border-radius: 6px; transition: all 0.15s;
-        }
-        .btn-primary { background: var(--accent); color: #fff; }
-        .btn-primary:hover { background: var(--accent-hover); }
-        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-secondary { background: var(--bg-tertiary); border-color: var(--border); color: var(--text-primary); }
-        .btn-secondary:hover { background: var(--bg-hover); }
-        .btn-danger { background: transparent; border-color: var(--error); color: var(--error); }
-        .btn-danger:hover { background: rgba(248,81,73,0.1); }
-        .btn-sm { padding: 4px 10px; font-size: 12px; }
-        /* Cards grid */
-        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
-        .card {
-            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
-        }
-        .card .label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
-        .card .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
-        .card .value.accent { color: var(--accent); }
-        .card .value.success { color: var(--success); }
-        .card .value.warning { color: var(--warning); }
-        .card .value.error { color: var(--error); }
-        /* Table */
-        .panel {
-            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-        }
-        .panel-header {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-secondary);
-        }
-        .panel-header .title { font-weight: 500; color: var(--text-primary); }
-        table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        th {
-            text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
-            color: var(--text-secondary); font-weight: 500; position: sticky; top: 0;
-            background: var(--bg-secondary); white-space: nowrap;
-        }
-        td {
-            padding: 6px 12px; border-bottom: 1px solid var(--border);
-            max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
-        }
-        tr:hover { background: var(--bg-tertiary); }
-        .sev-trace { color: var(--text-muted); }
-        .sev-debug { color: var(--text-secondary); }
-        .sev-info { color: var(--accent); }
-        .sev-warning { color: var(--warning); }
-        .sev-error { color: var(--error); }
-        .sev-critical, .sev-fatal { color: var(--critical); font-weight: 600; }
-        .scroll-y { max-height: 600px; overflow-y: auto; }
-        .scroll-y-sm { max-height: 400px; overflow-y: auto; }
-        /* Tabs */
-        .tabs { display: flex; gap: 2px; margin-bottom: 16px; }
-        .tab {
-            padding: 6px 14px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0;
-            background: var(--bg-secondary); border: 1px solid var(--border); border-bottom: none;
-            color: var(--text-secondary); transition: all 0.15s;
-        }
-        .tab.active { background: var(--bg-tertiary); color: var(--text-primary); border-color: var(--accent); }
-        /* Alerts / messages */
-        .alert {
-            padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 13px; display: none;
-        }
-        .alert-error { background: rgba(248,81,73,0.1); border: 1px solid var(--error); color: var(--error); }
-        .alert-success { background: rgba(63,185,80,0.1); border: 1px solid var(--success); color: var(--success); }
-        .alert-info { background: rgba(88,166,255,0.1); border: 1px solid var(--accent); color: var(--accent); }
-        /* Modal */
-        .modal-bg {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.6); display: none; z-index: 1000;
-            align-items: center; justify-content: center;
-        }
-        .modal-bg.show { display: flex; }
-        .modal {
-            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px;
-            padding: 24px; width: 460px; max-width: 90vw;
-        }
-        .modal h3 { margin-bottom: 16px; }
-        .modal label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; margin-top: 12px; }
-        .modal input, .modal textarea {
-            width: 100%; padding: 8px 12px; font-size: 13px; background: var(--bg-tertiary);
-            border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); outline: none;
-        }
-        .modal textarea { min-height: 60px; font-family: inherit; resize: vertical; }
-        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
-        /* Spinner */
-        .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent);
-            border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block; vertical-align: middle; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .hide { display: none !important; }
-        /* Time range picker */
-        .time-range { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-        .time-chip {
-            padding: 4px 10px; border-radius: 12px; cursor: pointer; font-size: 11px;
-            background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
-        }
-        .time-chip.active { background: rgba(88,166,255,0.15); border-color: var(--accent); color: var(--accent); }
-        .time-chip:hover { color: var(--text-primary); }
-        /* Monospace pre */
-        pre.code-block {
-            background: var(--bg-tertiary); border-radius: 6px; padding: 14px; overflow: auto;
-            font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace; max-height: 500px;
-        }
-        /* Empty state */
-        .empty-state { text-align: center; padding: 48px 24px; color: var(--text-secondary); }
-        .empty-state h3 { color: var(--text-primary); margin-bottom: 8px; }
-        /* Health grid */
-        .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
-        .health-item {
-            background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px;
-        }
-        .health-item .hi-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .health-item .hi-name { font-weight: 500; font-size: 14px; }
-        .health-item .hi-status { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
-        .hi-status.healthy { background: rgba(63,185,80,0.15); color: var(--success); }
-        .hi-status.degraded { background: rgba(210,153,34,0.15); color: var(--warning); }
-        .hi-status.unhealthy { background: rgba(248,81,73,0.15); color: var(--error); }
-        .health-item .hi-detail { font-size: 12px; color: var(--text-secondary); }
-        /* Toast notifications */
-        .toast-container { position: fixed; top: 16px; right: 16px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
-        .toast {
-            padding: 12px 18px; border-radius: 8px; font-size: 13px; min-width: 280px; max-width: 420px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4); animation: slideIn 0.25s ease-out;
-            display: flex; align-items: center; gap: 10px; cursor: pointer;
-        }
-        .toast-success { background: #1a3a2a; border: 1px solid var(--success); color: var(--success); }
-        .toast-error { background: #3a1a1a; border: 1px solid var(--error); color: var(--error); }
-        .toast-info { background: #1a2a3a; border: 1px solid var(--accent); color: var(--accent); }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
-        /* Event detail drawer */
-        .drawer-bg {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5);
-            z-index: 900; display: none; transition: opacity 0.2s;
-        }
-        .drawer-bg.show { display: block; }
-        .drawer {
-            position: fixed; top: 0; right: 0; bottom: 0; width: 560px; max-width: 90vw;
-            background: var(--bg-secondary); border-left: 1px solid var(--border); z-index: 901;
-            transform: translateX(100%); transition: transform 0.25s ease-out;
-            display: flex; flex-direction: column; overflow: hidden;
-        }
-        .drawer.show { transform: translateX(0); }
-        .drawer-header {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
-        }
-        .drawer-header h3 { font-size: 15px; }
-        .drawer-close { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 20px; padding: 4px 8px; border-radius: 4px; }
-        .drawer-close:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-        .drawer-body { flex: 1; overflow-y: auto; padding: 18px; }
-        .field-row { display: flex; border-bottom: 1px solid var(--border); padding: 6px 0; font-size: 12px; }
-        .field-row:hover { background: var(--bg-tertiary); }
-        .field-key { width: 160px; flex-shrink: 0; color: var(--accent); font-weight: 500; padding: 2px 8px; font-family: 'SF Mono','Fira Code',monospace; }
-        .field-val { flex: 1; word-break: break-all; padding: 2px 8px; font-family: 'SF Mono','Fira Code',monospace; color: var(--text-primary); }
-        /* Field sidebar */
-        .search-layout { display: flex; gap: 16px; }
-        .search-main { flex: 1; min-width: 0; }
-        .field-sidebar {
-            width: 240px; flex-shrink: 0; background: var(--bg-secondary); border: 1px solid var(--border);
-            border-radius: 8px; max-height: 700px; overflow-y: auto; display: none;
-        }
-        .field-sidebar.show { display: block; }
-        .field-sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 500; color: var(--text-secondary); }
-        .field-sidebar-item {
-            padding: 5px 12px; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between;
-            border-bottom: 1px solid rgba(48,54,61,0.5); transition: background 0.1s;
-        }
-        .field-sidebar-item:hover { background: var(--bg-tertiary); }
-        .field-sidebar-item .fname { color: var(--accent); font-family: 'SF Mono','Fira Code',monospace; }
-        .field-sidebar-item .fcount { color: var(--text-muted); font-size: 11px; }
-        /* Badge */
-        .badge {
-            display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500;
-        }
-        .badge-success { background: rgba(63,185,80,0.15); color: var(--success); }
-        .badge-warning { background: rgba(210,153,34,0.15); color: var(--warning); }
-        .badge-error { background: rgba(248,81,73,0.15); color: var(--error); }
-        .badge-info { background: rgba(88,166,255,0.15); color: var(--accent); }
-        .badge-muted { background: var(--bg-tertiary); color: var(--text-secondary); }
-        /* Form group */
-        .form-group { margin-bottom: 14px; }
-        .form-group label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-        .form-group input, .form-group select, .form-group textarea {
-            width: 100%; padding: 8px 12px; font-size: 13px; background: var(--bg-tertiary);
-            border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); outline: none;
-        }
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-            border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
-        }
-        .form-group textarea { font-family: 'SF Mono','Fira Code',monospace; resize: vertical; min-height: 60px; }
-        .form-row { display: flex; gap: 12px; }
-        .form-row .form-group { flex: 1; }
-        /* Toggle switch */
-        .toggle { position: relative; width: 36px; height: 20px; display: inline-block; }
-        .toggle input { opacity: 0; width: 0; height: 0; }
-        .toggle-slider {
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-tertiary);
-            border-radius: 10px; border: 1px solid var(--border); cursor: pointer; transition: 0.2s;
-        }
-        .toggle-slider:before {
-            content: ''; position: absolute; width: 14px; height: 14px; left: 2px; bottom: 2px;
-            background: var(--text-secondary); border-radius: 50%; transition: 0.2s;
-        }
-        .toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
-        .toggle input:checked + .toggle-slider:before { transform: translateX(16px); background: #fff; }
-        /* Toolbar */
-        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
-        .toolbar h3 { font-size: 16px; font-weight: 600; }
-        .toolbar-actions { display: flex; gap: 8px; align-items: center; }
-        /* Pagination */
-        .pagination { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 12px; font-size: 12px; color: var(--text-secondary); }
-        .pagination button { padding: 4px 10px; }
-        /* Clickable row */
-        tr.clickable { cursor: pointer; }
-        tr.clickable:hover { background: var(--bg-hover) !important; }
-        /* Subtle transition on all interactive */
-        button, .nav-item, .tab, input, select, textarea { transition: all 0.15s ease; }
-        /* Query suggestions dropdown */
-        .suggestions {
-            position: absolute; top: 100%; left: 0; right: 100px; background: var(--bg-secondary);
-            border: 1px solid var(--border); border-radius: 0 0 8px 8px; max-height: 220px; overflow-y: auto;
-            z-index: 100; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-        }
-        .suggestions.show { display: block; }
-        .suggestion-item {
-            padding: 8px 14px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--border);
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .suggestion-item:hover, .suggestion-item.selected { background: var(--bg-tertiary); }
-        .suggestion-item .sg-text { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-primary); }
-        .suggestion-item .sg-cat { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
-        /* Live tail indicator */
-        .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); display: inline-block; animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-        /* Light theme */
-        body.light {
-            --bg-primary: #ffffff;
-            --bg-secondary: #f6f8fa;
-            --bg-tertiary: #eaeef2;
-            --bg-hover: #d0d7de;
-            --text-primary: #1f2328;
-            --text-secondary: #656d76;
-            --text-muted: #656d76;
-            --accent: #0969da;
-            --accent-hover: #0550ae;
-            --success: #1a7f37;
-            --warning: #9a6700;
-            --error: #cf222e;
-            --critical: #a40e26;
-            --border: #d0d7de;
-        }
-        body.light .toast-success { background: #dafbe1; border-color: var(--success); color: var(--success); }
-        body.light .toast-error { background: #ffebe9; border-color: var(--error); color: var(--error); }
-        body.light .toast-info { background: #ddf4ff; border-color: var(--accent); color: var(--accent); }
-        /* Chart colors: selected for each theme, and checked for contrast and colorblind separation */
-        :root {
-            --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
-            --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
-            --chart-surface: var(--bg-secondary); --chart-grid: #30363d; --chart-crosshair: #8b949e;
-        }
-        body.light {
-            --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
-            --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
-            --chart-grid: #e6e8eb; --chart-crosshair: #656d76;
-        }
-        .chart-plot { position: relative; }
-        .chart-svg { display: block; touch-action: pan-y; }
-        .chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        .chart-axis { font-size: 11px; fill: var(--text-secondary); }
-        .chart-note { font-size: 12px; color: var(--text-secondary); margin: 8px 0; }
-        .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
-        .chart-legend li { display: flex; align-items: center; gap: 6px; }
-        .chart-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
-        .chart-tooltip { position: absolute; z-index: 5; pointer-events: none; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
-        .chart-tooltip[hidden] { display: none; }
-        .chart-tooltip-title { color: var(--text-secondary); margin-bottom: 4px; }
-        .chart-tooltip-row { display: flex; align-items: center; gap: 6px; }
-        .chart-tooltip-row strong { margin-left: auto; padding-left: 12px; font-weight: 600; }
-        .chart-bars { list-style: none; display: flex; flex-direction: column; gap: 2px; }
-        .chart-bar-row { display: grid; grid-template-columns: minmax(80px, 180px) 1fr minmax(48px, auto); align-items: center; gap: 8px; font-size: 12px; }
-        .chart-bar-row:hover { background: var(--bg-tertiary); }
-        .chart-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--text-secondary); }
-        .chart-bar-track { display: block; height: 18px; }
-        .chart-bar { display: block; height: 100%; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 1px; }
-        .chart-bar-value { font-variant-numeric: tabular-nums; }
-        .chart-stat { padding: 16px 0; text-align: center; }
-        .chart-stat-value { font-size: 40px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
-        .chart-stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-        .chart-data { margin-top: 8px; font-size: 12px; }
-        .chart-data summary { cursor: pointer; color: var(--text-secondary); }
-        .chart-table { overflow-x: auto; }
-        .chart-table table { width: 100%; font-size: 12px; }
-        .dash-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; margin-top: 12px; }
-        .dash-panel { border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--bg-secondary); min-width: 0; }
-        .dash-panel h4 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-        .dash-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
-        .panel-row { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 8px; }
-        .panel-row-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
-        .panel-row-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-        .panel-preview { margin-top: 8px; }
-        .modal-wide { max-width: 720px; width: 95vw; max-height: 90vh; overflow-y: auto; }
-        .modal-subhead { font-size: 13px; margin: 12px 0 6px; }
-        .form-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-        .check-label { display: flex; align-items: center; gap: 6px; font-weight: 400; }
-        .check-label input { width: auto; }
-        .page-note { font-size: 12px; color: var(--text-secondary); margin: 8px 0; }
-
-        /* Keyboard and assistive technology */
-        .skip-link { position: absolute; left: -9999px; top: 4px; z-index: 1000; background: var(--bg-secondary); color: var(--accent); padding: 8px 12px; border-radius: 6px; }
-        .skip-link:focus { left: 4px; }
-        .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-        :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-        button.nav-item { width: 100%; background: none; border: none; font: inherit; text-align: left; }
-        .menu-button { display: none; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); padding: 4px 8px; font: inherit; cursor: pointer; }
-        tr.clickable:focus-visible { outline-offset: -2px; }
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .sidebar { display: none; position: fixed; z-index: 100; top: 0; bottom: 0; left: 0; }
-            .sidebar.open { display: flex; }
-            .menu-button { display: inline-block; }
-            .dash-panel { grid-column: 1 / -1 !important; }
-            .panel-row-grid, .form-row { grid-template-columns: 1fr; }
-            .cards { grid-template-columns: repeat(2, 1fr); }
-            .field-sidebar { display: none !important; }
-            .drawer { width: 100vw; }
-            .search-layout { flex-direction: column; }
-        }
-    </style>
+    <link rel="preload" href="fonts/atkinson-hyperlegible-next-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/atkinson-hyperlegible-next-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <script src="theme.js"></script>
+    <link rel="stylesheet" href="platinum.css">
     <link rel="stylesheet" href="search.css">
     <link rel="stylesheet" href="settings.css">
 </head>
 <body>
-    <!-- Sidebar -->
     <a class="skip-link" href="#mainContent">Skip to content</a>
+
+    <!-- Sidebar: five groups. Pages that aren't listed live as sub-pages of the nearest item, and all are under "Show all pages". -->
     <nav class="sidebar" id="sidebar" aria-label="Main">
-        <div class="sidebar-brand"><img src="icon.svg" alt="" width="22" height="22" class="sidebar-icon"><span>Cabinet</span></div>
+        <div class="sidebar-brand">
+            <img src="icon.svg" alt="" width="24" height="24">
+            <div class="sidebar-brand-text"><span class="sidebar-brand-name">Cabinet</span><span class="sidebar-brand-server" id="serverName"></span></div>
+        </div>
         <div class="sidebar-nav">
-            <div class="nav-section">Search</div>
-            <button type="button" class="nav-item active" data-page="search" aria-current="page">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04Z"/></svg>
-                Search
-            </button>
-            <button type="button" class="nav-item" data-page="livetail">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8.75 1.5a.75.75 0 0 0-1.5 0v5.19L5.22 4.66a.75.75 0 0 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l2.5-2.5a.75.75 0 1 0-1.06-1.06L8.75 6.69ZM3.5 10.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 15h6.5A2.75 2.75 0 0 0 14 12.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25Z"/></svg>
-                Live Tail
-            </button>
-            <button type="button" class="nav-item" data-page="saved">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
-                Saved Queries
-            </button>
-            <button type="button" class="nav-item" data-page="investigate">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.68 11.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg>
-                Investigate
-            </button>
-            <button type="button" class="nav-item" data-page="jobs">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.379 5.227A.25.25 0 0 0 6 5.442v5.117a.25.25 0 0 0 .379.214l4.264-2.559a.25.25 0 0 0 0-.428Z"/></svg>
-                Search Jobs
-            </button>
-            <div class="nav-section">Monitor</div>
-            <button type="button" class="nav-item" data-page="dashboards">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM1.5 6.5v7.75c0 .138.112.25.25.25H6.5V6.5Zm8 8h4.75a.25.25 0 0 0 .25-.25V6.5H9.5Zm5-9.5V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25V5Z"/></svg>
-                Dashboards
-            </button>
-            <button type="button" class="nav-item" data-page="health">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm3.28 5.78a.75.75 0 0 0-1.06-1.06L7 7.94 5.78 6.72a.75.75 0 0 0-1.06 1.06l1.75 1.75a.75.75 0 0 0 1.06 0l3.75-3.75Z"/></svg>
-                System Health
-            </button>
-            <div class="nav-section">Alerting</div>
-            <button type="button" class="nav-item" data-page="alerts">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5c-1.736 0-3.369.676-4.596 1.903A6.47 6.47 0 0 0 1.5 8c0 1.736.676 3.369 1.904 4.597A6.47 6.47 0 0 0 8 14.5a6.47 6.47 0 0 0 4.596-1.903A6.47 6.47 0 0 0 14.5 8a6.47 6.47 0 0 0-1.904-4.597A6.47 6.47 0 0 0 8 1.5ZM8 9.5a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5A.75.75 0 0 1 8 9.5Zm1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/></svg>
-                Alerts
-            </button>
-            <button type="button" class="nav-item" data-page="pipelines">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"/></svg>
-                Ingest Pipeline
-            </button>
-            <button type="button" class="nav-item" data-page="cases">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.75 0h2.5C10.22 0 11 .78 11 1.75V3h3.25c.97 0 1.75.78 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25v-8.5C0 3.78.78 3 1.75 3H5V1.75C5 .78 5.78 0 6.75 0ZM6.5 3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25ZM1.5 4.75v8.5c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"/></svg>
-                Cases
-            </button>
-            <button type="button" class="nav-item" data-page="rules">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.5 2.5v5c0 3.9 2.7 7.2 6.5 8.5 3.8-1.3 6.5-4.6 6.5-8.5v-5L8 0Zm0 1.6 5 1.9v4c0 3-2 5.6-5 6.8-3-1.2-5-3.8-5-6.8v-4l5-1.9Z"/></svg>
-                Detections
-            </button>
-            <button type="button" class="nav-item" data-page="players">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-5 6.25C3 11.9 5.24 10 8 10s5 1.9 5 4.25a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75Z"/></svg>
-                Players
-            </button>
-            <button type="button" class="nav-item" data-page="coverage">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 1.75C1 .78 1.78 0 2.75 0h10.5C14.22 0 15 .78 15 1.75v12.5A1.75 1.75 0 0 1 13.25 16H2.75A1.75 1.75 0 0 1 1 14.25Zm1.5 0v3.75h3V1.5H2.75a.25.25 0 0 0-.25.25ZM7 1.5v4h2v-4Zm3.5 0v4h3V1.75a.25.25 0 0 0-.25-.25ZM13.5 7h-3v3.5h3Zm0 5h-3v2.5h2.75a.25.25 0 0 0 .25-.25ZM9 14.5V12H7v2.5Zm-3.5 0V12h-3v2.25c0 .14.11.25.25.25ZM2.5 10.5h3V7h-3Zm4.5 0h2V7H7Z"/></svg>
-                ATT&amp;CK Coverage
-            </button>
-            <button type="button" class="nav-item" data-page="anomalies">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 13.25h13a.75.75 0 0 1 0 1.5h-13A1.5 1.5 0 0 1 0 13.25V1.75a.75.75 0 0 1 1.5 0Zm3.03-3.47a.75.75 0 0 1-1.06-1.06l3-3a.75.75 0 0 1 1.06 0L9.5 7.69l3.97-3.97a.75.75 0 1 1 1.06 1.06l-4.5 4.5a.75.75 0 0 1-1.06 0L7 7.31Z"/></svg>
-                Anomalies
-            </button>
-            <button type="button" class="nav-item" data-page="schedules">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25a.75.75 0 0 0-1.5 0v3.5c0 .199.079.39.22.53l2 2a.75.75 0 1 0 1.06-1.06L8.75 7.94Z"/></svg>
-                Scheduled Searches
-            </button>
-            <button type="button" class="nav-item" data-page="reports">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 1.75C2 .78 2.78 0 3.75 0h6.59c.46 0 .9.18 1.24.51l2.91 2.91c.33.33.51.78.51 1.24v9.59A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .14.11.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.06V4.25c0 .14.11.25.25.25h2.69Z"/></svg>
-                Reports
-            </button>
-            <button type="button" class="nav-item" data-page="connectors">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.75 0a.75.75 0 0 1 .75.75V3h5V.75a.75.75 0 0 1 1.5 0V3h.75A1.25 1.25 0 0 1 14 4.25v2A4.75 4.75 0 0 1 9.75 11H8.75v4.25a.75.75 0 0 1-1.5 0V11h-1A4.75 4.75 0 0 1 2 6.25v-2A1.25 1.25 0 0 1 3.25 3H4V.75A.75.75 0 0 1 4.75 0ZM3.5 4.5v1.75A3.25 3.25 0 0 0 6.75 9.5h3a3.25 3.25 0 0 0 3.25-3.25V4.5Z"/></svg>
-                Connectors
-            </button>
-            <div class="nav-section">Knowledge</div>
-            <button type="button" class="nav-item" data-page="extractions">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.838 1.7a.75.75 0 0 1 .162 1.05A6.49 6.49 0 0 0 0 6.5a6.49 6.49 0 0 0 1 3.75.75.75 0 0 1-1.212.888A7.99 7.99 0 0 1 0 6.5a7.99 7.99 0 0 1-1.788-4.638.75.75 0 0 1 1.05-.162ZM14 6.5a6.49 6.49 0 0 0-1-3.75.75.75 0 0 1 1.212-.888A7.99 7.99 0 0 1 16 6.5a7.99 7.99 0 0 1-1.788 4.638.75.75 0 0 1-1.212-.888A6.49 6.49 0 0 0 14 6.5ZM4.25 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5ZM3.5 8.25a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1-.75-.75Zm1.5 3a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"/></svg>
-                Field Extractions
-            </button>
-            <button type="button" class="nav-item" data-page="knowledge">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.74 3.74 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.623-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.75 4.75v5.324a3.75 3.75 0 0 1 1.994-.574H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"/></svg>
-                Knowledge
-            </button>
-            <div class="nav-section">Admin</div>
-            <button type="button" class="nav-item" data-page="ingest">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14ZM11.78 4.72a.75.75 0 1 1-1.06 1.06L8.75 3.81V9.5a.75.75 0 0 1-1.5 0V3.81L5.28 5.78a.75.75 0 0 1-1.06-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25Z"/></svg>
-                Ingest Logs
-            </button>
-            <button type="button" class="nav-item" data-page="indexes">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75C0 1.784.784 1 1.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM4 5h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 5Zm0 3h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 8Zm0 3h4a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 11Z"/></svg>
-                Indexes
-            </button>
-            <button type="button" class="nav-item" data-page="users">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"/></svg>
-                Users
-            </button>
-            <button type="button" class="nav-item" data-page="settings">
-                <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.022.078.281.834a1.18 1.18 0 0 0 1.402.756l.849-.21c.652-.163 1.31.098 1.727.563.5.56.91 1.197 1.2 1.891a1.37 1.37 0 0 1-.498 1.576l-.69.5a1.18 1.18 0 0 0 0 1.94l.69.5c.484.35.733.98.498 1.576a7.1 7.1 0 0 1-1.2 1.89 1.37 1.37 0 0 1-1.727.564l-.849-.21a1.18 1.18 0 0 0-1.402.756l-.281.834c-.17.646-.716 1.195-1.459 1.26a8.4 8.4 0 0 1-1.402 0c-.743-.065-1.289-.614-1.459-1.26l-.281-.834a1.18 1.18 0 0 0-1.402-.756l-.849.21c-.652.163-1.31-.098-1.727-.563a7.1 7.1 0 0 1-1.2-1.891 1.37 1.37 0 0 1 .498-1.576l.69-.5a1.18 1.18 0 0 0 0-1.94l-.69-.5A1.37 1.37 0 0 1 .28 4.862a7.1 7.1 0 0 1 1.2-1.89c.417-.466 1.075-.727 1.727-.564l.849.21a1.18 1.18 0 0 0 1.402-.756l.281-.834C5.856.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm0 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
-                Settings
-            </button>
+            <div class="nav-group" data-group="ask">
+                <button type="button" class="nav-group-header" aria-expanded="true" aria-controls="navGroup-ask" data-click="toggleNavGroup" data-args='["ask"]'><span class="nav-disclosure" aria-hidden="true">&#9660;</span><span class="nav-group-label">Ask</span></button>
+                <div class="nav-group-items" id="navGroup-ask"><div>
+                    <button type="button" class="nav-item active" data-page="search" aria-current="page"><span class="nav-label">Search</span><span class="nav-meta" data-meta="search"></span></button>
+                    <button type="button" class="nav-item" data-page="livetail"><span class="nav-label">Live Tail</span><span class="nav-meta" data-meta="livetail"></span></button>
+                    <button type="button" class="nav-item" data-page="saved" data-family="saved jobs"><span class="nav-label">Saved questions</span><span class="nav-meta" data-meta="saved"></span></button>
+                    <button type="button" class="nav-item" data-page="investigate"><span class="nav-label">AI investigator</span><span class="nav-meta" data-meta="investigate"></span></button>
+                </div></div>
+            </div>
+            <div class="nav-group" data-group="watch">
+                <button type="button" class="nav-group-header" aria-expanded="true" aria-controls="navGroup-watch" data-click="toggleNavGroup" data-args='["watch"]'><span class="nav-disclosure" aria-hidden="true">&#9660;</span><span class="nav-group-label">Watch</span></button>
+                <div class="nav-group-items" id="navGroup-watch"><div>
+                    <button type="button" class="nav-item" data-page="dashboards"><span class="nav-label">Dashboards</span><span class="nav-meta" data-meta="dashboards"></span></button>
+                    <button type="button" class="nav-item" data-page="reports" data-family="reports schedules"><span class="nav-label">Scheduled reports</span><span class="nav-meta" data-meta="reports"></span></button>
+                    <button type="button" class="nav-item" data-page="health"><span class="nav-label">System health</span><span class="nav-meta" data-meta="health"></span></button>
+                </div></div>
+            </div>
+            <div class="nav-group" data-group="respond">
+                <button type="button" class="nav-group-header" aria-expanded="true" aria-controls="navGroup-respond" data-click="toggleNavGroup" data-args='["respond"]'><span class="nav-disclosure" aria-hidden="true">&#9660;</span><span class="nav-group-label">Respond</span></button>
+                <div class="nav-group-items" id="navGroup-respond"><div>
+                    <button type="button" class="nav-item" data-page="alerts" data-family="alerts connectors"><span class="nav-label">Alerts</span><span class="nav-meta" data-meta="alerts"></span></button>
+                    <button type="button" class="nav-item" data-page="cases"><span class="nav-label">Cases</span><span class="nav-meta" data-meta="cases"></span></button>
+                    <button type="button" class="nav-item" data-page="rules" data-family="rules anomalies"><span class="nav-label">Detection rules</span><span class="nav-meta" data-meta="rules"></span></button>
+                    <button type="button" class="nav-item" data-page="coverage"><span class="nav-label">ATT&amp;CK coverage</span><span class="nav-meta" data-meta="coverage"></span></button>
+                    <button type="button" class="nav-item" data-page="players"><span class="nav-label">Players</span><span class="nav-meta" data-meta="players"></span></button>
+                </div></div>
+            </div>
+            <div class="nav-group" data-group="data">
+                <button type="button" class="nav-group-header" aria-expanded="true" aria-controls="navGroup-data" data-click="toggleNavGroup" data-args='["data"]'><span class="nav-disclosure" aria-hidden="true">&#9660;</span><span class="nav-group-label">Data</span></button>
+                <div class="nav-group-items" id="navGroup-data"><div>
+                    <button type="button" class="nav-item" data-page="ingest"><span class="nav-label">Sources</span><span class="nav-meta" data-meta="ingest"></span></button>
+                    <button type="button" class="nav-item" data-page="pipelines"><span class="nav-label">Ingest pipeline</span><span class="nav-meta" data-meta="pipelines"></span></button>
+                    <button type="button" class="nav-item" data-page="indexes" data-family="indexes extractions knowledge"><span class="nav-label">Indexes &amp; fields</span><span class="nav-meta" data-meta="indexes"></span></button>
+                </div></div>
+            </div>
+            <div class="nav-group" data-group="admin">
+                <button type="button" class="nav-group-header" aria-expanded="true" aria-controls="navGroup-admin" data-click="toggleNavGroup" data-args='["admin"]'><span class="nav-disclosure" aria-hidden="true">&#9660;</span><span class="nav-group-label">Admin</span></button>
+                <div class="nav-group-items" id="navGroup-admin"><div>
+                    <button type="button" class="nav-item" data-page="users"><span class="nav-label">Users &amp; groups</span><span class="nav-meta" data-meta="users"></span></button>
+                    <button type="button" class="nav-item" data-page="apikeys"><span class="nav-label">API keys</span><span class="nav-meta" data-meta="apikeys"></span></button>
+                    <button type="button" class="nav-item" data-page="settings"><span class="nav-label">Settings</span><span class="nav-meta" data-meta="settings"></span></button>
+                </div></div>
+            </div>
+            <button type="button" class="nav-item nav-all" data-page="all"><span class="nav-label">Show all pages</span></button>
         </div>
         <div class="sidebar-footer">
-            Cabinet &middot; <a href="/swagger">API Docs</a>
+            <div class="sidebar-status" id="healthStatus" role="status"><span class="dot" id="healthDot"></span><span id="healthText">Connecting&hellip;</span></div>
+            <button type="button" class="user-button" id="userButton" data-click="toggleUserMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu">Account</button>
+            <div class="menu user-menu" id="userMenu" role="menu" aria-label="Account and appearance" hidden>
+                <div class="user-menu-name" id="userMenuName">Not signed in with an account</div>
+                <div class="menu-label">Appearance</div>
+                <div class="segmented" role="group" aria-label="Appearance">
+                    <button type="button" data-theme-option="system" data-click="setTheme" data-args='["system"]'>System</button>
+                    <button type="button" data-theme-option="light" data-click="setTheme" data-args='["light"]'>Light</button>
+                    <button type="button" data-theme-option="graphite" data-click="setTheme" data-args='["graphite"]'>Graphite</button>
+                </div>
+                <div class="menu-sep"></div>
+                <button type="button" class="menu-item" role="menuitem" id="accountButton" data-click="showAccount" hidden>My account&hellip;</button>
+                <button type="button" class="menu-item" role="menuitem" data-click="changeApiKey">API key for this browser&hellip;</button>
+                <a class="menu-item" role="menuitem" href="/swagger">API documentation</a>
+                <button type="button" class="menu-item" role="menuitem" id="menuSignOut" data-click="signOut" hidden>Sign out</button>
+            </div>
         </div>
     </nav>
 
     <!-- Main Content -->
     <div class="main">
-        <div class="topbar">
-            <button type="button" class="menu-button" id="menuButton" data-click="toggleSidebar" aria-controls="sidebar" aria-expanded="false" aria-label="Menu">&#9776;</button>
-            <div class="topbar-left" id="pageTitle">Search</div>
-            <div class="topbar-right">
-                <div class="status" id="healthStatus"><span class="dot" id="healthDot"></span><span id="healthText">Connecting...</span></div>
-                <button class="api-key-btn" data-click="toggleTheme" id="themeBtn" title="Toggle light/dark theme">Theme</button>
-                <button class="api-key-btn" data-click="showAccount" id="accountButton" hidden>My account</button>
-                <button class="api-key-btn" data-click="changeApiKey">API Key</button>
-            </div>
-        </div>
+        <button type="button" class="btn btn-sm menu-button" id="menuButton" data-click="toggleSidebar" aria-controls="sidebar" aria-expanded="false">Menu</button>
         <div class="content" id="mainContent" tabindex="-1">
             <!-- ===== SEARCH PAGE ===== -->
             <div class="page active" id="page-search">
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Search</h1><p class="toolbar-purpose">Ask in plain words, or write BQL</p></div>
+                </header>
+                <div class="page-body">
                 <div class="sx-bar">
                     <select id="searchIndex" class="sx-index" aria-label="Index">
                         <option value="">All indexes</option>
@@ -584,7 +132,7 @@
                     <button type="button" class="btn btn-primary" id="searchBtn" data-click="executeQuery">Search</button>
                     <button type="button" class="btn btn-secondary" id="builderButton" data-click="toggleBuilder" aria-expanded="false" aria-controls="queryBuilder" title="Build a search by picking fields">Build</button>
                     <div class="sx-more">
-                        <button type="button" class="btn btn-secondary" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">&#8943;</button>
+                        <button type="button" class="btn btn-secondary" id="searchMenuButton" data-click="toggleSearchMenu" aria-haspopup="menu" aria-expanded="false">More &#9662;</button>
                         <div class="sx-menu" id="searchMenu" role="menu" hidden>
                             <button type="button" role="menuitem" data-click="saveCurrentQuery">Save search <kbd>Ctrl+S</kbd></button>
                             <button type="button" role="menuitem" data-click="copySearchLink">Copy link to this search</button>
@@ -607,7 +155,7 @@
                             <option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option>
                         </select>
                         <span class="sx-builder-label">Where</span>
-                        <div><div id="builderConditions"></div><button type="button" class="btn btn-secondary btn-sm" data-click="addBuilderCondition">+ Condition</button></div>
+                        <div><div id="builderConditions"></div><button type="button" class="btn btn-secondary btn-sm" data-click="addBuilderCondition">Add condition</button></div>
                         <label for="builderShow">Show</label>
                         <div class="sx-builder-row">
                             <select id="builderShow">
@@ -629,7 +177,7 @@
                     </div>
                     <div class="sx-builder-out">
                         <code id="builderQuery"></code>
-                        <button type="button" class="btn btn-primary btn-sm" data-click="useBuilderQuery">Search</button>
+                        <button type="button" class="btn btn-secondary btn-sm" data-click="useBuilderQuery">Search with this</button>
                     </div>
                 </section>
                 <div class="sx-recent" id="queryHistory" aria-label="Recent searches"></div>
@@ -665,9 +213,9 @@
                                 <select id="resultPageSize" aria-label="Results per page">
                                     <option value="25">25</option><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option><option value="500">500</option>
                                 </select>
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="prevPage" aria-label="Previous page">&lsaquo;</button>
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="prevPage" aria-label="Previous page">Previous</button>
                                 <span id="pageInfo"></span>
-                                <button type="button" class="btn btn-secondary btn-sm" data-click="nextPage" aria-label="Next page">&rsaquo;</button>
+                                <button type="button" class="btn btn-secondary btn-sm" data-click="nextPage" aria-label="Next page">Next</button>
                             </div>
                         </div>
                         <div id="resultView-events"><div class="sx-empty" id="searchEmpty"></div><ul class="sx-events" id="eventList"></ul></div>
@@ -676,14 +224,18 @@
                         <pre id="resultView-json" class="code-block hide" style="margin:12px;max-height:70vh"></pre>
                     </section>
                 </div>
+                </div>
             </div>
 
-            <!-- ===== SAVED QUERIES PAGE ===== -->
+            <!-- ===== SAVED QUESTIONS PAGE ===== -->
             <div class="page" id="page-saved">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
-                    <h3>Saved Queries</h3>
-                    <button class="btn btn-secondary btn-sm" data-click="loadSavedQueries">Refresh</button>
-                </div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Saved questions</h1><p class="toolbar-purpose">Searches you kept, ready to run again</p></div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary" data-click="loadSavedQueries">Refresh</button>
+                    </div>
+                </header>
+                <div class="page-body">
                 <div class="panel">
                     <div class="scroll-y-sm">
                         <table>
@@ -692,179 +244,215 @@
                         </table>
                     </div>
                 </div>
+                </div>
             </div>
 
             <!-- ===== DASHBOARDS PAGE ===== -->
             <div class="page" id="page-dashboards">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
-                    <h3>Dashboards</h3>
-                    <div style="display:flex;gap:6px">
-                        <button class="btn btn-primary btn-sm" data-click="showDashboardModal">+ New Dashboard</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadDashboards">Refresh</button>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Dashboards</h1><p class="toolbar-purpose">Panels of searches that keep themselves up to date</p></div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-secondary" data-click="loadDashboards">Refresh</button>
+                        <button class="btn btn-primary" data-click="showDashboardModal">New dashboard&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <div id="dashboardsList" class="health-grid"></div>
+                </div>
             </div>
 
             <!-- ===== HEALTH PAGE ===== -->
             <div class="page" id="page-health">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
-                    <h3>System Health</h3>
-                    <button class="btn btn-secondary btn-sm" data-click="loadHealthDetails">Refresh</button>
-                </div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>System health</h1><p class="toolbar-purpose">Whether this Cabinet server and its parts are working</p></div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary" data-click="loadHealthDetails">Refresh</button>
+                    </div>
+                </header>
+                <div class="page-body">
                 <div class="cards" id="healthCards">
                     <div class="card"><div class="label">Status</div><div class="value" id="sysStatus">-</div></div>
                     <div class="card"><div class="label">Uptime</div><div class="value" id="sysUptime">-</div></div>
                     <div class="card"><div class="label">Memory</div><div class="value" id="sysMem">-</div></div>
                     <div class="card"><div class="label">Storage</div><div class="value" id="sysStorage">-</div></div>
                 </div>
-                <h4 style="margin:16px 0 10px">Health Checks</h4>
+                <h4 class="section-title">Health checks</h4>
                 <div id="healthChecks" class="health-grid"></div>
-                <h4 style="margin:20px 0 10px">Features</h4>
+                <h4 class="section-title">Features</h4>
                 <div id="healthFeatures" class="health-grid"></div>
+                </div>
             </div>
 
-            <!-- ===== INGEST PAGE ===== -->
+            <!-- ===== SOURCES (INGEST) PAGE ===== -->
             <div class="page" id="page-ingest">
-                <h3 style="margin-bottom:16px">Ingest Logs</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Sources</h1><p class="toolbar-purpose">Send logs to Cabinet, or paste some to try it</p></div>
+                </header>
+                <div class="page-body">
                 <div class="alert alert-success" id="ingestSuccess"></div>
                 <div class="alert alert-error" id="ingestError"></div>
-                <div style="margin-bottom:16px">
-                    <label style="font-size:13px; color:var(--text-secondary); margin-bottom:6px; display:block">Paste log lines (one per line) or JSON array:</label>
-                    <textarea id="ingestInput" rows="10" style="width:100%; padding:12px; font-size:12px; font-family:'SF Mono','Fira Code',monospace; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); outline:none; resize:vertical;" placeholder="2024-01-15 10:30:00 [ERROR] Connection failed to database&#10;2024-01-15 10:30:01 [WARN] Retrying connection...&#10;2024-01-15 10:30:02 [INFO] Connection restored"></textarea>
-                </div>
-                <div style="display:flex; gap:8px; align-items:center">
-                    <button class="btn btn-primary" data-click="ingestLogs">Ingest</button>
-                    <select id="ingestFormat" style="padding:8px 12px; font-size:13px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary);">
-                        <option value="lines">Raw lines</option>
-                        <option value="json">JSON array</option>
-                    </select>
-                    <span id="ingestSpinner" class="spinner hide"></span>
+                <section class="group-panel">
+                    <h2 class="group-panel-title">Paste logs</h2>
+                    <div class="form-group">
+                        <label for="ingestInput">Log lines, one per line, or a JSON array</label>
+                        <textarea id="ingestInput" rows="10" class="mono" placeholder="2024-01-15 10:30:00 [ERROR] Connection failed to database&#10;2024-01-15 10:30:01 [WARN] Retrying connection...&#10;2024-01-15 10:30:02 [INFO] Connection restored"></textarea>
+                    </div>
+                    <div class="inline-actions">
+                        <label for="ingestFormat" class="muted">Format</label>
+                        <select id="ingestFormat">
+                            <option value="lines">Raw lines</option>
+                            <option value="json">JSON array</option>
+                        </select>
+                        <button class="btn btn-primary" data-click="ingestLogs">Ingest</button>
+                        <span id="ingestSpinner" class="loading-line hide"><span class="progress" aria-hidden="true"></span><span>Sending your lines&hellip;</span></span>
+                    </div>
+                </section>
                 </div>
             </div>
 
             <!-- ===== LIVE TAIL PAGE ===== -->
             <div class="page" id="page-livetail">
-                <div class="toolbar">
-                    <h3><span class="live-dot" id="tailDot" style="display:none"></span> Live Tail</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1><span class="live-dot" id="tailDot" style="display:none"></span> Live Tail</h1><p class="toolbar-purpose">Events as they arrive, newest at the bottom</p></div>
                     <div class="toolbar-actions">
-                        <input type="text" id="tailFilter" placeholder="Filter (optional)" style="width:200px;padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
-                        <select id="tailIndex" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
-                            <option value="main">main</option>
-                        </select>
-                        <input type="text" id="tailHighlight" placeholder="Highlight words" aria-label="Words to highlight" style="width:160px;padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
-                        <label class="check-label" style="font-size:12px"><input type="checkbox" id="tailPauseOnMatch"> Pause on match</label>
-                        <button class="btn btn-primary btn-sm" id="tailStartBtn" data-click="toggleTail">Start</button>
-                        <button class="btn btn-secondary btn-sm" id="tailPauseBtn" data-click="toggleTailPause" disabled>Pause</button>
-                        <button class="btn btn-secondary btn-sm" data-click="clearTail">Clear</button>
-                        <span id="tailCount" style="font-size:12px;color:var(--text-secondary)">0 events</span>
+                        <span id="tailCount" class="toolbar-count">0 events</span>
+                        <button class="btn btn-secondary" data-click="clearTail">Clear</button>
                     </div>
+                </header>
+                <div class="page-body">
+                <div class="tail-row">
+                    <button class="btn btn-primary" id="tailStartBtn" data-click="toggleTail">Start</button>
+                    <button class="btn btn-secondary" id="tailPauseBtn" data-click="toggleTailPause" disabled>Pause</button>
+                    <input type="text" id="tailFilter" placeholder="Only show (optional)" aria-label="Only show events matching">
+                    <select id="tailIndex" aria-label="Index">
+                        <option value="main">main</option>
+                    </select>
+                    <input type="text" id="tailHighlight" placeholder="Highlight words" aria-label="Words to highlight">
+                    <label class="check-label"><input type="checkbox" id="tailPauseOnMatch"> Pause on match</label>
                 </div>
-                <div class="panel" style="height:calc(100vh - 220px);overflow:hidden">
-                    <div id="tailOutput" style="height:100%;overflow-y:auto;font-family:'SF Mono','Fira Code',monospace;font-size:12px;padding:12px;line-height:1.6"></div>
+                <div class="panel" style="height:calc(100vh - 190px);min-height:240px;overflow:hidden">
+                    <div id="tailOutput" class="tail-output"></div>
+                </div>
                 </div>
             </div>
 
-            <!-- ===== SEARCH JOBS PAGE ===== -->
+            <!-- ===== BACKGROUND SEARCHES (SEARCH JOBS) PAGE ===== -->
             <div class="page" id="page-jobs">
-                <div class="toolbar">
-                    <h3>Search Jobs</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Background searches</h1><p class="toolbar-purpose">Long searches that run on the server while you do something else</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showJobModal">+ New Job</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadJobs">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadJobs">Refresh</button>
+                        <button class="btn btn-primary" data-click="showJobModal">New background search&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th>ID</th><th>Query</th><th>Status</th><th>Results</th><th>Created</th><th>Actions</th></tr></thead>
                     <tbody id="jobsBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
             <!-- ===== ALERTS PAGE ===== -->
             <div class="page" id="page-alerts">
-                <div class="toolbar">
-                    <h3>Alerts</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Alerts</h1><p class="toolbar-purpose">What detection rules and scheduled searches found</p></div>
                     <div class="toolbar-actions">
-                        <select id="alertSevFilter" aria-label="Filter by severity" data-change="loadAlerts" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
-                            <option value="">All Severities</option>
+                        <select id="alertSevFilter" aria-label="Filter by severity" data-change="loadAlerts">
+                            <option value="">All severities</option>
                             <option value="Critical">Critical</option>
                             <option value="Error">Error</option>
                             <option value="Warning">Warning</option>
                             <option value="Info">Info</option>
                         </select>
-                        <select id="alertAckFilter" aria-label="Filter by status" data-change="loadAlerts" style="padding:6px 10px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">
-                            <option value="">All</option>
+                        <select id="alertAckFilter" aria-label="Filter by status" data-change="loadAlerts">
+                            <option value="">Any status</option>
                             <option value="false">Unacknowledged</option>
                             <option value="true">Acknowledged</option>
                         </select>
-                        <button class="btn btn-secondary btn-sm" data-click="loadAlerts">Refresh</button>
+                        <button class="btn btn-primary" data-click="loadAlerts">Refresh</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>Message</th><th>Status</th><th>Actions</th></tr></thead>
                     <tbody id="alertsBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
             <!-- ===== DETECTION RULES PAGE ===== -->
             <div class="page" id="page-rules">
-                <div class="toolbar">
-                    <h3>Detections</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Detection rules</h1><p class="toolbar-purpose">Checked on every event as it arrives</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showRuleModal">+ New Rule</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadRules">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadRules">Refresh</button>
+                        <button class="btn btn-primary" data-click="showRuleModal">New rule&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Rules run on every event as it's ingested, and what they find appears under Alerts. The built-in rules are off until you turn them on.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">Fires on</th><th scope="col">Technique</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="rulesBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
-            <!-- ===== CONNECTORS PAGE ===== -->
+            <!-- ===== AI INVESTIGATOR PAGE ===== -->
             <div class="page" id="page-investigate">
-                <div class="toolbar"><h3>Investigate</h3></div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>AI investigator</h1><p class="toolbar-purpose">Ask a question; it searches your logs to answer it</p></div>
+                </header>
+                <div class="page-body">
                 <p class="page-note" id="investigateStatus">Ask a question about your logs. A language model answers it by running searches with your access, and shows the searches it ran.</p>
-                <div class="panel" style="padding:16px">
-                    <div class="form-group"><label for="investigateQuestion">Question</label>
-                        <textarea id="investigateQuestion" rows="3" maxlength="2000" placeholder="Why did errors on web-1 jump in the last hour?"></textarea></div>
-                    <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-primary" id="investigateButton" data-click="runInvestigation">Investigate</button></div>
+                <section class="group-panel">
+                    <h2 class="group-panel-title">Your question</h2>
+                    <div class="form-group"><label for="investigateQuestion" class="sr-only">Question</label>
+                        <textarea id="investigateQuestion" rows="3" maxlength="2000" placeholder="Why did errors on web-1 jump in the last hour?" style="font-family:var(--font-ui);font-size:var(--fs-14)"></textarea></div>
+                    <div class="modal-actions start"><button class="btn btn-primary" id="investigateButton" data-click="runInvestigation">Investigate</button></div>
                     <div id="investigateResult" aria-live="polite"></div>
+                </section>
                 </div>
             </div>
 
+            <!-- ===== PLAYERS PAGE (gaming extension) ===== -->
             <div class="page" id="page-players">
-                <div class="toolbar">
-                    <h3>Players</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Players</h1><p class="toolbar-purpose">People on your game servers, and what they said</p></div>
                     <div class="toolbar-actions">
-                        <input type="text" id="playerLookup" placeholder="Steam ID or name" aria-label="Steam ID or player name" style="width:220px">
-                        <button class="btn btn-primary btn-sm" data-click="openPlayerFromInput">Look up</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadPlayers">Refresh</button>
+                        <input type="text" id="playerLookup" placeholder="Steam ID or name" aria-label="Steam ID or player name" style="width:200px">
+                        <button class="btn btn-secondary" data-click="loadPlayers">Refresh</button>
+                        <button class="btn btn-primary" data-click="openPlayerFromInput">Look up</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note" id="playersNote">Players who chatted on your game servers in the last week. Open one to see their names, chat with toxicity flagged, admin history, and a suggested action. Suggestions only: Cabinet never runs RCON commands.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Player</th><th scope="col">Steam ID</th><th scope="col">Chat lines</th><th scope="col">Names used</th><th scope="col">Last seen</th></tr></thead>
                     <tbody id="playersBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:12px"></div>
+                <div class="panel" id="playerProfile" hidden style="padding:16px;margin-top:16px"></div>
+                </div>
             </div>
 
+            <!-- ===== INGEST PIPELINE PAGE ===== -->
             <div class="page" id="page-pipelines">
-                <div class="toolbar">
-                    <h3>Ingest Pipeline</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Ingest pipeline</h1><p class="toolbar-purpose">Drop, sample, route or redact events before they're stored</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="editPipelineRule">+ New Rule</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadPipelines">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadPipelines">Refresh</button>
+                        <button class="btn btn-primary" data-click="editPipelineRule">New rule&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note" id="pipelineSavings">Rules that drop, sample, route or redact events as they arrive, before they're stored or checked by detection rules. They run in order.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Order</th><th scope="col">Name</th><th scope="col">Matches</th><th scope="col">Does</th><th scope="col">Since start</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="pipelineBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="pipelineEditor" hidden style="padding:16px;margin-top:12px">
+                <div class="group-panel editor-panel" id="pipelineEditor" hidden style="margin-top:16px">
+                    <h2 class="group-panel-title">Pipeline rule</h2>
                     <div class="st-grid-2">
                         <div class="form-group"><label for="plName">Name</label><input type="text" id="plName"></div>
                         <div class="form-group"><label for="plOrder">Order</label><input type="number" id="plOrder" value="10"></div>
@@ -880,65 +468,74 @@
                             <label class="check-label"><input type="checkbox" id="plEnabled" checked> On</label></div>
                     </div>
                     <div class="form-group"><label for="plLines">Try it on lines</label><textarea id="plLines" rows="4" class="mono" placeholder="One log line per row"></textarea></div>
-                    <div class="modal-actions" style="justify-content:flex-start">
+                    <div class="modal-actions start">
+                        <button class="btn btn-secondary" data-click="closePipelineEditor">Cancel</button>
                         <button class="btn btn-secondary" data-click="testPipelineRule">Try</button>
                         <button class="btn btn-primary" data-click="savePipelineRule">Save</button>
-                        <button class="btn btn-secondary" data-click="closePipelineEditor">Cancel</button>
                     </div>
                     <div id="pipelineTestResult" aria-live="polite"></div>
                 </div>
+                </div>
             </div>
 
+            <!-- ===== CASES PAGE ===== -->
             <div class="page" id="page-cases">
-                <div class="toolbar">
-                    <h3>Cases</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Cases</h1><p class="toolbar-purpose">Investigations, each as one timeline of alerts, events and notes</p></div>
                     <div class="toolbar-actions">
-                        <select id="caseStatusFilter" data-change="loadCases" aria-label="Status"><option value="">All</option><option>Open</option><option>Investigating</option><option>Resolved</option><option>Closed</option></select>
-                        <button class="btn btn-primary btn-sm" data-click="newCase">+ New Case</button>
+                        <select id="caseStatusFilter" data-change="loadCases" aria-label="Status"><option value="">Any status</option><option>Open</option><option>Investigating</option><option>Resolved</option><option>Closed</option></select>
+                        <button class="btn btn-primary" data-click="newCase">New case&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Investigations that gather alerts, events, searches and notes. A case's timeline shows each reader only the events they may read.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Severity</th><th scope="col">Assignee</th><th scope="col">Updated</th></tr></thead>
                     <tbody id="casesBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="caseView" hidden style="padding:16px;margin-top:12px"></div>
+                <div class="panel" id="caseView" hidden style="padding:16px;margin-top:16px"></div>
+                </div>
             </div>
 
+            <!-- ===== ATT&CK COVERAGE PAGE ===== -->
             <div class="page" id="page-coverage">
-                <div class="toolbar">
-                    <h3>ATT&amp;CK Coverage</h3>
-                    <div class="toolbar-actions"><button class="btn btn-secondary btn-sm" data-click="loadCoverage">Refresh</button></div>
-                </div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>ATT&amp;CK coverage</h1><p class="toolbar-purpose">Which attacker techniques your detection rules can see</p></div>
+                    <div class="toolbar-actions"><button class="btn btn-secondary" data-click="loadCoverage">Refresh</button></div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Which MITRE ATT&amp;CK techniques your detection rules cover. Shaded cells have a rule that's on; outlined ones only rules that are off; the rest are gaps.</p>
-                <div class="panel"><div id="coverageMatrix" class="scroll-y" style="display:flex;gap:8px;overflow-x:auto;padding:8px"></div></div>
-                <div class="panel" style="padding:16px;margin-top:12px">
-                    <h4>Import Sigma rules</h4>
-                    <p class="page-note">Paste one or more Sigma rules (YAML, separated by ---). They're added turned off, so you can check them against your logs before turning them on.</p>
+                <div class="panel"><div id="coverageMatrix" class="scroll-y" style="display:flex;gap:8px;overflow-x:auto;padding:12px"></div></div>
+                <section class="group-panel" style="margin-top:16px">
+                    <h2 class="group-panel-title">Import Sigma rules</h2>
+                    <p class="page-note" style="margin-top:0">Paste one or more Sigma rules (YAML, separated by ---). They're added turned off, so you can check them against your logs before turning them on.</p>
                     <div class="form-group"><label for="sigmaYaml">Sigma YAML</label><textarea id="sigmaYaml" rows="10" class="mono" spellcheck="false"></textarea></div>
-                    <div class="modal-actions" style="justify-content:flex-start">
+                    <div class="modal-actions start">
                         <button class="btn btn-secondary" data-click="importSigma" data-args='[false]'>Preview</button>
                         <button class="btn btn-primary" data-click="importSigma" data-args='[true]'>Import</button>
                     </div>
                     <div id="sigmaResult" aria-live="polite"></div>
+                </section>
                 </div>
             </div>
 
+            <!-- ===== ANOMALY RULES PAGE (inside Detection rules) ===== -->
             <div class="page" id="page-anomalies">
-                <div class="toolbar">
-                    <h3>Anomalies</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Anomaly rules</h1><p class="toolbar-purpose">Learn what's normal, and alert on what isn't</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="editAnomalyRule">+ New Rule</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadAnomalyRules">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadAnomalyRules">Refresh</button>
+                        <button class="btn btn-primary" data-click="editAnomalyRule">New anomaly rule&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Rules that learn what's normal from recent windows and alert on what isn't: a count far above usual, something that went quiet, a value never seen before, or a kind of line never seen before. Each is checked once, as its window ends.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Name</th><th scope="col">Watches for</th><th scope="col">Search</th><th scope="col">Window</th><th scope="col">Last check</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="anomalyBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="anomalyEditor" hidden style="padding:16px;margin-top:12px">
-                    <h4 id="anomalyEditorTitle">New rule</h4>
+                <div class="group-panel editor-panel" id="anomalyEditor" hidden style="margin-top:16px">
+                    <h2 class="group-panel-title" id="anomalyEditorTitle">New rule</h2>
                     <div class="st-grid-2">
                         <div class="form-group"><label for="anomalyName">Name</label><input type="text" id="anomalyName" maxlength="200"></div>
                         <div class="form-group"><label for="anomalyKind">Watch for</label>
@@ -956,26 +553,30 @@
                             <select id="anomalySeverity"><option>Info</option><option selected>Warning</option><option>Error</option><option>Critical</option></select></div>
                         <div class="form-group"><label class="check-label"><input type="checkbox" id="anomalyEnabled" checked> On</label></div>
                     </div>
-                    <div class="modal-actions" style="justify-content:flex-start">
+                    <div class="modal-actions start">
+                        <button class="btn btn-secondary" data-click="closeAnomalyEditor">Cancel</button>
                         <button class="btn btn-secondary" data-click="testAnomalyRule">Test on the last window</button>
                         <button class="btn btn-primary" data-click="saveAnomalyRule">Save</button>
-                        <button class="btn btn-secondary" data-click="closeAnomalyEditor">Cancel</button>
                     </div>
                     <div id="anomalyTestResult" aria-live="polite"></div>
                 </div>
+                </div>
             </div>
 
+            <!-- ===== SCHEDULED REPORTS PAGE ===== -->
             <div class="page" id="page-reports">
-                <div class="toolbar">
-                    <h3>Reports</h3>
-                    <div class="toolbar-actions"><button class="btn btn-primary btn-sm" data-click="editReport">+ New Report</button></div>
-                </div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Scheduled reports</h1><p class="toolbar-purpose">Searches emailed on a schedule</p></div>
+                    <div class="toolbar-actions"><button class="btn btn-primary" data-click="editReport">New report&hellip;</button></div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Searches emailed on a schedule as an HTML report, with a PDF copy. Values in reports are masked as for a Viewer. Sending uses the email settings under Alerts &amp; email.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Name</th><th scope="col">Schedule (UTC)</th><th scope="col">To</th><th scope="col">Last sent</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="reportsBody"></tbody>
                 </table></div></div>
-                <div class="panel" id="reportEditor" hidden style="padding:16px;margin-top:12px">
+                <div class="group-panel editor-panel" id="reportEditor" hidden style="margin-top:16px">
+                    <h2 class="group-panel-title">Report</h2>
                     <div class="st-grid-2">
                         <div class="form-group"><label for="rpName">Name</label><input type="text" id="rpName"></div>
                         <div class="form-group"><label for="rpSchedule">Schedule (cron, UTC)</label><input type="text" id="rpSchedule" value="0 8 * * 1" class="mono"></div>
@@ -983,103 +584,114 @@
                     <div class="form-group"><label for="rpRecipients">Send to (comma-separated)</label><input type="text" id="rpRecipients"></div>
                     <div class="form-group"><label for="rpSections">Sections, one per line: Title | search</label><textarea id="rpSections" rows="5" class="mono" placeholder="Errors by host | find severity>=4 earliest=-7d | stats count by host"></textarea></div>
                     <div class="form-group"><label class="check-label"><input type="checkbox" id="rpPdf" checked> Attach a PDF</label> <label class="check-label"><input type="checkbox" id="rpEnabled" checked> On</label></div>
-                    <div class="modal-actions" style="justify-content:flex-start">
+                    <div class="modal-actions start">
+                        <button class="btn btn-secondary" data-click="closeReportEditor">Cancel</button>
                         <button class="btn btn-secondary" data-click="previewReport">Preview</button>
                         <button class="btn btn-primary" data-click="saveReport">Save</button>
-                        <button class="btn btn-secondary" data-click="closeReportEditor">Cancel</button>
                     </div>
                     <div id="reportPreview" style="margin-top:12px;background:#fff;color:#1f2328;padding:8px;border-radius:6px" hidden></div>
                 </div>
+                </div>
             </div>
 
+            <!-- ===== CONNECTORS PAGE (inside Alerts) ===== -->
             <div class="page" id="page-connectors">
-                <div class="toolbar">
-                    <h3>Connectors</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Connectors</h1><p class="toolbar-purpose">Named places alerts can be sent</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showConnectorModal">+ New Connector</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadConnectors">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadConnectors">Refresh</button>
+                        <button class="btn btn-primary" data-click="showConnectorModal">New connector&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Named places alerts can go: Slack, Teams, Discord, PagerDuty, Opsgenie, Jira, ServiceNow, email or any webhook. Detection rules send to them with a "Send to connector" action. Secrets are kept on the server and never shown again.</p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Destination</th><th scope="col">Secret</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="connectorsBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
-            <!-- ===== USERS PAGE ===== -->
+            <!-- ===== USERS & GROUPS PAGE ===== -->
             <div class="page" id="page-users">
-                <div class="toolbar">
-                    <h3>Users</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Users &amp; groups</h1><p class="toolbar-purpose">Who can sign in, and what they can do</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showUserModal">+ New User</button>
-                        <button class="btn btn-secondary btn-sm" data-click="showGroupModal">+ New Group</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadUsers">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadUsers">Refresh</button>
+                        <button class="btn btn-secondary" data-click="showGroupModal">New group&hellip;</button>
+                        <button class="btn btn-primary" data-click="showUserModal">New user&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <p class="page-note">Local accounts sign in with a password and, if they set one up, an authenticator app. Users your identity provider provisions over SCIM, and single sign-on users added here, sign in through single sign-on; deactivating one here stops them however they sign in. Groups give their members a role.</p>
                 <p id="usersNote" class="page-note" role="status"></p>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">User</th><th scope="col">Source</th><th scope="col">Role</th><th scope="col">Groups</th><th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="usersBody"></tbody>
                 </table></div></div>
-                <h4 style="margin-top:20px">Groups</h4>
+                <h4 class="section-title">Groups</h4>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Group</th><th scope="col">Source</th><th scope="col">Gives role</th><th scope="col">Index permissions</th><th scope="col">Members</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="groupsBody"></tbody>
                 </table></div></div>
-                <h4 style="margin-top:20px">SCIM provisioning</h4>
+                <h4 class="section-title">SCIM provisioning</h4>
                 <p class="page-note">Entra ID, Okta and other identity providers can create, update and deactivate users and groups here through SCIM 2.0 at <span class="mono" id="scimEndpoint">/scim/v2</span>, with a token made below. A SCIM token can only call SCIM.</p>
-                <div class="toolbar-actions" style="margin-bottom:8px"><input type="text" id="scimTokenName" aria-label="SCIM token name" placeholder="Name, such as Entra ID" style="max-width:240px"> <button class="btn btn-secondary btn-sm" data-click="createScimToken">+ New SCIM token</button></div>
+                <div class="inline-actions"><input type="text" id="scimTokenName" aria-label="SCIM token name" placeholder="Name, such as Entra ID"> <button class="btn btn-secondary" data-click="createScimToken">New SCIM token</button></div>
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th scope="col">Name</th><th scope="col">Starts with</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                     <tbody id="scimTokensBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
-            <!-- ===== SCHEDULED SEARCHES PAGE ===== -->
+            <!-- ===== SCHEDULED SEARCHES PAGE (inside Scheduled reports) ===== -->
             <div class="page" id="page-schedules">
-                <div class="toolbar">
-                    <h3>Scheduled Searches</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Scheduled searches</h1><p class="toolbar-purpose">Searches that run on a timer and alert on what they find</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showScheduleModal">+ New Schedule</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadSchedules">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadSchedules">Refresh</button>
+                        <button class="btn btn-primary" data-click="showScheduleModal">New scheduled search&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <div class="panel"><div class="scroll-y"><table>
-                    <thead><tr><th>Name</th><th>Query</th><th>Cron</th><th>Time Range</th><th>Status</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Name</th><th>Query</th><th>Cron</th><th>Time range</th><th>Status</th><th>Actions</th></tr></thead>
                     <tbody id="schedulesBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
-            <!-- ===== FIELD EXTRACTIONS PAGE ===== -->
+            <!-- ===== FIELD EXTRACTIONS PAGE (inside Indexes & fields) ===== -->
             <div class="page" id="page-extractions">
-                <div class="toolbar">
-                    <h3>Field Extractions</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Field extractions</h1><p class="toolbar-purpose">Patterns that pull fields out of raw lines</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" data-click="showExtractionModal">+ New Extraction</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadExtractions">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadExtractions">Refresh</button>
+                        <button class="btn btn-primary" data-click="showExtractionModal">New extraction&hellip;</button>
                     </div>
-                </div>
+                </header>
+                <div class="page-body">
                 <div class="panel"><div class="scroll-y"><table>
                     <thead><tr><th>Name</th><th>Pattern</th><th>Priority</th><th>Actions</th></tr></thead>
                     <tbody id="extractionsBody"></tbody>
                 </table></div></div>
+                </div>
             </div>
 
-            <!-- ===== KNOWLEDGE PAGE ===== -->
+            <!-- ===== LOOKUPS, MACROS & ALIASES PAGE (inside Indexes & fields) ===== -->
             <div class="page" id="page-knowledge">
-                <div class="toolbar">
-                    <h3>Knowledge Objects</h3>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Lookups &amp; macros</h1><p class="toolbar-purpose">Tables, saved query pieces and field aliases searches can use</p></div>
                     <div class="toolbar-actions">
-                        <button class="btn btn-primary btn-sm" id="knowledgeAddBtn" data-click="showKnowledgeModal">+ New</button>
-                        <button class="btn btn-secondary btn-sm" data-click="loadKnowledgeCurrent">Refresh</button>
+                        <button class="btn btn-secondary" data-click="loadKnowledgeCurrent">Refresh</button>
+                        <button class="btn btn-primary" id="knowledgeAddBtn" data-click="showKnowledgeModal">New&hellip;</button>
                     </div>
-                </div>
-                <div class="tabs" id="knowledgeTabs">
+                </header>
+                <div class="page-body">
+                <div class="tabs" id="knowledgeTabs" style="margin-bottom:16px">
                     <div class="tab active" data-click="switchKnowledgeTab" data-args='["lookups", "$this"]'>Lookups</div>
                     <div class="tab" data-click="switchKnowledgeTab" data-args='["macros", "$this"]'>Macros</div>
-                    <div class="tab" data-click="switchKnowledgeTab" data-args='["aliases", "$this"]'>Field Aliases</div>
+                    <div class="tab" data-click="switchKnowledgeTab" data-args='["aliases", "$this"]'>Field aliases</div>
                 </div>
                 <div class="panel"><div class="scroll-y">
                     <table id="knowledgeTable-lookups">
@@ -1095,16 +707,20 @@
                         <tbody id="aliasesBody"></tbody>
                     </table>
                 </div></div>
+                </div>
             </div>
 
             <!-- ===== SETTINGS PAGE ===== -->
             <div class="page" id="page-settings">
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Settings</h1><p class="toolbar-purpose">How this Cabinet server behaves</p></div>
+                    <div class="toolbar-actions">
+                        <input type="search" id="settingsSearch" class="toolbar-search" placeholder="Find a setting" aria-label="Find a setting: retention, timeout, email...">
+                    </div>
+                </header>
                 <div class="st-layout">
                     <nav class="st-nav" id="settingsNav" aria-label="Settings sections"></nav>
                     <div class="st-main">
-                        <div class="st-top">
-                            <input type="search" id="settingsSearch" placeholder="Find a setting: retention, timeout, email..." aria-label="Find a setting">
-                        </div>
                         <div class="st-banner" id="settingsRestartBanner" role="status" hidden></div>
                         <div class="st-notice" id="settingsAccessNotice" hidden></div>
 
@@ -1125,7 +741,7 @@
                                     </label>
                                     <div class="st-buttons">
                                         <button type="button" class="btn btn-secondary btn-sm" data-click="testSqliteTarget">Check</button>
-                                        <button type="button" class="btn btn-primary btn-sm" data-click="moveSqlite">Move</button>
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="moveSqlite">Move</button>
                                     </div>
                                     <div class="st-result" id="moveResult" role="status"></div>
                                 </div>
@@ -1138,7 +754,7 @@
                                     </label>
                                     <div class="st-buttons">
                                         <button type="button" class="btn btn-secondary btn-sm" data-click="testEngineTarget">Check</button>
-                                        <button type="button" class="btn btn-primary btn-sm" data-click="switchToEngine">Switch to the Cabinet engine</button>
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="switchToEngine">Switch to the Cabinet engine</button>
                                     </div>
                                     <div class="st-result" id="engineResult" role="status"></div>
                                 </div>
@@ -1163,7 +779,7 @@
                                     <label class="st-check"><input type="checkbox" id="pgCopy" checked> Copy my events, settings, rules, keys and history into it</label>
                                     <div class="st-buttons">
                                         <button type="button" class="btn btn-secondary btn-sm" data-click="testPostgresTarget">Test connection</button>
-                                        <button type="button" class="btn btn-primary btn-sm" data-click="switchToPostgres">Switch to PostgreSQL</button>
+                                        <button type="button" class="btn btn-secondary btn-sm" data-click="switchToPostgres">Switch to PostgreSQL</button>
                                     </div>
                                     <div class="st-result" id="postgresResult" role="status"></div>
                                     <p class="st-hint">No PostgreSQL yet? On this server, run the installer with <code>-Storage postgresql</code> to install one locally.</p>
@@ -1222,7 +838,7 @@
                             <p class="st-intro">How long each index keeps events, checked on the schedule in <a href="#settings" data-click="showSettingsSection" data-args='["group:Retention"]'>Retention settings</a>. An index without a policy uses the default there.</p>
                             <div class="st-card">
                                 <div id="retentionList"><div class="st-loading">Loading...</div></div>
-                                <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">+ Add policy</button>
+                                <button class="btn btn-secondary btn-sm" data-click="showRetentionModal" style="margin-top:8px">Add policy</button>
                             </div>
                         </section>
 
@@ -1251,6 +867,12 @@
                                     <input type="text" id="settingsServerUrl" value="" readonly style="color:var(--text-muted)">
                                 </div>
                                 <div class="st-grid-2">
+                                    <div class="form-group">
+                                        <label for="settingsTheme">Appearance</label>
+                                        <select id="settingsTheme" data-change="saveThemeSetting">
+                                            <option value="system">Same as this computer</option><option value="light">Light</option><option value="graphite">Graphite (dark)</option>
+                                        </select>
+                                    </div>
                                     <div class="form-group">
                                         <label for="settingsPageSize">Results per page</label>
                                         <select id="settingsPageSize" data-change="saveDisplaySettings">
@@ -1295,11 +917,75 @@
 
             <!-- ===== INDEXES PAGE ===== -->
             <div class="page" id="page-indexes">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px">
-                    <h3>Indexes</h3>
-                    <button class="btn btn-secondary btn-sm" data-click="loadIndexes">Refresh</button>
-                </div>
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>Indexes &amp; fields</h1><p class="toolbar-purpose">Where events are kept, and the fields they carry</p></div>
+                    <div class="toolbar-actions">
+                        <button class="btn btn-primary" data-click="loadIndexes">Refresh</button>
+                    </div>
+                </header>
+                <div class="page-body">
                 <div id="indexesList" class="health-grid"></div>
+                </div>
+            </div>
+
+            <!-- ===== ALL PAGES ===== -->
+            <div class="page" id="page-all">
+                <header class="toolbar">
+                    <div class="toolbar-title"><h1>All pages</h1><p class="toolbar-purpose">Everything Cabinet can do, including pages that live inside another</p></div>
+                </header>
+                <div class="page-body">
+                <div class="all-pages">
+                    <section class="group-panel">
+                        <h2 class="group-panel-title">Ask</h2>
+                        <ul>
+                            <li><button type="button" data-click="navigate" data-args='["search"]'><b>Search</b><span>Ask in plain words, or write BQL</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["livetail"]'><b>Live Tail</b><span>Events as they arrive</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["saved"]'><b>Saved questions</b><span>Searches you kept, ready to run again</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["jobs"]'><b>Background searches <em>inside Saved questions</em></b><span>Long searches that run on the server</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["investigate"]'><b>AI investigator</b><span>Ask a question; it searches your logs to answer it</span></button></li>
+                        </ul>
+                    </section>
+                    <section class="group-panel">
+                        <h2 class="group-panel-title">Watch</h2>
+                        <ul>
+                            <li><button type="button" data-click="navigate" data-args='["dashboards"]'><b>Dashboards</b><span>Panels of searches that keep themselves up to date</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["reports"]'><b>Scheduled reports</b><span>Searches emailed on a schedule</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["schedules"]'><b>Scheduled searches <em>inside Scheduled reports</em></b><span>Searches that run on a timer and alert</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["health"]'><b>System health</b><span>Whether this server and its parts are working</span></button></li>
+                        </ul>
+                    </section>
+                    <section class="group-panel">
+                        <h2 class="group-panel-title">Respond</h2>
+                        <ul>
+                            <li><button type="button" data-click="navigate" data-args='["alerts"]'><b>Alerts</b><span>What rules and scheduled searches found</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["connectors"]'><b>Connectors <em>inside Alerts</em></b><span>Named places alerts can be sent</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["cases"]'><b>Cases</b><span>Investigations as one timeline</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["rules"]'><b>Detection rules</b><span>Checked on every event as it arrives</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["anomalies"]'><b>Anomaly rules <em>inside Detection rules</em></b><span>Alert on what isn't normal</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["coverage"]'><b>ATT&amp;CK coverage</b><span>Which attacker techniques your rules can see</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["players"]'><b>Players</b><span>Game servers only: players and their chat</span></button></li>
+                        </ul>
+                    </section>
+                    <section class="group-panel">
+                        <h2 class="group-panel-title">Data</h2>
+                        <ul>
+                            <li><button type="button" data-click="navigate" data-args='["ingest"]'><b>Sources</b><span>Send logs to Cabinet, or paste some to try it</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["pipelines"]'><b>Ingest pipeline</b><span>Drop, sample, route or redact events</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["indexes"]'><b>Indexes &amp; fields</b><span>Where events are kept</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["extractions"]'><b>Field extractions <em>inside Indexes &amp; fields</em></b><span>Patterns that pull fields out of lines</span></button></li>
+                            <li class="inside"><button type="button" data-click="navigate" data-args='["knowledge"]'><b>Lookups &amp; macros <em>inside Indexes &amp; fields</em></b><span>Lookup tables, macros and field aliases</span></button></li>
+                        </ul>
+                    </section>
+                    <section class="group-panel">
+                        <h2 class="group-panel-title">Admin</h2>
+                        <ul>
+                            <li><button type="button" data-click="navigate" data-args='["users"]'><b>Users &amp; groups</b><span>Who can sign in, and what they can do</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["apikeys"]'><b>API keys</b><span>Keys for agents and clients</span></button></li>
+                            <li><button type="button" data-click="navigate" data-args='["settings"]'><b>Settings</b><span>How this Cabinet server behaves</span></button></li>
+                        </ul>
+                    </section>
+                </div>
+                </div>
             </div>
         </div>
     </div>
@@ -1325,8 +1011,8 @@
     <div class="drawer-bg" id="drawerBg" data-click="closeDrawer"></div>
     <div class="drawer" id="eventDrawer">
         <div class="drawer-header">
-            <h3>Event Detail</h3>
-            <button class="drawer-close" data-click="closeDrawer">&times;</button>
+            <h3>Event detail</h3>
+            <button type="button" class="btn btn-sm drawer-close" data-click="closeDrawer">Close</button>
         </div>
         <div class="drawer-body" id="drawerBody"></div>
     </div>
@@ -1429,7 +1115,7 @@
             <div class="form-group"><label>Description</label><textarea id="dashDescription" placeholder="Dashboard description"></textarea></div>
             <h4 class="modal-subhead">Panels</h4>
             <div id="panelEditorList"></div>
-            <button type="button" class="btn btn-secondary btn-sm" data-click="addPanelRow">+ Add panel</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-click="addPanelRow">Add panel</button>
             <div class="modal-actions">
                 <button class="btn btn-secondary" data-click="closeModal" data-args='["dashboardModal"]'>Cancel</button>
                 <button class="btn btn-primary" data-click="saveDashboard">Save</button>
@@ -1495,47 +1181,51 @@
     </div>
 
     <!-- Sign in -->
-    <div class="modal-bg" id="loginModal">
-        <div class="modal">
-            <h3 id="loginTitle">Sign in to Cabinet</h3>
-            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-                <button type="button" class="btn btn-primary" id="loginOidc" hidden data-click="signInWith" data-args='["oidc"]'>Sign in with SSO</button>
-                <button type="button" class="btn btn-primary" id="loginSaml" hidden data-click="signInWith" data-args='["saml"]'>Sign in with SAML</button>
+    <div class="modal-bg login-bg" id="loginModal">
+        <div class="modal login-modal">
+            <h3 id="loginTitle"><img src="icon.svg" alt="" width="18" height="18">Sign in to Cabinet</h3>
+            <p class="login-intro">Sign in to search and watch your logs.</p>
+            <div class="login-sso">
+                <button type="button" class="btn" id="loginOidc" hidden data-click="signInWith" data-args='["oidc"]'>Sign in with SSO</button>
+                <button type="button" class="btn" id="loginSaml" hidden data-click="signInWith" data-args='["saml"]'>Sign in with SAML</button>
             </div>
-            <div id="loginLdap" hidden>
+            <div id="loginLdap" class="login-step enter-scope" hidden>
                 <div class="form-group"><label for="ldapUser">Directory user name</label><input type="text" id="ldapUser" autocomplete="username"></div>
                 <div class="form-group"><label for="ldapPassword">Password</label><input type="password" id="ldapPassword" autocomplete="current-password"></div>
-                <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLdap">Sign in</button></div>
+                <div class="modal-actions"><button type="button" class="btn btn-primary" data-click="signInLdap">Sign in</button></div>
             </div>
-            <div id="loginLocal" hidden>
-                <div id="localStepPassword">
+            <div id="loginLocal" class="login-step" hidden>
+                <div id="localStepPassword" class="enter-scope">
                     <div class="form-group"><label for="localUser">User name</label><input type="text" id="localUser" autocomplete="username"></div>
                     <div class="form-group"><label for="localPassword">Password</label><input type="password" id="localPassword" autocomplete="current-password"></div>
-                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocal">Sign in</button></div>
+                    <div class="modal-actions"><button type="button" class="btn btn-primary" data-click="signInLocal">Sign in</button></div>
                 </div>
-                <div id="localStepMfa" hidden>
+                <div id="localStepMfa" class="enter-scope" hidden>
+                    <p class="login-step-title">Step 2 of 2: confirm it's you</p>
                     <div class="form-group"><label for="localMfaCode">Code from your authenticator app, or a recovery code</label><input type="text" id="localMfaCode" autocomplete="one-time-code" inputmode="numeric"></div>
-                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalMfa">Continue</button></div>
+                    <div class="modal-actions"><button type="button" class="btn btn-primary" data-click="signInLocalMfa">Continue</button></div>
                 </div>
-                <div id="localStepPasswordChange" hidden>
+                <div id="localStepPasswordChange" class="enter-scope" hidden>
+                    <p class="login-step-title">Choose a new password</p>
                     <p class="page-note" id="localPasswordChangeNote">Choose a new password to continue.</p>
                     <div class="form-group"><label for="localNewPassword">New password</label><input type="password" id="localNewPassword" autocomplete="new-password"></div>
                     <div class="form-group"><label for="localNewPassword2">New password again</label><input type="password" id="localNewPassword2" autocomplete="new-password"></div>
-                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalNewPassword">Continue</button></div>
+                    <div class="modal-actions"><button type="button" class="btn btn-primary" data-click="signInLocalNewPassword">Continue</button></div>
                 </div>
-                <div id="localStepEnroll" hidden>
+                <div id="localStepEnroll" class="enter-scope" hidden>
+                    <p class="login-step-title">Set up an authenticator app</p>
                     <p class="page-note">Your account has to use an authenticator app. Add this account to one (Microsoft Authenticator, Google Authenticator, 1Password and others) by entering the key below, then type the code it shows.</p>
                     <div class="form-group"><label for="localEnrollSecret">Key</label><input type="text" id="localEnrollSecret" readonly class="mono"></div>
                     <p class="page-note">Or open this link on the device with the app: <a id="localEnrollLink" href="#" rel="noopener">add to authenticator</a></p>
                     <div class="form-group"><label for="localEnrollCode">Code from the app</label><input type="text" id="localEnrollCode" autocomplete="one-time-code" inputmode="numeric"></div>
-                    <div class="modal-actions" style="justify-content:flex-start"><button type="button" class="btn btn-primary" data-click="signInLocalEnroll">Continue</button></div>
+                    <div class="modal-actions"><button type="button" class="btn btn-primary" data-click="signInLocalEnroll">Continue</button></div>
                 </div>
             </div>
-            <p id="loginSsoDivider" class="page-note" hidden>Or use an API key:</p>
-            <form id="loginForm">
+            <p id="loginSsoDivider" class="modal-divider" hidden>Or use an API key</p>
+            <form id="loginForm" class="login-key">
                 <div class="form-group"><label for="loginKey">API key</label><input type="password" id="loginKey" autocomplete="current-password" required></div>
                 <div class="form-group"><label class="check-label"><input type="checkbox" id="loginRemember"> Remember on this device</label></div>
-                <p id="loginError" class="page-note" role="alert"></p>
+                <p id="loginError" class="login-error" role="alert"></p>
                 <div class="modal-actions"><button class="btn btn-primary" type="submit">Sign in</button></div>
             </form>
         </div>
@@ -1600,7 +1290,7 @@
             <h4>Password</h4>
             <div class="form-group"><label for="accountCurrentPassword">Current password</label><input type="password" id="accountCurrentPassword" autocomplete="current-password"></div>
             <div class="form-group"><label for="accountNewPassword">New password</label><input type="password" id="accountNewPassword" autocomplete="new-password"></div>
-            <div class="modal-actions" style="justify-content:flex-start"><button class="btn btn-secondary btn-sm" data-click="changeOwnPassword">Change password</button></div>
+            <div class="modal-actions start"><button class="btn btn-secondary btn-sm" data-click="changeOwnPassword">Change password</button></div>
             <h4 style="margin-top:16px">Authenticator app</h4>
             <p class="page-note" id="accountMfaStatus"></p>
             <div id="accountMfaEnroll" hidden>
@@ -1608,7 +1298,7 @@
                 <p class="page-note">Or open this link on the device with the app: <a id="accountMfaLink" href="#" rel="noopener">add to authenticator</a></p>
             </div>
             <div class="form-group"><label for="accountMfaCode">Code from the app (or a recovery code to remove it)</label><input type="text" id="accountMfaCode" autocomplete="one-time-code"></div>
-            <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap;gap:6px">
+            <div class="modal-actions start" style="flex-wrap:wrap">
                 <button class="btn btn-secondary btn-sm" id="accountMfaStart" data-click="startOwnMfa">Set up</button>
                 <button class="btn btn-secondary btn-sm" id="accountMfaConfirm" data-click="confirmOwnMfa" hidden>Confirm</button>
                 <button class="btn btn-secondary btn-sm" id="accountMfaCodes" data-click="newOwnRecoveryCodes" hidden>New recovery codes</button>
