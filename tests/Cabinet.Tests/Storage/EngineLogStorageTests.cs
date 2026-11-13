@@ -379,4 +379,191 @@ public sealed class EngineLogStorageTests : IDisposable
 
         (await engine.GetCountAsync()).Should().Be(8 * 25 * 50);
     }
+
+    [Fact]
+    public async Task IndexNames_ThatDifferOnlyInCase_KeepTheirOwnFolders_AndOldFolderNamesStay()
+    {
+        // On Windows and macOS "Security" and "security" were one folder: the second index's open
+        // replayed the first one's log, and deleting either deleted both
+        var engine = Open();
+        await engine.StoreBatchAsync(Enumerable.Range(0, 10).Select(i => Event(i, "Security")));
+        await engine.StoreBatchAsync(Enumerable.Range(100, 5).Select(i => Event(i, "security")));
+        await engine.StoreBatchAsync(Enumerable.Range(200, 3).Select(i => Event(i, "l4d2")));
+
+        (await engine.GetCountAsync(new QueryContext { Index = "Security" })).Should().Be(10);
+        (await engine.GetCountAsync(new QueryContext { Index = "security" })).Should().Be(5);
+        Directory.GetDirectories(_path).Select(Path.GetFileName).Should().Contain(["Security", "l4d2"], "names that fit keep the folder names earlier versions gave them");
+        Directory.GetDirectories(_path).Should().HaveCount(3);
+
+        Close(engine);
+        var reopened = Open();
+        (await reopened.GetCountAsync(new QueryContext { Index = "Security" })).Should().Be(10);
+        (await reopened.GetCountAsync(new QueryContext { Index = "security" })).Should().Be(5);
+
+        (await reopened.DeleteByIndexAsync("security")).Should().Be(5);
+        (await reopened.GetCountAsync(new QueryContext { Index = "Security" })).Should().Be(10);
+        Close(reopened);
+        (await Open().GetCountAsync(new QueryContext { Index = "Security" })).Should().Be(10, "deleting the other index left this one's folder alone");
+    }
+
+    [Fact]
+    public async Task VeryLongIndexNames_OfSymbols_GetFoldersWithinFileNameLimits()
+    {
+        // Each symbol escapes to five characters, so 300 of them made a 1500-character folder name
+        var first = new string('/', 300);
+        var second = new string('/', 299) + ".";
+        var engine = Open();
+        await engine.StoreBatchAsync(Enumerable.Range(0, 4).Select(i => Event(i, first)));
+        await engine.StoreBatchAsync(Enumerable.Range(10, 2).Select(i => Event(i, second)));
+
+        Directory.GetDirectories(_path).Should().HaveCount(2).And.OnlyContain(d => Path.GetFileName(d).Length <= 100);
+        Close(engine);
+
+        var reopened = Open();
+        (await reopened.GetCountAsync(new QueryContext { Index = first })).Should().Be(4);
+        (await reopened.GetCountAsync(new QueryContext { Index = second })).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task APurge_UnderSteadyWrites_StillFinishes()
+    {
+        // A purge flushed until memory was empty, which never happens while writes keep coming
+        var engine = Open(new EngineOptions { FlushEvents = 1000, SyncWrites = false });
+        await engine.StoreBatchAsync(Enumerable.Range(0, 2000).Select(i => Event(i)));
+        await engine.FlushAsync();
+
+        using var stop = new CancellationTokenSource();
+        var written = 0;
+        var writer = Task.Run(async () =>
+        {
+            for (var b = 0; !stop.IsCancellationRequested; b++)
+            {
+                await engine.StoreBatchAsync(Enumerable.Range(0, 5).Select(i => Event(1_000_000 + (b * 5) + i, minutesOffset: 600)));
+                Interlocked.Increment(ref written);
+            }
+        });
+
+        try
+        {
+            while (Volatile.Read(ref written) < 20)
+            {
+                await Task.Delay(10);
+            }
+
+            var deleted = await engine.PurgeIndexEventsAsync("main", Start.AddSeconds(1000)).WaitAsync(TimeSpan.FromSeconds(30));
+            deleted.Should().Be(1000);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await writer;
+        }
+
+        (await engine.GetCountAsync(new QueryContext { EndTime = Start.AddSeconds(5000) })).Should().Be(1000);
+    }
+
+    [Fact]
+    public async Task Queries_CarryOn_WhileAPurgeRewritesASegment()
+    {
+        // The rewrite ran under the write lock, which every query's snapshot waits for
+        var engine = Open(new EngineOptions { FlushEvents = 400_000, SyncWrites = false });
+        await engine.StoreBatchAsync(Enumerable.Range(0, 300_000).Select(i => Event(i)));
+        await engine.FlushAsync();
+
+        var purge = Task.Run(() => engine.PurgeIndexEventsAsync("main", Start.AddSeconds(1000)));
+        var during = 0;
+        while (!purge.IsCompleted)
+        {
+            await Task.Run(() => engine.GetCountAsync());
+            if (!purge.IsCompleted)
+            {
+                during++;
+            }
+        }
+
+        (await purge).Should().Be(1000);
+        during.Should().BeGreaterThan(2, "queries finish while the segment is rewritten");
+        (await engine.GetCountAsync()).Should().Be(299_000);
+    }
+
+    [Theory]
+    [InlineData("huge")]
+    [InlineData("negative")]
+    [InlineData("past-start")]
+    [InlineData("garbage")]
+    public async Task ADamagedSegment_IsSetAside_AndTheRestOpens(string damage)
+    {
+        var engine = Open();
+        await engine.StoreBatchAsync(Enumerable.Range(0, 10).Select(i => Event(i)));
+        await engine.StoreBatchAsync(Enumerable.Range(100, 7).Select(i => Event(i, "other")));
+        await engine.FlushAsync();
+        Close(engine);
+
+        var segment = Directory.EnumerateFiles(Path.Combine(_path, "main"), "*.seg").Single();
+        var bytes = await File.ReadAllBytesAsync(segment);
+        var at = bytes.Length - 16;
+        var footerLength = BitConverter.ToInt64(bytes, at);
+        switch (damage)
+        {
+            case "huge": BitConverter.TryWriteBytes(bytes.AsSpan(at, 8), long.MaxValue); break;
+            case "negative": BitConverter.TryWriteBytes(bytes.AsSpan(at, 8), -5L); break;
+            case "past-start": BitConverter.TryWriteBytes(bytes.AsSpan(at, 8), bytes.Length + 100L); break;
+            default: bytes.AsSpan((int)(bytes.Length - footerLength), 32).Fill(0xFF); break;
+        }
+
+        await File.WriteAllBytesAsync(segment, bytes);
+
+        var reopened = Open();
+        (await reopened.GetCountAsync(new QueryContext { Index = "other" })).Should().Be(7);
+        (await reopened.GetCountAsync(new QueryContext { Index = "main" })).Should().Be(0);
+        File.Exists(segment + ".damaged").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task EventsStoredWithNoIndex_AreInMain_InMemoryAsInSegments()
+    {
+        var engine = Open();
+        await engine.StoreBatchAsync(Enumerable.Range(0, 6).Select(i => Event(i, index: null!)));
+        await engine.StoreBatchAsync(Enumerable.Range(6, 4).Select(i => Event(i, index: string.Empty)));
+
+        async Task Check(string when)
+        {
+            var byIndex = await engine.AggregateAsync(new AggregateRequest
+            {
+                Filter = new QueryContext(),
+                GroupBy = ["index"],
+                Aggregates = [new AggregateSpec(AggregateKind.Count, null, 0, "count")],
+            });
+            byIndex!.Rows.Should().ContainSingle(when).Which["index"].Should().Be("main", when);
+            byIndex.Rows.Single()["count"].Should().Be(10, when);
+            (await engine.QueryAsync(new QueryContext { Limit = 100 }).ToListAsync()).Should().OnlyContain(e => e.Index == "main", when);
+        }
+
+        await Check("in memory");
+        await engine.FlushAsync();
+        await Check("in a segment");
+    }
+
+    [Fact]
+    public async Task AQuery_KeepsReadingSegments_ThatAMergeRetiresUnderIt()
+    {
+        var engine = Open(new EngineOptions { FlushEvents = 5000 });
+        for (var b = 0; b < 10; b++)
+        {
+            await engine.StoreBatchAsync(Enumerable.Range(b * 5000, 5000).Select(i => Event(i)));
+            await engine.FlushAsync();
+        }
+
+        await using var reading = engine.QueryAsync(new QueryContext { Limit = 100_000, SortDescending = false }).GetAsyncEnumerator();
+        (await reading.MoveNextAsync()).Should().BeTrue();
+        (await engine.CompactAsync()).Should().Be(1, "the ten segments the query has are merged and retired");
+
+        var read = 1;
+        while (await reading.MoveNextAsync())
+        {
+            read++;
+        }
+
+        read.Should().Be(50_000);
+    }
 }

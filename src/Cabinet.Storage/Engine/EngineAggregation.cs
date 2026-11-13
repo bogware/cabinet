@@ -26,12 +26,24 @@ public sealed partial class EngineLogStorage : IAggregatingLogStorage
         }
 
         await InitializeAsync(cancellationToken);
+        var snapshots = ShardsFor(request.Filter).Select(shard => shard.Snapshot()).ToList();
+        try
+        {
+            return Aggregate(request, snapshots, cancellationToken);
+        }
+        finally
+        {
+            snapshots.ForEach(snapshot => snapshot.Dispose());
+        }
+    }
+
+    private static AggregateResult? Aggregate(AggregateRequest request, List<ShardSnapshot> snapshots, CancellationToken cancellationToken)
+    {
         var filter = new RowFilter(request.Filter);
         var aggregation = new Aggregation(request);
         var blocks = new List<(SegmentReader Segment, BlockInfo Block)>();
-        foreach (var shard in ShardsFor(request.Filter))
+        foreach (var (hot, segments) in snapshots)
         {
-            var (hot, segments) = shard.Snapshot();
             foreach (var logEvent in hot)
             {
                 if (filter.Matches(logEvent))
