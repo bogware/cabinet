@@ -37,6 +37,10 @@ public sealed class ConfigurationRbacService : IRbacService
         if (keyInfo.Tier.Equals("Ingest", StringComparison.OrdinalIgnoreCase))
         {
             principal.IndexPermissions = [new IndexPermission { IndexPattern = "*", Capabilities = Capability.Ingest }];
+
+            // Not the fleet's host names and versions, or every index's retention: a key copied to
+            // every sending host is the least trusted credential there is
+            principal.WithheldCapabilities = Capability.SystemHealth;
         }
 
         return principal;
