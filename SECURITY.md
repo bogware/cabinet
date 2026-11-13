@@ -4,11 +4,13 @@
 
 Report vulnerabilities privately through GitHub: <https://github.com/bogware/cabinet/security/advisories/new>
 
-Please don't open a public issue for a suspected vulnerability. Include the affected component, steps to reproduce, and the impact you expect.
+Please don't open a public issue for a suspected vulnerability. Include the affected component and version, steps to reproduce, and the impact you expect. You'll get an acknowledgement within a few days, and we'll agree a disclosure date with you once there's a fix. Reports that turn out to be valid are credited in the advisory unless you'd rather not be named.
+
+In scope: the server, dashboard, CLI, agent, installers and the official container image, as shipped. Out of scope: deployments that ignore the guidance below (for example, a server reachable from the internet with default development keys), and denial of service by an authenticated user with the rights to run expensive searches, which query limits bound rather than prevent.
 
 ## Supported versions
 
-Only the latest `main` is supported. Fixes are not backported to earlier releases.
+Security fixes go into the latest release. Earlier releases don't get backported fixes; update to the latest, which the dashboard and `cabinet` CLI can do for you.
 
 ## Deployment guidance
 

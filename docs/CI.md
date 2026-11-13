@@ -74,3 +74,13 @@ The runners are not ephemeral. A job that gains code execution on one could pers
 later jobs from any repository sharing that runner. Approval and review are what stand in the way.
 Removing this risk needs a dedicated runner group for this repository and runners registered with
 `--ephemeral`, which requires access to the runner hosts.
+
+## Before the repository goes public
+
+CI is safe as it is only while the repository is private. Before changing its visibility:
+
+1. **Pull requests must not reach the self-hosted runners.** Set the repository variable `CABINET_RUNNER` to `github` so every job runs on GitHub-hosted runners (free for public repositories), or change `build-and-test` so that `pull_request` runs always use `ubuntu-latest` and only pushes to `main` and tags use the self-hosted runners.
+2. **Keep fork pull requests needing approval** (`all_external_contributors`), and read every diff under `.github/` before approving a run.
+3. **Service containers on GitHub-hosted runners** (PostgreSQL, OpenSearch, ClickHouse) work as they are; the OpenSearch heap is sized for a 7 GB runner.
+4. **Turn on private vulnerability reporting** in the repository's security settings, which SECURITY.md points to, and secret scanning with push protection.
+5. **Review repository secrets and variables**: none should be needed by pull request runs.
