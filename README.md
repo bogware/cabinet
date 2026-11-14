@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>Ask your logs anything.</strong><br>
-  Self-hosted log search and security analytics. Plain-English questions, SPL when you want it,<br>
+  <strong>Become your logs.</strong><br>
+  Hosted log search and security analytics. Plain-English questions, SPL when you want it,<br>
   its own fast storage engine, and nothing to license.
 </p>
 
