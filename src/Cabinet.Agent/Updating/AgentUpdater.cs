@@ -32,7 +32,7 @@ public sealed class UpdateOffer
     public string Sha256 { get; set; } = string.Empty;
     public long Size { get; set; }
 
-    /// <summary>The publisher's signature over the program, base64 DER. Servers before 3.0.1 don't send it.</summary>
+    /// <summary>The publisher's signature over the program, base64 DER. Servers before 3.1.0 don't send it.</summary>
     public string? Signature { get; set; }
 }
 
@@ -185,7 +185,7 @@ public sealed class AgentUpdater : BackgroundService
             var signed = !string.IsNullOrWhiteSpace(offer.Signature);
             if (!signed && !_config.Update.AllowUnsigned)
             {
-                _logger.LogWarning("Server offers agent {Version} without the publisher's signature (servers before 3.0.1 don't send one); keeping this version", offer.Version);
+                _logger.LogWarning("Server offers agent {Version} without the publisher's signature (servers before 3.1.0 don't send one); keeping this version", offer.Version);
                 return false;
             }
 

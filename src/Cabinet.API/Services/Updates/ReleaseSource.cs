@@ -34,7 +34,7 @@ public sealed class UpdateOptions
 
     /// <summary>
     /// For development builds only: installs a release, and serves agents a build, that has no
-    /// publisher signature (releases before 3.0.1, or archives you built yourself). A signature
+    /// publisher signature (releases before 3.1.0, or archives you built yourself). A signature
     /// that is present but wrong is refused whatever this says. Off by default, and logged as a
     /// warning whenever it's on, since it lets whoever controls the release source choose what
     /// this server runs.

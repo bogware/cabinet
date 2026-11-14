@@ -122,28 +122,57 @@ also be added to the repository's allowed list, including actions they call them
 their compromise history, `trivy-action` and `setup-trivy` are allowed only at their exact commits, so
 updating Trivy also means updating both entries in that list.
 
-## Before the repository goes public
+## Going public
 
-The workflows are already safe to publish: none runs on anything an outsider can do. Before changing
-the repository's visibility:
+Done while the repository was private:
 
-1. **Protect the release.** Add protection rules to the `release` environment: `main` only as the
-   deployment branch, and a required reviewer, so the signing key is used only for a release
-   someone approved. Move `CABINET_RELEASE_SIGNING_KEY` from a repository secret to an
-   environment secret of `release`.
-2. **Enable branch protection on `main`**, which requires a public repository on the current plan:
-   require pull requests, and a CODEOWNERS rule on `.github/` and `build/` so workflow and signing
-   key changes always get reviewed.
-3. **If pull requests should be tested automatically**, add a `pull_request` trigger (never
-   `pull_request_target`) to a workflow that runs only on GitHub-hosted runners
-   (`runs-on: ubuntu-latest`), has no secrets and a read-only token. Pull requests from forks must
-   never reach a shared self-hosted runner. Keep fork pull requests needing approval
-   (`all_external_contributors`), and read every diff under `.github/` before approving a run.
-   Service containers (PostgreSQL, OpenSearch, ClickHouse) work on GitHub-hosted runners as they
-   are; the OpenSearch heap is sized for a 7 GB runner.
-4. **Scan the full history for secrets**, and turn on secret scanning with push protection and
-   private vulnerability reporting, which SECURITY.md points to.
-5. **Review repository secrets and variables**: only the release environment should hold any.
+- The workflows run only when started by someone with write access, so nothing an outsider does
+  reaches the self-hosted runners.
+- The `release` environment accepts runs from `main` only.
+- `.github/CODEOWNERS` names the maintainer for workflows, scripts and the release signing key.
+- The full history was scanned: no keys, tokens or passwords in any commit.
+
+On this plan, branch protection, secret scanning and private vulnerability reporting are only
+available to public repositories, so they're turned on right after the switch:
+
+```bash
+repo=bogware/cabinet
+
+# Private vulnerability reporting, which SECURITY.md sends reporters to
+gh api -X PUT "repos/$repo/private-vulnerability-reporting"
+
+# Secret scanning, and refusing pushes that contain a secret
+gh api -X PATCH "repos/$repo"   -f 'security_and_analysis[secret_scanning][status]=enabled'   -f 'security_and_analysis[secret_scanning_push_protection][status]=enabled'
+
+# main: changes arrive by pull request, never by force-push or deletion; code owners review
+# workflows and signing. Administrators can still merge their own pull requests.
+gh api -X PUT "repos/$repo/branches/main/protection" --input - <<'JSON'
+{"required_status_checks": null, "enforce_admins": false,
+ "required_pull_request_reviews": {"required_approving_review_count": 0, "require_code_owner_reviews": true, "dismiss_stale_reviews": true},
+ "restrictions": null, "allow_force_pushes": false, "allow_deletions": false, "required_conversation_resolution": true}
+JSON
+
+# Required reviewer on the release environment (a public repository allows it on the free plan)
+gh api -X PUT "repos/$repo/environments/release" --input - <<JSON
+{"reviewers": [{"type": "User", "id": $(gh api user --jq .id)}],
+ "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+```
+
+Then move the signing key into the `release` environment, so only an approved release run can read
+it, and remove the repository-wide copy:
+
+```bash
+gh secret set CABINET_RELEASE_SIGNING_KEY --env release < cabinet-release-signing.key.pem
+gh secret delete CABINET_RELEASE_SIGNING_KEY
+```
+
+If pull requests should later be tested automatically, add a `pull_request` trigger (never
+`pull_request_target`) to a workflow that runs only on GitHub-hosted runners (`runs-on:
+ubuntu-latest`), with no secrets and a read-only token. Fork pull requests must never reach a shared
+self-hosted runner: keep them needing approval, and read every diff under `.github/` before
+approving a run. Service containers (PostgreSQL, OpenSearch, ClickHouse) work on GitHub-hosted
+runners as they are; the OpenSearch heap is sized for a 7 GB runner.
 
 ## Known limits
 

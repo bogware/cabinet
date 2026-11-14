@@ -125,7 +125,7 @@ public class AgentUpdateOffer
 
     /// <summary>
     /// The publisher's signature over the agent program (base64 of a DER ECDSA P-256 / SHA-256
-    /// signature), from the release's <c>cabinet-agent-&lt;platform&gt;.sig</c>. Agents from 3.0.1
+    /// signature), from the release's <c>cabinet-agent-&lt;platform&gt;.sig</c>. Agents from 3.1.0
     /// check it against the key built into them; earlier agents ignore it.
     /// </summary>
     public string? Signature { get; set; }

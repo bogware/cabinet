@@ -1,6 +1,6 @@
 /*
  * Cabinet "Platinum": design tokens, components and the app shell.
- * Source of truth for values: design_handoff_cabinet_platinum_ui/README.md.
+ * The token values below are the source of truth for the look.
  *
  * THEMES. theme.js sets <html data-theme="light|graphite"> before first paint. Light is primary;
  * Graphite mirrors it. Only the token block changes between themes, so components never name a
