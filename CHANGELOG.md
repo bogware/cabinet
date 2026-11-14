@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Messages about unsigned releases name 3.1.0, the first signed release, where they said 3.0.1, which was never released.
+
 ## [3.1.1] - 2026-11-13
 
 ### Security

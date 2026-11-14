@@ -1,0 +1,5 @@
+# Changes to workflows, actions and release signing need the maintainer's review: on this
+# repository's self-hosted runners they decide what runs and what gets signed.
+/.github/ @draxios
+/build/release-signing.pub.pem @draxios
+/scripts/ @draxios

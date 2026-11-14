@@ -14,7 +14,7 @@ Security fixes go into the latest release. Earlier releases don't get backported
 
 ## Verifying a release
 
-Releases from 3.0.1 on are signed. Every file in a GitHub release (archives, `.deb` packages and install scripts) has a `.sig` beside it: the base64 of an ECDSA P-256 / SHA-256 signature over the file, made with a key held only by the release workflow. The public key is [`build/release-signing.pub.pem`](build/release-signing.pub.pem):
+Releases from 3.1.0 on are signed. Every file in a GitHub release (archives, `.deb` packages and install scripts) has a `.sig` beside it: the base64 of an ECDSA P-256 / SHA-256 signature over the file, made with a key held only by the release workflow. The public key is [`build/release-signing.pub.pem`](build/release-signing.pub.pem):
 
 ```
 -----BEGIN PUBLIC KEY-----

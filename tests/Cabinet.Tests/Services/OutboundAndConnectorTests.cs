@@ -19,7 +19,7 @@ public sealed class OutboundUrlGuardTests
     [InlineData("http://localhost:8080/x")]
     [InlineData("http://169.254.169.254/latest/meta-data")]
     [InlineData("http://10.0.0.5/hook")]
-    [InlineData("http://192.168.1.27/hook")]
+    [InlineData("http://192.168.20.5/hook")]
     [InlineData("http://172.20.1.1/hook")]
     [InlineData("http://[::1]/hook")]
     [InlineData("http://[fd00::1]/hook")]

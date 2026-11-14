@@ -287,7 +287,7 @@ public sealed class UpdateTests : IDisposable
     [Fact]
     public async Task AReleaseStagedBeforeSignatures_IsVerifiedAgain()
     {
-        // Servers before 3.0.1 unpacked without checking a signature and marked it ".complete"
+        // Servers before 3.1.0 unpacked without checking a signature and marked it ".complete"
         var releases = Releases();
         releases.Add("cabinet-win-x64.zip", Zip(("api/Cabinet.API.exe", "verified program")));
         var release = await releases.GetLatestAsync();
@@ -561,7 +561,7 @@ public sealed class UpdateTests : IDisposable
     [Fact]
     public async Task Agent_RefusesAnUnsignedBuild_UnlessAllowedForDevelopment()
     {
-        // Servers before 3.0.1 send no signature
+        // Servers before 3.1.0 send no signature
         var binary = Encoding.UTF8.GetBytes("new agent");
         var unsigned = new FakeServer("9.9.9", binary, Convert.ToHexString(SHA256.HashData(binary)));
 

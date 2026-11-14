@@ -350,7 +350,7 @@ public sealed class UpdateService
         var folder = FolderFor(release.Tag, release.Version);
         var directory = Path.Combine(_workDirectory, folder, platform);
 
-        // Not the ".complete" of releases before 3.0.1, which unpacked without checking a signature
+        // Not the ".complete" of releases before 3.1.0, which unpacked without checking a signature
         var verified = Path.Combine(directory, VerifiedMarker);
         if (File.Exists(verified) && IsAcceptable(await File.ReadAllTextAsync(verified, cancellationToken)))
         {
@@ -365,7 +365,7 @@ public sealed class UpdateService
         {
             throw new InvalidOperationException(
                 $"{release.Tag} has no signature for {archiveName} ({archiveName}.sig), so nothing shows it came from the Cabinet publisher. Nothing was changed. "
-                + "Releases before 3.0.1 aren't signed: install those with the installer instead.");
+                + "Releases before 3.1.0 aren't signed: install those with the installer instead.");
         }
 
         var expected = (await ReadSmallAssetAsync(checksum, cancellationToken)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
